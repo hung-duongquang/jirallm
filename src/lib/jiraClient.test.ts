@@ -758,7 +758,7 @@ describe('JiraClient.convertADFToMarkdown', () => {
         ],
       }) as never
     );
-    expect(bullet).toBe('- a\n- b');
+    expect(bullet).toBe('- a\n- b\n');
 
     const ordered = client.convertADFToMarkdown(
       doc({
@@ -769,7 +769,7 @@ describe('JiraClient.convertADFToMarkdown', () => {
         ],
       }) as never
     );
-    expect(ordered).toBe('1. first\n2. second');
+    expect(ordered).toBe('1. first\n2. second\n');
   });
 
   it('renders task items with checked/unchecked boxes', () => {
@@ -804,7 +804,7 @@ describe('JiraClient.convertADFToMarkdown', () => {
     const withBreak = client.convertADFToMarkdown(
       doc(paragraph(text('a'), { type: 'hardBreak' }, text('b'))) as never
     );
-    expect(withBreak).toBe('a\nb\n');
+    expect(withBreak).toBe('a  \nb\n');
   });
 
   it('links matched media by alt to the attachment path (image vs file)', () => {

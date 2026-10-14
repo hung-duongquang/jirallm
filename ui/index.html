@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jirallm</title>
+<link rel="icon" href="data:,">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+<style>
+  :root {
+    --bg: #f6f7f9; --surface: #ffffff; --surface-2: #f0f2f5; --border: #dfe3e8;
+    --text: #1d2330; --muted: #5d6676; --accent: #2f5bd3; --accent-text: #ffffff;
+    --ok: #1f7a4d; --warn: #9a6200; --err: #b42318; --code-bg: #f3f4f6;
+    --radius: 8px; --shadow: 0 1px 2px rgb(16 24 40 / 6%);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12151b; --surface: #1a1e26; --surface-2: #222833; --border: #2e3542;
+      --text: #e6e9ef; --muted: #98a2b3; --accent: #7aa2ff; --accent-text: #0d1220;
+      --ok: #4cc38a; --warn: #f0b545; --err: #ff7b72; --code-bg: #232a35;
+      --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    padding: 12px 20px; border-bottom: 1px solid var(--border); background: var(--surface); }
+  header h1 { font-size: 16px; margin: 0; letter-spacing: .2px; }
+  .conn { color: var(--muted); font-size: 13px; }
+  .conn.err { color: var(--err); }
+  .outdir { margin-left: auto; display: flex; gap: 6px; align-items: center; min-width: 280px; flex: 0 1 520px; }
+  .outdir label { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  main { display: grid; grid-template-columns: minmax(320px, 400px) 1fr; gap: 16px; padding: 16px 20px;
+    height: calc(100vh - 58px); }
+  .col { display: flex; flex-direction: column; gap: 16px; min-height: 0; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 14px; }
+  .card-title { font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted);
+    margin: 0 0 10px; font-weight: 600; }
+  input[type=text], textarea { width: 100%; font: inherit; color: var(--text); background: var(--surface-2);
+    border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; }
+  textarea { resize: vertical; min-height: 64px; font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+  input:focus, textarea:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  button { font: inherit; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-2);
+    color: var(--text); padding: 6px 12px; cursor: pointer; white-space: nowrap; }
+  button:hover { border-color: var(--muted); }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+  button:disabled { opacity: .55; cursor: default; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 10px; }
+  .tabs button { background: none; border-color: transparent; color: var(--muted); padding: 4px 10px; }
+  .tabs button[aria-selected=true] { background: var(--surface-2); border-color: var(--border); color: var(--text); }
+  .hint { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+  .opts { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; margin: 12px 0; }
+  .opts label { display: flex; gap: 6px; align-items: center; font-size: 13px; }
+  .opts label.disabled { color: var(--muted); }
+  .stack { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+  .stack li label { display: grid; grid-template-columns: auto auto 1fr; gap: 8px; align-items: baseline;
+    padding: 4px 6px; border-radius: 4px; font-size: 13px; }
+  .stack li label:hover { background: var(--surface-2); }
+  .stack .pr { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .stack .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+  .key { font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; font-weight: 600; }
+  .progress { list-style: none; padding: 0; margin: 10px 0 0; display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+  .progress li { display: flex; gap: 8px; align-items: baseline; }
+  .progress .s { font-size: 12px; }
+  .s.ok { color: var(--ok); } .s.err { color: var(--err); } .s.run { color: var(--warn); }
+  .library { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .library ul { list-style: none; padding: 0; margin: 8px 0 0; overflow: auto; flex: 1; }
+  .library li button { width: 100%; text-align: left; display: grid; grid-template-columns: auto 1fr;
+    gap: 2px 10px; background: none; border-color: transparent; padding: 6px 8px; }
+  .library li button:hover, .library li button[aria-current=true] { background: var(--surface-2); border-color: var(--border); }
+  .library .title { grid-column: 1 / -1; color: var(--muted); font-size: 12.5px; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .library .meta { color: var(--muted); font-size: 12px; text-align: right; }
+  .preview { min-height: 0; display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+  .preview-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 12px 16px;
+    border-bottom: 1px solid var(--border); }
+  .preview-head .ptitle { font-weight: 600; flex: 1; min-width: 200px; }
+  .preview-body { overflow: auto; padding: 8px 24px 32px; flex: 1; }
+  .empty { color: var(--muted); padding: 40px 24px; text-align: center; }
+  .fm { display: grid; grid-template-columns: max-content 1fr; gap: 2px 14px; font-size: 13px;
+    background: var(--surface-2); border-radius: 6px; padding: 10px 14px; margin: 12px 0; }
+  .fm dt { color: var(--muted); } .fm dd { margin: 0; overflow-wrap: anywhere; }
+  .fm .link { display: block; }
+  .fm .link .type { color: var(--muted); }
+  .fm a { color: var(--accent); cursor: pointer; }
+  .md h1 { font-size: 22px; } .md h2 { font-size: 18px; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+  .md h3 { font-size: 15px; }
+  .md table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 13px; display: block; overflow-x: auto; }
+  .md th, .md td { border: 1px solid var(--border); padding: 6px 9px; vertical-align: top; text-align: left; }
+  .md th { background: var(--surface-2); }
+  .md code { background: var(--code-bg); padding: 1px 4px; border-radius: 4px; font-size: 12.5px; }
+  .md pre { background: var(--code-bg); padding: 10px; border-radius: 6px; overflow: auto; }
+  .md pre code { background: none; padding: 0; }
+  .md a { color: var(--accent); }
+  .md img { max-width: 100%; }
+  .source { white-space: pre-wrap; font: 12.5px/1.5 ui-monospace, Consolas, monospace; margin: 12px 0; }
+  .toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--text);
+    color: var(--bg); padding: 8px 14px; border-radius: 6px; font-size: 13px; opacity: 0; transition: opacity .2s;
+    pointer-events: none; }
+  .toast.show { opacity: 1; }
+  .error { color: var(--err); font-size: 13px; margin: 8px 0 0; }
+  @media (max-width: 860px) {
+    main { grid-template-columns: 1fr; height: auto; padding: 16px; }
+    header { padding: 12px 16px; }
+    .outdir { margin-left: 0; flex: 1 1 100%; min-width: 0; }
+    .library ul { max-height: 320px; }
+    .preview { min-height: 60vh; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>jirallm</h1>
+  <span class="conn" id="conn">Connecting…</span>
+  <div class="outdir">
+    <label for="outdir">Output folder</label>
+    <input type="text" id="outdir" spellcheck="false">
+    <button id="openRoot" title="Open the output folder">Open</button>
+  </div>
+</header>
+
+<main>
+  <div class="col">
+    <section class="card">
+      <div class="tabs" role="tablist">
+        <button role="tab" id="tabKeys" aria-selected="true">Tickets</button>
+        <button role="tab" id="tabStack" aria-selected="false">PR stack</button>
+      </div>
+
+      <div id="paneStack" hidden>
+        <div class="row">
+          <input type="text" id="repo" placeholder="owner/repo" spellcheck="false" style="flex:1.4">
+          <input type="text" id="pr" placeholder="PR #" style="flex:.6" inputmode="numeric">
+          <button id="resolve">Find</button>
+        </div>
+        <p class="hint">Any PR in the stack works; the whole stack is found from "Stacked on" lines.</p>
+        <ul class="stack" id="stackList"></ul>
+        <div class="row" id="stackActions" hidden style="margin-top:8px">
+          <button id="useStack">Use selected tickets</button>
+        </div>
+        <p class="error" id="stackError" hidden></p>
+      </div>
+
+      <div id="paneKeys">
+        <textarea id="keys" placeholder="ZOD-3619 ZOD-3602&#10;or paste Jira links" spellcheck="false"></textarea>
+        <p class="hint" id="keyCount">Separate keys with spaces, commas or new lines.</p>
+      </div>
+
+      <div class="opts" id="opts">
+        <label><input type="checkbox" data-opt="comments" checked> Comments</label>
+        <label><input type="checkbox" data-opt="statusChanges"> Status changes</label>
+        <label id="fieldChangesLabel"><input type="checkbox" data-opt="fieldChanges"> Field changes</label>
+        <label><input type="checkbox" data-opt="worklog"> Worklog</label>
+        <label><input type="checkbox" data-opt="subtasks"> Subtasks</label>
+        <label><input type="checkbox" data-opt="parent"> Parent issues</label>
+        <label><input type="checkbox" data-opt="videoFrames" checked> Video frames</label>
+      </div>
+
+      <button class="primary" id="export" style="width:100%">Export</button>
+      <ul class="progress" id="progress"></ul>
+    </section>
+
+    <section class="card library">
+      <div class="row">
+        <h2 class="card-title" style="margin:0;flex:1">Exported</h2>
+        <button id="refresh" title="Reload the list">Refresh</button>
+      </div>
+      <input type="text" id="filter" placeholder="Filter by key or title" style="margin-top:8px">
+      <ul id="library"></ul>
+    </section>
+  </div>
+
+  <section class="card preview">
+    <div class="preview-head" id="previewHead" hidden>
+      <span class="key" id="pKey"></span>
+      <span class="ptitle" id="pTitle"></span>
+      <button id="toggleSource">Markdown</button>
+      <button id="copy">Copy</button>
+      <button id="openTask">Open folder</button>
+    </div>
+    <div class="preview-body" id="previewBody">
+      <div class="empty">Export a ticket, or pick one from the list, to preview it here.</div>
+    </div>
+  </section>
+</main>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const store = {
+  get(k, fallback) { try { const v = localStorage.getItem('jirallm-ui:' + k); return v === null ? fallback : JSON.parse(v); } catch { return fallback; } },
+  set(k, v) { try { localStorage.setItem('jirallm-ui:' + k, JSON.stringify(v)); } catch {} },
+};
+const KEY_RE = /\b[A-Z][A-Z0-9]+-\d+\b/g;
+let info = null, current = null, showSource = false, libraryItems = [];
+
+function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('show'), 1800); }
+const outDir = () => $('outdir').value.trim();
+async function api(path, body) {
+  const res = await fetch(path, body === undefined ? {} : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+function parseKeys(text) { return [...new Set((text.toUpperCase().match(KEY_RE) || []))]; }
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function ago(iso) {
+  const s = (Date.now() - new Date(iso)) / 1000;
+  if (s < 60) return 'just now'; if (s < 3600) return Math.floor(s / 60) + 'm ago';
+  if (s < 86400) return Math.floor(s / 3600) + 'h ago'; return new Date(iso).toLocaleDateString();
+}
+
+// ---- tabs ----
+function selectTab(stack) {
+  $('tabKeys').setAttribute('aria-selected', String(!stack));
+  $('tabStack').setAttribute('aria-selected', String(stack));
+  $('paneStack').hidden = !stack; $('paneKeys').hidden = stack;
+  store.set('tab', stack ? 'stack' : 'keys');
+}
+$('tabKeys').onclick = () => selectTab(false);
+$('tabStack').onclick = () => selectTab(true);
+
+// ---- options ----
+const optBoxes = [...document.querySelectorAll('[data-opt]')];
+const savedOpts = store.get('opts', {});
+for (const box of optBoxes) {
+  if (box.dataset.opt in savedOpts) box.checked = savedOpts[box.dataset.opt];
+  box.onchange = () => { syncOpts(); store.set('opts', options()); };
+}
+function options() { return Object.fromEntries(optBoxes.map((b) => [b.dataset.opt, b.checked])); }
+function syncOpts() {
+  const status = optBoxes.find((b) => b.dataset.opt === 'statusChanges').checked;
+  const field = optBoxes.find((b) => b.dataset.opt === 'fieldChanges');
+  field.disabled = !status; if (!status) field.checked = false;
+  $('fieldChangesLabel').classList.toggle('disabled', !status);
+}
+
+// ---- keys ----
+$('keys').value = store.get('keys', '');
+function updateKeyCount() {
+  const n = parseKeys($('keys').value).length;
+  $('keyCount').textContent = n ? `${n} ticket${n > 1 ? 's' : ''}: ${parseKeys($('keys').value).join(', ')}` : 'Separate keys with spaces, commas or new lines.';
+  store.set('keys', $('keys').value);
+}
+$('keys').oninput = updateKeyCount;
+
+// ---- PR stack ----
+$('repo').value = store.get('repo', '');
+$('pr').value = store.get('pr', '');
+$('pr').onkeydown = (e) => { if (e.key === 'Enter') $('resolve').click(); };
+$('resolve').onclick = async () => {
+  const btn = $('resolve'); btn.disabled = true; btn.textContent = 'Finding…';
+  $('stackError').hidden = true; $('stackList').innerHTML = ''; $('stackActions').hidden = true;
+  store.set('repo', $('repo').value.trim()); store.set('pr', $('pr').value.trim());
+  try {
+    const { items } = await api('/api/stack', { pr: $('pr').value, repo: $('repo').value });
+    $('stackList').innerHTML = items.map((it, i) => `
+      <li><label title="${esc(it.title)}">
+        <input type="checkbox" data-key="${esc(it.key || '')}" ${it.key ? 'checked' : 'disabled'}>
+        <span><span class="key">${esc(it.key || '—')}</span> <span class="pr">#${it.pr}</span></span>
+        <span class="t">${i + 1}. ${esc(it.title)}</span>
+      </label></li>`).join('');
+    $('stackActions').hidden = false;
+  } catch (err) { $('stackError').textContent = err.message; $('stackError').hidden = false; }
+  finally { btn.disabled = false; btn.textContent = 'Find'; }
+};
+$('useStack').onclick = () => {
+  const keys = [...$('stackList').querySelectorAll('input:checked')].map((b) => b.dataset.key).filter(Boolean);
+  $('keys').value = keys.join(' '); updateKeyCount(); selectTab(false);
+};
+
+// ---- export ----
+$('export').onclick = async () => {
+  const keys = parseKeys($('keys').value);
+  if (!keys.length) { selectTab(false); $('keys').focus(); toast('Enter at least one ticket key'); return; }
+  const btn = $('export'); btn.disabled = true; btn.textContent = `Exporting ${keys.length}…`;
+  const list = $('progress');
+  list.innerHTML = keys.map((k) => `<li data-k="${k}"><span class="key">${k}</span><span class="s">waiting</span></li>`).join('');
+  const setRow = (key, cls, text) => {
+    const li = list.querySelector(`[data-k="${key}"]`) || list.appendChild(Object.assign(document.createElement('li'), { innerHTML: `<span class="key">${esc(key)}</span><span class="s"></span>` }));
+    li.dataset.k = key; const s = li.querySelector('.s'); s.className = 's ' + cls; s.textContent = text;
+  };
+  let lastDone = null, failures = 0;
+  try {
+    const res = await fetch('/api/export', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ keys, outputDir: outDir(), options: options() }) });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+    const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
+    for (;;) {
+      const { value, done } = await reader.read(); if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl; while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl); buf = buf.slice(nl + 1); if (!line.trim()) continue;
+        const ev = JSON.parse(line);
+        if (ev.type === 'progress') setRow(ev.key, 'run', 'exporting…');
+        if (ev.type === 'done') { setRow(ev.key, 'ok', ev.status + (ev.attachmentCount ? ` · ${ev.attachmentCount} attachment(s)` : '')); lastDone = lastDone || ev.key; }
+        if (ev.type === 'failed') { failures++; setRow(ev.key || 'error', 'err', ev.error); }
+      }
+    }
+    toast(failures ? `Done with ${failures} failure(s)` : `Exported ${keys.length} ticket(s)`);
+  } catch (err) { toast(err.message); }
+  finally { btn.disabled = false; btn.textContent = 'Export'; }
+  await loadLibrary();
+  if (lastDone) openTask(lastDone);
+};
+
+// ---- library ----
+async function loadLibrary() {
+  try { libraryItems = await api('/api/library?dir=' + encodeURIComponent(outDir())); }
+  catch (err) { libraryItems = []; toast(err.message); }
+  renderLibrary();
+}
+function renderLibrary() {
+  const q = $('filter').value.trim().toLowerCase();
+  const items = libraryItems.filter((it) => !q || it.key.toLowerCase().includes(q) || it.title.toLowerCase().includes(q));
+  $('library').innerHTML = items.length ? items.map((it) => `
+    <li><button data-key="${esc(it.key)}" aria-current="${it.key === current}">
+      <span class="key">${esc(it.key)}</span><span class="meta">${esc(it.status)} · ${ago(it.modified)}</span>
+      <span class="title">${esc(it.title)}</span>
+    </button></li>`).join('') : `<li class="hint" style="padding:8px">${libraryItems.length ? 'No match.' : 'Nothing exported in this folder yet.'}</li>`;
+}
+$('library').onclick = (e) => { const b = e.target.closest('button[data-key]'); if (b) openTask(b.dataset.key); };
+$('filter').oninput = renderLibrary;
+$('refresh').onclick = loadLibrary;
+$('outdir').onchange = () => { store.set('outdir', outDir()); loadLibrary(); };
+
+// ---- preview ----
+// Parses the exporter's frontmatter: `key: value` lines, plus `key:` followed by
+// `  - field: value` list items (issueLinks, subtasks, ...).
+function splitFrontmatter(md) {
+  const m = md.replace(/\r/g, '').match(/^---\n([\s\S]*?)\n---\n/);
+  if (!m) return { fm: [], body: md };
+  const unquote = (v) => { try { return JSON.parse(v); } catch { return v; } };
+  const fm = [];
+  for (const line of m[1].split('\n')) {
+    const top = line.match(/^([A-Za-z]\w*):\s*(.*)$/);
+    const item = line.match(/^\s+-\s+(?:(\w+):\s*)?(.*)$/);
+    const field = line.match(/^\s+(\w+):\s*(.*)$/);
+    if (top) fm.push([top[1], top[2] === '' ? [] : unquote(top[2])]);
+    else if (item && fm.length && Array.isArray(fm.at(-1)[1])) {
+      fm.at(-1)[1].push(item[1] ? { [item[1]]: unquote(item[2]) } : unquote(item[2]));
+    } else if (field && fm.length && typeof fm.at(-1)[1].at?.(-1) === 'object') {
+      fm.at(-1)[1].at(-1)[field[1]] = unquote(field[2]);
+    }
+  }
+  return { fm, body: md.slice(m[0].length) };
+}
+function renderFmValue(v) {
+  if (!Array.isArray(v)) return esc(v);
+  return v.map((x) => {
+    if (typeof x !== 'object' || x === null) return esc(x);
+    if (x.key) {
+      const label = [x.type, x.direction].filter(Boolean).join(' ');
+      return `<span class="link">${label ? `<span class="type">${esc(label)}</span> ` : ''}` +
+        `<a data-open="${esc(x.key)}">${esc(x.key)}</a> ${esc(x.title || '')}` +
+        `${x.status ? ` <span class="type">(${esc(x.status)})</span>` : ''}</span>`;
+    }
+    return `<span class="link">${esc(Object.values(x).join(' · '))}</span>`;
+  }).join(v.every((x) => typeof x !== 'object') ? ', ' : '');
+}
+let currentMarkdown = '';
+async function openTask(key, { fromLink = false } = {}) {
+  try {
+    const { markdown } = await api(`/api/task?key=${encodeURIComponent(key)}&dir=${encodeURIComponent(outDir())}`);
+    current = key; currentMarkdown = markdown; renderPreview(); renderLibrary();
+  } catch (err) {
+    // A linked issue that is not exported yet: offer to add it instead of clearing the preview.
+    if (fromLink) { addKey(key); toast(`${key} is not exported yet — added to the ticket list`); return; }
+    current = key; renderLibrary();
+    $('previewBody').innerHTML = `<div class="empty">${esc(err.message)}</div>`;
+  }
+}
+function addKey(key) {
+  const keys = parseKeys($('keys').value);
+  if (!keys.includes(key)) { $('keys').value = [...keys, key].join(' '); updateKeyCount(); }
+  selectTab(false);
+}
+$('previewBody').addEventListener('click', (e) => {
+  const a = e.target.closest('a[data-open]');
+  if (a) { e.preventDefault(); openTask(a.dataset.open, { fromLink: true }); }
+});
+function renderPreview() {
+  const { fm, body } = splitFrontmatter(currentMarkdown);
+  $('previewHead').hidden = false;
+  $('pKey').textContent = current;
+  $('pTitle').textContent = (body.match(/^# (.+)$/m) || [])[1] || '';
+  $('toggleSource').textContent = showSource ? 'Rendered' : 'Markdown';
+  if (showSource) { $('previewBody').innerHTML = `<pre class="source">${esc(currentMarkdown)}</pre>`; return; }
+  const meta = fm.length ? `<dl class="fm">${fm.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${renderFmValue(v)}</dd>`).join('')}</dl>` : '';
+  const html = DOMPurify.sanitize(marked.parse(body.replace(/^\s*# .+\n+/, ''), { gfm: true }));
+  $('previewBody').innerHTML = meta + `<div class="md">${html}</div>`;
+  $('previewBody').scrollTop = 0;
+}
+$('toggleSource').onclick = () => { showSource = !showSource; renderPreview(); };
+$('copy').onclick = async () => { try { await navigator.clipboard.writeText(currentMarkdown); toast('Markdown copied'); } catch { toast('Copy failed'); } };
+$('openTask').onclick = () => api('/api/open', { dir: outDir(), key: current }).catch((e) => toast(e.message));
+$('openRoot').onclick = () => api('/api/open', { dir: outDir() }).catch((e) => toast(e.message));
+
+// ---- init ----
+(async () => {
+  selectTab(store.get('tab', 'keys') === 'stack');
+  syncOpts(); updateKeyCount();
+  try {
+    info = await api('/api/info');
+    $('conn').textContent = `${info.org} · ${info.project} · ${info.userEmail}`;
+    $('outdir').value = store.get('outdir', info.outputDir);
+    if (!$('repo').value && info.repo) $('repo').value = info.repo;
+    if (!('subtasks' in savedOpts)) optBoxes.find((b) => b.dataset.opt === 'subtasks').checked = info.includeSubtasks;
+  } catch (err) {
+    $('conn').textContent = err.message; $('conn').classList.add('err');
+  }
+  await loadLibrary();
+})();
+</script>
+</body>
+</html>

@@ -70,6 +70,8 @@ type ExportFlags = {
   fields?: string;
   dryRun?: boolean;
   withHistory?: boolean;
+  statusChanges?: boolean;
+  comments?: boolean;
   withWorklog?: boolean;
 };
 
@@ -265,6 +267,8 @@ async function runExport(rawArgs: string[], flags: ExportFlags, program: Command
     customFieldDefs,
     videoFrames: { enabled: videoEnabled, fps, maxFrames },
     withHistory: flags.withHistory,
+    withStatusChanges: flags.statusChanges,
+    withComments: flags.comments,
     withWorklog: flags.withWorklog,
   });
 
@@ -334,6 +338,8 @@ function addExportOptions(cmd: Command): Command {
       'Comma-separated friendly field names to include in frontmatter. Use +name to add a field to the current set and -name to remove one, or "all" | "default" | "minimal". Unrecognised names are an error.'
     )
     .option('--with-history', 'Include full field-change history (not just status changes)')
+    .option('--no-status-changes', 'Leave status/field changes out of task.md')
+    .option('--no-comments', 'Leave issue comments out of task.md')
     .option('--with-worklog', 'Include worklogs')
     .option('--dry-run', 'Resolve config & print plan without calling Jira or writing files');
 }

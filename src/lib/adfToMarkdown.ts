@@ -145,7 +145,9 @@ export function convertADFToMarkdown(
       return node.attrs.url;
     }
 
-    if (node.type === 'hardBreak') return '\n';
+    // Two trailing spaces make a Markdown hard line break; a bare newline would be joined
+    // into the same line when rendered.
+    if (node.type === 'hardBreak') return '  \n';
     if (node.type === 'rule') return '---';
 
     if (node.text) return applyMarks(node.text, node.marks);
@@ -170,18 +172,22 @@ export function convertADFToMarkdown(
         .join('\n');
     }
 
+    // A top-level list ends with a blank line: otherwise a following paragraph is a lazy
+    // continuation of the last item and renders inside it.
     if (node.type === 'bulletList' && children) {
-      return children
+      const list = children
         .map((child) => extractText(child, false, -1))
         .filter(Boolean)
         .join('\n');
+      return isTopLevel && list ? list + '\n' : list;
     }
 
     if (node.type === 'orderedList' && children) {
-      return children
+      const list = children
         .map((child, i) => extractText(child, false, i + 1))
         .filter(Boolean)
         .join('\n');
+      return isTopLevel && list ? list + '\n' : list;
     }
 
     if (node.type === 'listItem' && children) {

@@ -224,7 +224,7 @@ const DESCRIPTION_ADF: JiraADFDocument = {
   ],
 };
 
-const DESCRIPTION_MARKDOWN = '## Repro\nRun `jirallm search` with **--json**.\n\n- first\n- second';
+const DESCRIPTION_MARKDOWN = '## Repro\nRun `jirallm search` with **--json**.\n\n- first\n- second\n';
 
 const ISSUE_WITH_ADF_DESCRIPTION = {
   key: 'PROJ-7',

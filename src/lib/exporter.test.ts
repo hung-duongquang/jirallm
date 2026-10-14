@@ -299,6 +299,45 @@ describe('JiraExporter.exportIssue frontmatter', () => {
     expect(content).toMatch(/\[CHANGE \(priority\)\] Alice/);
   });
 
+  describe('withStatusChanges / withComments', () => {
+    const task: JiraTaskData = {
+      ...FULL_TASK,
+      history: [
+        {
+          type: 'status_change',
+          author: 'Bob',
+          date: '2026-05-22T10:00:00.000Z',
+          content: 'None → In Progress',
+        },
+        { type: 'comment', author: 'Jane', date: '2026-05-22T11:00:00.000Z', content: 'A comment' },
+      ],
+    };
+    const exportWith = async (options: { withStatusChanges?: boolean; withComments?: boolean }) => {
+      await makeExporter(task).exportIssue('PROJ-1', { outputDir: tmpDir, ...options });
+      return readFileSync(join(tmpDir, 'proj-1', 'task.md'), 'utf-8');
+    };
+
+    it('keeps comments under a Comments heading when status changes are left out', async () => {
+      const content = await exportWith({ withStatusChanges: false });
+      expect(content).toMatch(/## Comments/);
+      expect(content).not.toMatch(/## History/);
+      expect(content).toMatch(/\[COMMENT\] Jane/);
+      expect(content).not.toMatch(/STATUS CHANGE/);
+    });
+
+    it('keeps status changes when comments are left out', async () => {
+      const content = await exportWith({ withComments: false });
+      expect(content).toMatch(/## History/);
+      expect(content).toMatch(/\[STATUS CHANGE\] Bob/);
+      expect(content).not.toMatch(/COMMENT/);
+    });
+
+    it('omits the section entirely when both are left out', async () => {
+      const content = await exportWith({ withStatusChanges: false, withComments: false });
+      expect(content).not.toMatch(/## History|## Comments|\[STATUS CHANGE\]|\[COMMENT\]/);
+    });
+  });
+
   it('renders a Worklog section when worklogs are present', async () => {
     const task: JiraTaskData = {
       ...FULL_TASK,

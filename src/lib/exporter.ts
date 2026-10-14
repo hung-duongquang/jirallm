@@ -15,6 +15,10 @@ export type ExportOptions = {
   fieldSelector?: FieldSelector;
   customFieldDefs?: CustomFieldDefs;
   withHistory?: boolean;
+  /** Write status (and, with `withHistory`, field) changes to task.md. Default: true. */
+  withStatusChanges?: boolean;
+  /** Write issue comments to task.md. Default: true. */
+  withComments?: boolean;
   withWorklog?: boolean;
   videoFrames?: {
     enabled: boolean;
@@ -243,7 +247,8 @@ function historyLabel(entry: JiraTaskData['history'][number]): string {
 function buildTaskMarkdown(
   task: JiraTaskData,
   taskDir: string,
-  selectedKeys: Set<string>
+  selectedKeys: Set<string>,
+  options: Pick<ExportOptions, 'withStatusChanges' | 'withComments'> = {}
 ): string {
   const frontmatterBody = buildFrontmatterBlock(task, selectedKeys);
   let md = `---\n${frontmatterBody}\n---\n\n# ${task.title}\n\n`;
@@ -252,9 +257,15 @@ function buildTaskMarkdown(
     md += `## Description\n\n${addFrameLinksToContent(task.description, taskDir)}\n\n`;
   }
 
-  if (task.history.length > 0) {
-    md += `## History\n\n`;
-    for (const entry of task.history) {
+  const withStatusChanges = options.withStatusChanges ?? true;
+  const withComments = options.withComments ?? true;
+  const history = task.history.filter((entry) =>
+    entry.type === 'comment' ? withComments : withStatusChanges
+  );
+
+  if (history.length > 0) {
+    md += withStatusChanges ? `## History\n\n` : `## Comments\n\n`;
+    for (const entry of history) {
       const label = historyLabel(entry);
       const date = new Date(entry.date).toLocaleString();
       md += `---\n[${label}] ${entry.author} — ${date}:\n`;
@@ -305,7 +316,7 @@ export class JiraExporter {
 
     const selectedKeys = new Set(resolved.friendlyKeys);
     const taskMdPath = join(taskDir, 'task.md');
-    writeFileSync(taskMdPath, buildTaskMarkdown(task, taskDir, selectedKeys), 'utf-8');
+    writeFileSync(taskMdPath, buildTaskMarkdown(task, taskDir, selectedKeys, options), 'utf-8');
 
     const videos: VideoExtractionInfo[] = [];
     if (task.attachments.length > 0) {

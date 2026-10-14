@@ -6,7 +6,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `export --no-status-changes` and `--no-comments` leave status/field changes or comments out of
+  `task.md` (library: `withStatusChanges` / `withComments`, both default `true`). With status
+  changes left out, the remaining comments are written under `## Comments` instead of `## History`.
+- A local web UI (`node ui/server.mjs`, listening on 127.0.0.1 only): export tickets or a whole
+  GitHub PR stack (resolved through `gh` from "Stacked on" lines in PR descriptions), choose the
+  export options with checkboxes, and preview or copy the exported `task.md`. It reuses the CLI's
+  config and keychain token.
+
 ### Fixed
+
+- Jira hard line breaks render as Markdown hard breaks (two trailing spaces) instead of a bare
+  newline that is joined into the same line when rendered.
+- A top-level list is followed by a blank line, so the next paragraph no longer renders inside the
+  last list item.
 
 - ADF tables now render as valid GFM tables when cells hold rich content. Block children of a cell
   (lists, multiple paragraphs, hard breaks) are joined with `<br/>` instead of raw newlines that

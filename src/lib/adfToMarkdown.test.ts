@@ -84,7 +84,7 @@ describe('convertADFToMarkdown malformed nodes', () => {
         ],
       })
     );
-    expect(out).toBe('- a\n- b');
+    expect(out).toBe('- a\n- b\n');
   });
 
   it('skips malformed marks on a text node', () => {
@@ -121,7 +121,7 @@ describe('convertADFToMarkdown malformed nodes', () => {
       [
         '## Title',
         'intro **bold**\n',
-        '- one\n- two',
+        '- one\n- two\n',
         '```ts\nconst a = 1;\n```',
         '| H1 | H2 |\n| --- | --- |\n| a | b |\n',
       ].join('\n')
@@ -203,7 +203,7 @@ describe('convertADFToMarkdown table cells and containers', () => {
         ],
       })
     );
-    expect(out).toBe('1. one\n3. three');
+    expect(out).toBe('1. one\n3. three\n');
   });
 
   it('renders blocks inside a panel on separate lines', () => {
@@ -216,7 +216,7 @@ describe('convertADFToMarkdown table cells and containers', () => {
         ],
       })
     );
-    expect(out).toBe('Base situation:\n\n- item');
+    expect(out).toBe('Base situation:\n\n- item\n');
   });
 
   it('renders an expand title in bold above its content', () => {
@@ -308,7 +308,19 @@ describe('convertADFToMarkdown nested lists and table spacing', () => {
   };
 
   it('indents a nested list under its parent item', () => {
-    expect(convertADFToMarkdown(doc(nested))).toBe('1. parent\n   - child');
+    expect(convertADFToMarkdown(doc(nested))).toBe('1. parent\n   - child\n');
+  });
+
+  it('separates a top-level list from the following paragraph with a blank line', () => {
+    const list = { type: 'bulletList', content: [listItem(paragraph(text('item')))] };
+    expect(convertADFToMarkdown(doc(list, paragraph(text('after'))))).toBe('- item\n\nafter\n');
+  });
+
+  it('renders a hard break as a Markdown hard line break', () => {
+    const out = convertADFToMarkdown(
+      doc(paragraph(text('As a'), { type: 'hardBreak' }, text('I want')))
+    );
+    expect(out).toBe('As a  \nI want\n');
   });
 
   it('keeps nested list indentation inside a table cell as non-breaking spaces', () => {
