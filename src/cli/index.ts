@@ -540,6 +540,52 @@ Examples:
   );
 
 program
+  .command('ui')
+  .description('Start the local web UI (also serves the hosted GitHub Pages copy of the page)')
+  .option('--port <n>', 'Port on 127.0.0.1', '4321')
+  .option('--output-dir <path>', 'Default export folder (default: ./jira-export)')
+  .option('--repo <owner/name>', 'Default GitHub repo for PR stack lookups')
+  .option('-o, --org <name>', 'Organization from config (default: the only configured one)')
+  .option('--allow-origin <url...>', 'Extra origins allowed to call the server (hosted copies)')
+  .option('--open', 'Open the UI in the browser')
+  .action(
+    async (opts: {
+      port: string;
+      outputDir?: string;
+      repo?: string;
+      org?: string;
+      allowOrigin?: string[];
+      open?: boolean;
+    }) => {
+      const serverUrl = new URL('../../ui/server.mjs', import.meta.url).href;
+      const { startUiServer } = (await import(serverUrl)) as {
+        startUiServer: (options: Record<string, unknown>) => Promise<unknown>;
+      };
+      try {
+        await startUiServer({
+          port: Number(opts.port),
+          outputDir: opts.outputDir,
+          repo: opts.repo,
+          org: opts.org,
+          allowOrigins: opts.allowOrigin,
+          open: opts.open,
+        });
+      } catch (err) {
+        console.error((err as Error).message);
+        process.exit(1);
+      }
+    }
+  )
+  .addHelpText(
+    'after',
+    `
+Examples:
+  $ jirallm ui
+  $ jirallm ui --open --repo acme/app --output-dir ./context
+`
+  );
+
+program
   .command('upgrade')
   .description('Upgrade jirallm to the latest version (auto-detects npm/pnpm/yarn/Homebrew)')
   .option('-y, --yes', 'Skip confirmation prompt')

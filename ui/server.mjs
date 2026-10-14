@@ -2,16 +2,20 @@
 // Local web UI for jirallm: export Jira issues (or a whole GitHub PR stack) and preview the
 // resulting task.md files. Listens on 127.0.0.1 only and reuses the CLI's config + keychain.
 //
-//   node ui/server.mjs [--port 4321] [--output-dir ./jira-export] [--repo owner/name]
-//                      [--org name] [--open]
+// The same page is also published on GitHub Pages; there it calls this server on
+// http://127.0.0.1:<port>, so each user's Jira token stays in their own OS keychain.
+// Jira Cloud sends no CORS headers, so a browser page cannot call Jira directly.
+//
+//   jirallm ui [--port 4321] [--output-dir ./jira-export] [--repo owner/name] [--org name] [--open]
+//   node ui/server.mjs (same options)
 
 import { createServer } from 'node:http';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { readFile, readdir, stat } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -22,17 +26,14 @@ const lib = await import(new URL('../dist/index.js', import.meta.url)).catch(() 
 const { JiraExporter, loadProfile, listOrgs } = lib;
 const execFileAsync = promisify(execFile);
 
-const { values: args } = parseArgs({
-  options: {
-    port: { type: 'string', default: process.env.JIRALLM_UI_PORT ?? '4321' },
-    'output-dir': { type: 'string', default: process.env.JIRALLM_UI_OUTPUT_DIR },
-    repo: { type: 'string', default: process.env.JIRALLM_UI_REPO ?? '' },
-    org: { type: 'string', default: process.env.JIRALLM_UI_ORG },
-    open: { type: 'boolean', default: false },
-  },
-});
-const port = Number(args.port);
-const defaultOutputDir = resolve(args['output-dir'] ?? './jira-export');
+/** Hosted copies of this page that may call the local server (besides the server itself). */
+export const DEFAULT_ALLOWED_ORIGINS = ['https://hung-duongquang.github.io'];
+
+// Set by startUiServer().
+const args = { repo: '', org: undefined };
+let port = 4321;
+let defaultOutputDir = resolve('./jira-export');
+let allowedOrigins = new Set();
 
 const ISSUE_KEY = /\b[A-Z][A-Z0-9]+-\d+\b/;
 const ISSUE_KEY_STRICT = /^[A-Z][A-Z0-9]+-\d+$/i;
@@ -246,12 +247,39 @@ function openInExplorer(target) {
 
 // ---------- server ----------
 
-const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
 
-const server = createServer(async (req, res) => {
+/**
+ * Cross-origin calls are only accepted from the hosted page(s). Preflights answer Chrome's
+ * Private/Local Network Access check too, which a public https page needs to reach 127.0.0.1.
+ * Requests from any other origin are refused before they do anything.
+ */
+function applyCors(req, res) {
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  if (!allowedOrigins.has(origin)) return false;
+  res.setHeader('access-control-allow-origin', origin);
+  res.setHeader('vary', 'Origin');
+  return true;
+}
+
+async function handle(req, res) {
   try {
     // Reject requests for any other Host name (DNS-rebinding protection).
+    const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
     if (!allowedHosts.has(req.headers.host ?? '')) throw new HttpError(403, 'Forbidden host');
+    if (!applyCors(req, res)) throw new HttpError(403, `Origin not allowed: ${req.headers.origin}`);
+
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, {
+        'access-control-allow-methods': 'GET, POST',
+        'access-control-allow-headers': 'content-type',
+        'access-control-allow-private-network': 'true',
+        'access-control-max-age': '600',
+      });
+      res.end();
+      return;
+    }
+
     const url = new URL(req.url ?? '/', `http://${req.headers.host}`);
     const route = `${req.method} ${url.pathname}`;
 
@@ -279,7 +307,9 @@ const server = createServer(async (req, res) => {
         const body = await readJsonBody(req);
         const pr = Number(String(body.pr ?? '').replace('#', ''));
         if (!Number.isInteger(pr) || pr <= 0) throw new HttpError(400, 'Enter a PR number');
-        sendJson(res, 200, await resolveStack(pr, String(body.repo ?? '').trim()));
+        const repo = String(body.repo ?? '').trim();
+        if (repo && !/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new HttpError(400, 'Repo must be owner/name');
+        sendJson(res, 200, await resolveStack(pr, repo));
         return;
       }
       case 'POST /api/export': {
@@ -316,11 +346,78 @@ const server = createServer(async (req, res) => {
     }
     sendJson(res, err.status ?? 500, { error: err.message });
   }
-});
+}
 
-server.listen(port, '127.0.0.1', () => {
-  const address = `http://127.0.0.1:${port}`;
-  console.log(`jirallm UI running at ${address}`);
-  console.log(`Exporting to ${defaultOutputDir} (change it in the page). Ctrl+C to stop.`);
-  if (args.open) openInExplorer(address);
-});
+/**
+ * Starts the UI server on 127.0.0.1.
+ * @param {{ port?: number, outputDir?: string, repo?: string, org?: string, open?: boolean,
+ *   allowOrigins?: string[] }} options
+ */
+export function startUiServer(options = {}) {
+  port = Number(options.port ?? 4321);
+  defaultOutputDir = resolve(options.outputDir ?? './jira-export');
+  args.repo = options.repo ?? '';
+  args.org = options.org;
+  allowedOrigins = new Set([
+    `http://127.0.0.1:${port}`,
+    `http://localhost:${port}`,
+    ...DEFAULT_ALLOWED_ORIGINS,
+    ...(options.allowOrigins ?? []),
+  ]);
+
+  const server = createServer(handle);
+  return new Promise((resolveStart, rejectStart) => {
+    server.once('error', (err) => {
+      rejectStart(
+        err.code === 'EADDRINUSE'
+          ? new Error(`Port ${port} is already in use. Is the UI already running? Try --port.`)
+          : err
+      );
+    });
+    server.listen(port, '127.0.0.1', () => {
+      const address = `http://127.0.0.1:${port}`;
+      console.log(`jirallm UI running at ${address}`);
+      for (const origin of DEFAULT_ALLOWED_ORIGINS) console.log(`Also reachable from ${origin}`);
+      console.log(`Exporting to ${defaultOutputDir} (change it in the page). Ctrl+C to stop.`);
+      if (options.open) openInExplorer(address);
+      resolveStart(server);
+    });
+  });
+}
+
+/** Parses `--port --output-dir --repo --org --allow-origin --open` (env vars as fallbacks). */
+export function parseUiArgs(argv) {
+  const { values } = parseArgs({
+    args: argv,
+    options: {
+      port: { type: 'string', default: process.env.JIRALLM_UI_PORT ?? '4321' },
+      'output-dir': { type: 'string', default: process.env.JIRALLM_UI_OUTPUT_DIR },
+      repo: { type: 'string', default: process.env.JIRALLM_UI_REPO ?? '' },
+      org: { type: 'string', default: process.env.JIRALLM_UI_ORG },
+      'allow-origin': { type: 'string', multiple: true, default: [] },
+      open: { type: 'boolean', default: false },
+    },
+  });
+  return {
+    port: Number(values.port),
+    outputDir: values['output-dir'],
+    repo: values.repo,
+    org: values.org,
+    allowOrigins: values['allow-origin'],
+    open: values.open,
+  };
+}
+
+const runDirectly = (() => {
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(process.argv[1] ?? '')).href;
+  } catch {
+    return false;
+  }
+})();
+if (runDirectly) {
+  startUiServer(parseUiArgs(process.argv.slice(2))).catch((err) => {
+    console.error(err.message);
+    process.exit(1);
+  });
+}
