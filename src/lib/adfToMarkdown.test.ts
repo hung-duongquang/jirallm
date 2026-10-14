@@ -70,7 +70,7 @@ describe('convertADFToMarkdown malformed nodes', () => {
         ],
       })
     );
-    expect(out).toBe('| H1 | H2 |\n| --- | --- |\n| a | b |\n|  |');
+    expect(out).toBe('| H1 | H2 |\n| --- | --- |\n| a | b |\n|  |\n');
   });
 
   it('skips a malformed node nested deep inside a list', () => {
@@ -123,7 +123,7 @@ describe('convertADFToMarkdown malformed nodes', () => {
         'intro **bold**\n',
         '- one\n- two',
         '```ts\nconst a = 1;\n```',
-        '| H1 | H2 |\n| --- | --- |\n| a | b |',
+        '| H1 | H2 |\n| --- | --- |\n| a | b |\n',
       ].join('\n')
     );
   });
@@ -142,5 +142,197 @@ describe('convertADFToMarkdown malformed nodes', () => {
       attachments
     );
     expect(out).toBe('![image](attachments/first.png)\n\n![image](attachments/second.png)\n');
+  });
+});
+
+describe('convertADFToMarkdown table cells and containers', () => {
+  const listItem = (...content: unknown[]) => ({ type: 'listItem', content });
+  const table = (...rows: unknown[][]) => ({
+    type: 'table',
+    content: rows.map((cells) => ({
+      type: 'tableRow',
+      content: cells.map((content) => ({ type: 'tableCell', content })),
+    })),
+  });
+
+  it('keeps a cell containing a list on a single row, joined with <br/>', () => {
+    const out = convertADFToMarkdown(
+      doc(
+        table(
+          [[paragraph(text('Name'))], [paragraph(text('Outcome'))]],
+          [
+            [paragraph(text('Check'))],
+            [
+              {
+                type: 'orderedList',
+                content: [
+                  listItem(paragraph(text('Found → '), text('next', [{ type: 'em' }]))),
+                  listItem(paragraph(text('None → stop.'))),
+                ],
+              },
+            ],
+          ]
+        )
+      )
+    );
+    expect(out).toBe(
+      '| Name | Outcome |\n| --- | --- |\n| Check | 1. Found → *next*<br/>2. None → stop. |\n'
+    );
+  });
+
+  it('joins multiple paragraphs and hard breaks in a cell with <br/> and escapes pipes', () => {
+    const out = convertADFToMarkdown(
+      doc(
+        table(
+          [[paragraph(text('H'))]],
+          [[paragraph(text('a | b'), { type: 'hardBreak' }, text('c')), paragraph(text('d'))]]
+        )
+      )
+    );
+    expect(out).toBe('| H |\n| --- |\n| a \\| b<br/>c<br/>d |\n');
+  });
+
+  it('drops empty list items but keeps the numbering of the others', () => {
+    const out = convertADFToMarkdown(
+      doc({
+        type: 'orderedList',
+        content: [
+          listItem(paragraph(text('one'))),
+          listItem(paragraph()),
+          listItem(paragraph(text('three'))),
+        ],
+      })
+    );
+    expect(out).toBe('1. one\n3. three');
+  });
+
+  it('renders blocks inside a panel on separate lines', () => {
+    const out = convertADFToMarkdown(
+      doc({
+        type: 'panel',
+        content: [
+          paragraph(text('Base situation:')),
+          { type: 'bulletList', content: [listItem(paragraph(text('item')))] },
+        ],
+      })
+    );
+    expect(out).toBe('Base situation:\n\n- item');
+  });
+
+  it('renders an expand title in bold above its content', () => {
+    const out = convertADFToMarkdown(
+      doc({
+        type: 'expand',
+        attrs: { title: 'Details' },
+        content: [paragraph(text('body'))],
+      })
+    );
+    expect(out).toBe('**Details**\nbody\n');
+  });
+
+  it('pads a merged cell with empty cells so the row keeps the column count', () => {
+    const out = convertADFToMarkdown(
+      doc({
+        type: 'table',
+        content: [
+          {
+            type: 'tableRow',
+            content: ['A', 'B', 'C'].map((h) => ({
+              type: 'tableHeader',
+              content: [paragraph(text(h))],
+            })),
+          },
+          {
+            type: 'tableRow',
+            content: [
+              {
+                type: 'tableHeader',
+                attrs: { colspan: 2 },
+                content: [paragraph(text('wide'))],
+              },
+              { type: 'tableCell', content: [paragraph()] },
+            ],
+          },
+        ],
+      })
+    );
+    expect(out).toBe('| A | B | C |\n| --- | --- | --- |\n| wide |  |  |\n');
+  });
+
+  it('renders a heading inside a cell as bold text', () => {
+    const out = convertADFToMarkdown(
+      doc(
+        table(
+          [[paragraph(text('Field'))]],
+          [
+            [
+              {
+                type: 'heading',
+                attrs: { level: 3 },
+                content: [text('Patient level')],
+              },
+            ],
+          ]
+        )
+      )
+    );
+    expect(out).toBe('| Field |\n| --- |\n| **Patient level** |\n');
+  });
+});
+
+describe('convertADFToMarkdown marks', () => {
+  it('moves surrounding whitespace outside emphasis markers', () => {
+    const out = convertADFToMarkdown(
+      doc(paragraph(text('entry'), text(' +€10 ', [{ type: 'strong' }]), text('done')))
+    );
+    expect(out).toBe('entry **+€10** done\n');
+  });
+
+  it('leaves whitespace-only marked text unmarked', () => {
+    expect(
+      convertADFToMarkdown(doc(paragraph(text('a'), text(' ', [{ type: 'em' }]), text('b'))))
+    ).toBe('a b\n');
+  });
+});
+
+describe('convertADFToMarkdown nested lists and table spacing', () => {
+  const listItem = (...content: unknown[]) => ({ type: 'listItem', content });
+  const nested = {
+    type: 'orderedList',
+    content: [
+      listItem(paragraph(text('parent')), {
+        type: 'bulletList',
+        content: [listItem(paragraph(text('child')))],
+      }),
+    ],
+  };
+
+  it('indents a nested list under its parent item', () => {
+    expect(convertADFToMarkdown(doc(nested))).toBe('1. parent\n   - child');
+  });
+
+  it('keeps nested list indentation inside a table cell as non-breaking spaces', () => {
+    const cell = (...content: unknown[]) => ({ type: 'tableCell', content });
+    const out = convertADFToMarkdown(
+      doc({
+        type: 'table',
+        content: [
+          { type: 'tableRow', content: [cell(paragraph(text('H')))] },
+          { type: 'tableRow', content: [cell(nested)] },
+        ],
+      })
+    );
+    expect(out).toBe('| H |\n| --- |\n| 1. parent<br/>&nbsp;&nbsp;&nbsp;- child |\n');
+  });
+
+  it('separates a top-level table from the following paragraph with a blank line', () => {
+    const cell = { type: 'tableCell', content: [paragraph(text('H'))] };
+    const out = convertADFToMarkdown(
+      doc(
+        { type: 'table', content: [{ type: 'tableRow', content: [cell] }] },
+        paragraph(text('after'))
+      )
+    );
+    expect(out).toBe('| H |\n| --- |\n\nafter\n');
   });
 });

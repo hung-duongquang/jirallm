@@ -6,6 +6,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- ADF tables now render as valid GFM tables when cells hold rich content. Block children of a cell
+  (lists, multiple paragraphs, hard breaks) are joined with `<br/>` instead of raw newlines that
+  split a row across lines, nested list indentation inside a cell is kept as `&nbsp;`, pipes in
+  cell text are escaped, a heading inside a cell renders as bold, and a merged cell (`colspan`) is
+  padded with empty cells so every row keeps the table's column count. A top-level table is now
+  followed by a blank line, so the next paragraph is no longer parsed as an extra row.
+- Nested lists are indented under their parent item instead of being flattened into siblings.
+- Content inside `panel`, `expand`, `nestedExpand` and layout nodes keeps its block line breaks
+  instead of being concatenated onto one line; an `expand` title renders in bold above its body.
+- Empty list items are dropped instead of rendering as a bare `3. ` marker; the remaining items keep
+  their original numbers.
+- Whitespace at the edges of marked text is moved outside the Markdown markers, so `** x **` (which
+  does not render as bold) becomes ` **x** `.
+
 ## [0.13.1] - 2026-08-01
 
 ### Added

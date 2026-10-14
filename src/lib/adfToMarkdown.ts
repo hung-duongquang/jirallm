@@ -15,6 +15,8 @@ export type JiraADFContent = {
     language?: string;
     level?: number;
     state?: string;
+    title?: string;
+    colspan?: number;
   };
 };
 
@@ -23,6 +25,14 @@ export type JiraADFDocument = {
   type: string;
   content: JiraADFContent[];
 };
+
+const BLOCK_CONTAINERS = new Set([
+  'panel',
+  'expand',
+  'nestedExpand',
+  'layoutSection',
+  'layoutColumn',
+]);
 
 type JiraADFMark = NonNullable<JiraADFContent['marks']>[number];
 
@@ -76,8 +86,13 @@ export function convertADFToMarkdown(
       : `[${filename}](attachments/${filename})`;
   };
 
-  const applyMarks = (text: string, marks?: JiraADFContent['marks']) => {
-    if (!Array.isArray(marks)) return text;
+  const applyMarks = (rawText: string, marks?: JiraADFContent['marks']) => {
+    if (!Array.isArray(marks)) return rawText;
+    // Markdown emphasis must hug its text (`** x **` is not bold), so surrounding
+    // whitespace is moved outside the markers; whitespace-only text stays unmarked.
+    const [, leading, core, trailing] = /^(\s*)([\s\S]*?)(\s*)$/.exec(rawText)!;
+    if (core === '') return rawText;
+    let text = core;
     for (const mark of marks.filter(isAdfMark)) {
       switch (mark.type) {
         case 'code':
@@ -97,7 +112,7 @@ export function convertADFToMarkdown(
           break;
       }
     }
-    return text;
+    return leading + text + trailing;
   };
 
   const extractText = (node: unknown, isTopLevel = false, listIndex?: number): string => {
@@ -156,17 +171,35 @@ export function convertADFToMarkdown(
     }
 
     if (node.type === 'bulletList' && children) {
-      return children.map((child) => extractText(child, false, -1)).join('\n');
+      return children
+        .map((child) => extractText(child, false, -1))
+        .filter(Boolean)
+        .join('\n');
     }
 
     if (node.type === 'orderedList' && children) {
-      return children.map((child, i) => extractText(child, false, i + 1)).join('\n');
+      return children
+        .map((child, i) => extractText(child, false, i + 1))
+        .filter(Boolean)
+        .join('\n');
     }
 
     if (node.type === 'listItem' && children) {
       const prefix = listIndex !== undefined && listIndex > 0 ? `${listIndex}. ` : '- ';
       const childContent = children.map((child) => extractText(child)).join('\n');
-      return prefix + childContent.replace(/\n$/, '');
+      // Empty items (e.g. a stray "3." left in the Jira editor) carry no content.
+      if (childContent.trim() === '') return '';
+      // Continuation lines (nested lists, hard breaks) are indented under the item's
+      // text, otherwise a nested list renders as siblings of its parent.
+      const indent = ' '.repeat(prefix.length);
+      return prefix + childContent.replace(/\n$/, '').replace(/\n(?=.)/g, '\n' + indent);
+    }
+
+    // Block containers render their children like top-level blocks so paragraphs, lists
+    // and tables inside them keep their line breaks instead of being glued together.
+    if (BLOCK_CONTAINERS.has(node.type) && children) {
+      const title = node.attrs?.title ? `**${node.attrs.title}**\n` : '';
+      return title + children.map((child) => extractText(child, true)).join('\n');
     }
 
     if (node.type === 'taskList' && children) {
@@ -183,23 +216,52 @@ export function convertADFToMarkdown(
       const rows = children.filter((child) => child.type === 'tableRow');
       if (rows.length === 0) return '';
 
+      // Headings are not valid inside a Markdown table cell, so they render as bold text.
+      const renderCellBlock = (child: JiraADFContent) => {
+        if (child.type !== 'heading') return extractText(child);
+        const heading = (childNodesOf(child) ?? []).map((c) => extractText(c)).join('');
+        return /^\*\*.*\*\*$/.test(heading) ? heading : applyMarks(heading, [{ type: 'strong' }]);
+      };
+
+      // A Markdown table row must stay on one line: block children (paragraphs, list
+      // items, hard breaks) are separated by <br/>, and pipes are escaped. Indentation of
+      // nested list items is kept as non-breaking spaces, which survive inside a cell.
+      const renderCell = (cell: JiraADFContent) =>
+        (childNodesOf(cell) ?? [])
+          .map((child) => renderCellBlock(child).trim())
+          .filter(Boolean)
+          .join('\n')
+          .replace(/\|/g, '\\|')
+          .replace(
+            /[ \t]*\n(?:[ \t]*\n)*( *)/g,
+            (_, indent: string) => '<br/>' + '&nbsp;'.repeat(indent.length)
+          );
+
+      // Markdown has no merged cells: a cell spanning N columns is followed by N-1 empty
+      // cells so every row keeps the table's column count.
+      const spanOf = (cell: JiraADFContent) => {
+        const colspan = Number(cell.attrs?.colspan);
+        return Number.isInteger(colspan) && colspan > 1 ? colspan : 1;
+      };
+
       const processRow = (row: JiraADFContent) => {
         const cells =
-          childNodesOf(row)?.map((cell) =>
-            (childNodesOf(cell) ?? [])
-              .map((child) => extractText(child))
-              .join('')
-              .replace(/\n$/g, '')
-          ) ?? [];
+          childNodesOf(row)?.flatMap((cell) => [
+            renderCell(cell),
+            ...Array<string>(spanOf(cell) - 1).fill(''),
+          ]) ?? [];
         return '| ' + cells.join(' | ') + ' |';
       };
 
       const headerRow = processRow(rows[0]);
-      const colCount = childNodesOf(rows[0])?.length ?? 0;
+      const colCount = (childNodesOf(rows[0]) ?? []).reduce((sum, cell) => sum + spanOf(cell), 0);
       const separator = '| ' + Array(colCount).fill('---').join(' | ') + ' |';
       const bodyRows = rows.slice(1).map(processRow);
 
-      return [headerRow, separator, ...bodyRows].join('\n');
+      // A table must be followed by a blank line: in GFM, a text line directly after a
+      // table is parsed as one more row.
+      const table = [headerRow, separator, ...bodyRows].join('\n');
+      return isTopLevel ? table + '\n' : table;
     }
 
     if (node.type === 'tableRow' || node.type === 'tableCell' || node.type === 'tableHeader') {

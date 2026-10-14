@@ -796,7 +796,7 @@ describe('JiraClient.convertADFToMarkdown', () => {
         ],
       }) as never
     );
-    expect(out).toBe('| H1 | H2 |\n| --- | --- |\n| a | b |');
+    expect(out).toBe('| H1 | H2 |\n| --- | --- |\n| a | b |\n');
   });
 
   it('renders rule and hardBreak nodes', () => {
