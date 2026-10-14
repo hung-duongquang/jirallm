@@ -43,7 +43,6 @@
     "test": "vitest run --bail=5",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage --coverage.provider=v8 --coverage.include='src/**/*.ts' --coverage.exclude='src/**/*.test.ts'",
-    "prepare": "node scripts/prepare.mjs",
     "prepublishOnly": "pnpm build && pnpm test",
     "release": "doryski-release"
   },

@@ -224,7 +224,7 @@ const apiBase = () => (HOSTED ? `http://127.0.0.1:${localPort}` : '');
 const FORK = HOSTED && location.hostname.endsWith('.github.io')
   ? `${location.hostname.split('.')[0]}/${location.pathname.split('/')[1] || 'jirallm'}`
   : 'hung-duongquang/jirallm';
-const INSTALL_CMD = `npm install -g github:${FORK}#fix/adf-table-rich-cells`;
+const INSTALL_CMD = `npm install -g github:${FORK}#release`;
 
 class OfflineError extends Error {}
 async function request(path, init = {}) {
@@ -445,7 +445,8 @@ function renderSetup(problem, offline) {
       <p>This page runs exports through a small helper on your own machine. Your Jira token is stored
         in your OS keychain by the helper and is never sent to this website.</p>
       <ol>
-        <li class="${offline ? '' : 'done'}"><b>Install the helper</b> (once; needs Node.js 20+):${code(INSTALL_CMD)}</li>
+        <li class="${offline ? '' : 'done'}"><b>Install the helper</b> (once; needs Node.js 20+):${code(INSTALL_CMD)}
+          <span class="hint">To update later, run the same command again. <code>jirallm upgrade</code> would switch to the npm release, which has no web UI.</span></li>
         <li><b>Add your Jira token.</b>
           <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noopener">Create an API token</a>,
           then run the wizard and enter ${jira ? `<code>${esc(jira)}</code>` : 'your Jira URL'}, your e-mail and the token:${code('jirallm init')}</li>
