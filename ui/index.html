@@ -64,7 +64,8 @@
   .stack .pr { color: var(--muted); font-variant-numeric: tabular-nums; }
   .stack .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
   .key { font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; font-weight: 600; }
-  .progress { list-style: none; padding: 0; margin: 10px 0 0; display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+  .progress { list-style: none; padding: 0; margin: 10px 0 0; display: flex; flex-direction: column; gap: 2px; font-size: 13px;
+    max-height: 132px; overflow-y: auto; }
   .progress li { display: flex; gap: 8px; align-items: baseline; }
   .progress .s { font-size: 12px; }
   .s.ok { color: var(--ok); } .s.err { color: var(--err); } .s.run { color: var(--warn); }
@@ -179,7 +180,8 @@
     <section class="card library">
       <div class="row">
         <h2 class="card-title" style="margin:0;flex:1">Exported</h2>
-        <button id="refresh" title="Reload the list">Refresh</button>
+        <button id="refresh" title="Reload the list from the folder">Reload</button>
+        <button id="updateAll" title="Re-export these tickets from Jira with the options above">Update all</button>
       </div>
       <input type="text" id="filter" placeholder="Filter by key or title" style="margin-top:8px">
       <ul id="library"></ul>
@@ -305,17 +307,24 @@ $('useStack').onclick = () => {
 };
 
 // ---- export ----
-$('export').onclick = async () => {
-  const keys = parseKeys($('keys').value);
-  if (!keys.length) { selectTab(false); $('keys').focus(); toast('Enter at least one ticket key'); return; }
-  const btn = $('export'); btn.disabled = true; btn.textContent = `Exporting ${keys.length}…`;
+const STATUS_TEXT = { new: 'new', changed: 'changed', unchanged: 'unchanged', updated: 'updated' };
+let exporting = false;
+
+/** Exports `keys` with the current options, streaming progress into the list on the left. */
+async function runExport(keys, { button, busyLabel, idleLabel, openFirst }) {
+  if (exporting) return;
+  exporting = true;
+  for (const b of [$('export'), $('updateAll')]) b.disabled = true;
+  button.textContent = busyLabel;
   const list = $('progress');
+  list.scrollIntoView({ block: 'nearest' });
   list.innerHTML = keys.map((k) => `<li data-k="${k}"><span class="key">${k}</span><span class="s">waiting</span></li>`).join('');
   const setRow = (key, cls, text) => {
     const li = list.querySelector(`[data-k="${key}"]`) || list.appendChild(Object.assign(document.createElement('li'), { innerHTML: `<span class="key">${esc(key)}</span><span class="s"></span>` }));
     li.dataset.k = key; const s = li.querySelector('.s'); s.className = 's ' + cls; s.textContent = text;
   };
   let lastDone = null, failures = 0;
+  const counts = { new: 0, changed: 0, unchanged: 0, updated: 0 };
   try {
     const res = await request('/api/export', { method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ keys, outputDir: outDir(), options: options() }) });
@@ -328,16 +337,52 @@ $('export').onclick = async () => {
         const line = buf.slice(0, nl); buf = buf.slice(nl + 1); if (!line.trim()) continue;
         const ev = JSON.parse(line);
         if (ev.type === 'progress') setRow(ev.key, 'run', 'exporting…');
-        if (ev.type === 'done') { setRow(ev.key, 'ok', ev.status + (ev.attachmentCount ? ` · ${ev.attachmentCount} attachment(s)` : '')); lastDone = lastDone || ev.key; }
+        if (ev.type === 'done') {
+          counts[ev.status] = (counts[ev.status] ?? 0) + 1;
+          setRow(ev.key, ev.status === 'unchanged' ? '' : 'ok',
+            (STATUS_TEXT[ev.status] ?? ev.status) + (ev.attachmentCount ? ` · ${ev.attachmentCount} attachment(s)` : ''));
+          lastDone = lastDone || ev.key;
+        }
         if (ev.type === 'failed') { failures++; setRow(ev.key || 'error', 'err', ev.error); }
       }
     }
-    toast(failures ? `Done with ${failures} failure(s)` : `Exported ${keys.length} ticket(s)`);
+    const summary = Object.entries(counts).filter(([, n]) => n).map(([s, n]) => `${n} ${s}`);
+    if (failures) summary.push(`${failures} failed`);
+    toast(summary.join(' · ') || 'Nothing exported');
   } catch (err) { toast(err.message); }
-  finally { btn.disabled = false; btn.textContent = 'Export'; }
+  finally {
+    exporting = false;
+    for (const b of [$('export'), $('updateAll')]) b.disabled = false;
+    button.textContent = idleLabel;
+    renderLibrary();
+  }
   await loadLibrary();
-  if (lastDone) openTask(lastDone);
+  if (openFirst && lastDone) openTask(lastDone);
+  else if (current) openTask(current); // show the refreshed content of the open ticket
+}
+
+$('export').onclick = () => {
+  const keys = parseKeys($('keys').value);
+  if (!keys.length) { selectTab(false); $('keys').focus(); toast('Enter at least one ticket key'); return; }
+  runExport(keys, { button: $('export'), busyLabel: `Exporting ${keys.length}…`, idleLabel: 'Export', openFirst: true });
 };
+
+// Re-export the tickets in the list (all of them, or only those matching the filter).
+const visibleLibraryKeys = () => {
+  const q = $('filter').value.trim().toLowerCase();
+  return libraryItems
+    .filter((it) => !q || it.key.toLowerCase().includes(q) || it.title.toLowerCase().includes(q))
+    .map((it) => it.key);
+};
+$('updateAll').onclick = () => {
+  const keys = visibleLibraryKeys();
+  if (!keys.length) { toast('Nothing to update'); return; }
+  runExport(keys, { button: $('updateAll'), busyLabel: `Updating ${keys.length}…`, idleLabel: updateLabel(), openFirst: false });
+};
+function updateLabel() {
+  const n = visibleLibraryKeys().length;
+  return $('filter').value.trim() ? `Update ${n} shown` : `Update all (${n})`;
+}
 
 // ---- library ----
 async function loadLibrary() {
@@ -353,6 +398,10 @@ function renderLibrary() {
       <span class="key">${esc(it.key)}</span><span class="meta">${esc(it.status)} · ${ago(it.modified)}</span>
       <span class="title">${esc(it.title)}</span>
     </button></li>`).join('') : `<li class="hint" style="padding:8px">${libraryItems.length ? 'No match.' : 'Nothing exported in this folder yet.'}</li>`;
+  if (!exporting) {
+    $('updateAll').textContent = updateLabel();
+    $('updateAll').disabled = items.length === 0;
+  }
 }
 $('library').onclick = (e) => { const b = e.target.closest('button[data-key]'); if (b) openTask(b.dataset.key); };
 $('filter').oninput = renderLibrary;

@@ -181,6 +181,14 @@ async function exportIssues(body, res) {
 
   for (const key of keys) {
     emit({ type: 'progress', key });
+    // Compared after the export, so a re-export reports whether Jira had anything new.
+    const previousFile = join(outputDir, key.toLowerCase(), 'task.md');
+    const previous = existsSync(previousFile) ? await readFile(previousFile, 'utf8') : null;
+    const changeStatus = async (item) => {
+      if (previous === null) return 'new';
+      const now = await readFile(item.path, 'utf8').catch(() => null);
+      return now === previous ? 'unchanged' : 'changed';
+    };
     try {
       const result = await exporter.exportIssues([key], {
         outputDir,
@@ -198,8 +206,12 @@ async function exportIssues(body, res) {
           maxFrames: videoDefaults.maxFrames ?? 10,
         },
       });
-      for (const item of result.imported) emit({ type: 'done', key: item.key, status: 'new', ...pick(item) });
-      for (const item of result.updated) emit({ type: 'done', key: item.key, status: 'updated', ...pick(item) });
+      // With "Parent issues" on, a result can include parents; only `key` itself has a snapshot.
+      for (const item of [...result.imported, ...result.updated]) {
+        const status =
+          item.key.toUpperCase() === key ? await changeStatus(item) : result.imported.includes(item) ? 'new' : 'updated';
+        emit({ type: 'done', key: item.key, status, ...pick(item) });
+      }
       for (const fail of result.failed) emit({ type: 'failed', key: fail.key, error: String(fail.error) });
     } catch (err) {
       emit({ type: 'failed', key, error: err.message });
