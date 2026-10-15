@@ -12,11 +12,12 @@
 import { createServer } from 'node:http';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { existsSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
+import { unifiedDiff } from './diff.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const lib = await import(new URL('../dist/index.js', import.meta.url)).catch(() => {
@@ -37,6 +38,8 @@ let allowedOrigins = new Set();
 
 const ISSUE_KEY = /\b[A-Z][A-Z0-9]+-\d+\b/;
 const ISSUE_KEY_STRICT = /^[A-Z][A-Z0-9]+-\d+$/i;
+/** The task.md a changed re-export replaced; hidden so it is not picked up as context. */
+const PREVIOUS_FILE = '.task.previous.md';
 
 // ---------- helpers ----------
 
@@ -187,7 +190,11 @@ async function exportIssues(body, res) {
     const changeStatus = async (item) => {
       if (previous === null) return 'new';
       const now = await readFile(item.path, 'utf8').catch(() => null);
-      return now === previous ? 'unchanged' : 'changed';
+      if (now === previous) return 'unchanged';
+      // Keep the version this export replaced, for the diff view. An unchanged re-export
+      // leaves it alone, so the last real change stays viewable.
+      await writeFile(join(dirname(item.path), PREVIOUS_FILE), previous, 'utf8');
+      return 'changed';
     };
     try {
       const result = await exporter.exportIssues([key], {
@@ -234,13 +241,20 @@ async function listLibrary(outputDir) {
       .map(async (e) => {
         const file = join(outputDir, e.name, 'task.md');
         if (!existsSync(file)) return null;
-        const [text, info] = await Promise.all([readFile(file, 'utf8'), stat(file)]);
+        const previous = join(outputDir, e.name, PREVIOUS_FILE);
+        const [text, info, previousInfo] = await Promise.all([
+          readFile(file, 'utf8'),
+          stat(file),
+          stat(previous).catch(() => null),
+        ]);
         return {
           key: e.name.toUpperCase(),
           title: text.match(/^# (.+)$/m)?.[1] ?? '',
           status: text.match(/^status: "?([^"\n]+)"?$/m)?.[1] ?? '',
           modified: info.mtime.toISOString(),
           size: info.size,
+          // When the last real change was exported (the earlier version was saved then).
+          changedAt: previousInfo ? previousInfo.mtime.toISOString() : null,
         };
       })
   );
@@ -330,6 +344,20 @@ async function handle(req, res) {
       }
       case 'GET /api/library': {
         sendJson(res, 200, await listLibrary(resolveOutputDir(url.searchParams.get('dir'))));
+        return;
+      }
+      case 'GET /api/diff': {
+        const dir = taskDirFor(resolveOutputDir(url.searchParams.get('dir')), url.searchParams.get('key'));
+        const previousFile = join(dir, PREVIOUS_FILE);
+        if (!existsSync(previousFile)) {
+          throw new HttpError(404, 'No earlier version yet. A diff appears after an update changes this ticket.');
+        }
+        const [previous, current, info] = await Promise.all([
+          readFile(previousFile, 'utf8'),
+          readFile(join(dir, 'task.md'), 'utf8'),
+          stat(previousFile),
+        ]);
+        sendJson(res, 200, { ...unifiedDiff(previous, current), changedAt: info.mtime.toISOString() });
         return;
       }
       case 'GET /api/task': {

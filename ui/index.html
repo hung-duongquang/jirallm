@@ -12,6 +12,7 @@
     --bg: #f6f7f9; --surface: #ffffff; --surface-2: #f0f2f5; --border: #dfe3e8;
     --text: #1d2330; --muted: #5d6676; --accent: #2f5bd3; --accent-text: #ffffff;
     --ok: #1f7a4d; --warn: #9a6200; --err: #b42318; --code-bg: #f3f4f6;
+    --add-bg: #e6ffec; --add-word: #abf2bc; --del-bg: #ffebe9; --del-word: #ffc1c0; --hunk-bg: #ddf4ff;
     --radius: 8px; --shadow: 0 1px 2px rgb(16 24 40 / 6%);
   }
   @media (prefers-color-scheme: dark) {
@@ -19,6 +20,7 @@
       --bg: #12151b; --surface: #1a1e26; --surface-2: #222833; --border: #2e3542;
       --text: #e6e9ef; --muted: #98a2b3; --accent: #7aa2ff; --accent-text: #0d1220;
       --ok: #4cc38a; --warn: #f0b545; --err: #ff7b72; --code-bg: #232a35;
+      --add-bg: #12261e; --add-word: #1f6f43; --del-bg: #2d1517; --del-word: #8b2c2e; --hunk-bg: #121d2f;
       --shadow: none;
     }
   }
@@ -105,6 +107,26 @@
     pointer-events: none; }
   .toast.show { opacity: 1; }
   .error { color: var(--err); font-size: 13px; margin: 8px 0 0; }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; background: none; color: var(--muted); }
+  .seg button + button { border-left: 1px solid var(--border); }
+  .seg button[aria-pressed=true] { background: var(--surface-2); color: var(--text); font-weight: 600; }
+  .plus { color: var(--ok); font-weight: 600; } .minus { color: var(--err); font-weight: 600; }
+  .changed { color: var(--accent); font-weight: 600; }
+  .progress li.has-diff { cursor: pointer; border-radius: 4px; }
+  .progress li.has-diff:hover { background: var(--surface-2); }
+  .progress li.has-diff .s { text-decoration: underline; text-underline-offset: 2px; }
+  .diff-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; margin: 14px 0 10px; font-size: 13px; }
+  .diff { width: 100%; border-collapse: collapse; font: 12.5px/1.55 ui-monospace, Consolas, monospace;
+    border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .diff td { padding: 0 8px; vertical-align: top; }
+  .diff td.no { width: 1%; min-width: 40px; text-align: right; color: var(--muted); user-select: none;
+    border-right: 1px solid var(--border); }
+  .diff td.code { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .diff .sign { display: inline-block; width: 1.2em; color: var(--muted); user-select: none; }
+  .diff tr.add td { background: var(--add-bg); } .diff tr.add mark { background: var(--add-word); color: inherit; border-radius: 2px; }
+  .diff tr.del td { background: var(--del-bg); } .diff tr.del mark { background: var(--del-word); color: inherit; border-radius: 2px; }
+  .diff tr.hunk td { background: var(--hunk-bg); color: var(--muted); padding-top: 2px; padding-bottom: 2px; }
   .setup { max-width: 680px; margin: 8px auto; }
   .setup h2 { font-size: 18px; margin: 16px 0 4px; }
   .setup .problem { color: var(--err); margin: 0 0 12px; }
@@ -192,7 +214,11 @@
     <div class="preview-head" id="previewHead" hidden>
       <span class="key" id="pKey"></span>
       <span class="ptitle" id="pTitle"></span>
-      <button id="toggleSource">Markdown</button>
+      <div class="seg" role="group" aria-label="View">
+        <button data-view="rendered" aria-pressed="true">Rendered</button>
+        <button data-view="source" aria-pressed="false">Markdown</button>
+        <button data-view="diff" aria-pressed="false" id="viewDiff" hidden>Diff</button>
+      </div>
       <button id="copy">Copy</button>
       <button id="openTask">Open folder</button>
     </div>
@@ -210,7 +236,7 @@ const store = {
   set(k, v) { try { localStorage.setItem('jirallm-ui:' + k, JSON.stringify(v)); } catch {} },
 };
 const KEY_RE = /\b[A-Z][A-Z0-9]+-\d+\b/g;
-let info = null, current = null, showSource = false, libraryItems = [];
+let info = null, current = null, view = 'rendered', libraryItems = [];
 
 function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('show'), 1800); }
 const outDir = () => $('outdir').value.trim();
@@ -341,6 +367,11 @@ async function runExport(keys, { button, busyLabel, idleLabel, openFirst }) {
           counts[ev.status] = (counts[ev.status] ?? 0) + 1;
           setRow(ev.key, ev.status === 'unchanged' ? '' : 'ok',
             (STATUS_TEXT[ev.status] ?? ev.status) + (ev.attachmentCount ? ` · ${ev.attachmentCount} attachment(s)` : ''));
+          if (ev.status === 'changed') {
+            const li = list.querySelector(`[data-k="${ev.key}"]`);
+            li.classList.add('has-diff'); li.title = 'Show what changed';
+            li.querySelector('.s').textContent += ' · view diff';
+          }
           lastDone = lastDone || ev.key;
         }
         if (ev.type === 'failed') { failures++; setRow(ev.key || 'error', 'err', ev.error); }
@@ -360,6 +391,11 @@ async function runExport(keys, { button, busyLabel, idleLabel, openFirst }) {
   if (openFirst && lastDone) openTask(lastDone);
   else if (current) openTask(current); // show the refreshed content of the open ticket
 }
+
+$('progress').onclick = (e) => {
+  const li = e.target.closest('li.has-diff');
+  if (li) openTask(li.dataset.k, { as: 'diff' });
+};
 
 $('export').onclick = () => {
   const keys = parseKeys($('keys').value);
@@ -395,7 +431,7 @@ function renderLibrary() {
   const items = libraryItems.filter((it) => !q || it.key.toLowerCase().includes(q) || it.title.toLowerCase().includes(q));
   $('library').innerHTML = items.length ? items.map((it) => `
     <li><button data-key="${esc(it.key)}" aria-current="${it.key === current}">
-      <span class="key">${esc(it.key)}</span><span class="meta">${esc(it.status)} · ${ago(it.modified)}</span>
+      <span class="key">${esc(it.key)}</span><span class="meta">${it.changedAt ? `<span class="changed" title="Changed in an update; open it and choose Diff">changed ${ago(it.changedAt)}</span> · ` : ''}${esc(it.status)} · ${ago(it.modified)}</span>
       <span class="title">${esc(it.title)}</span>
     </button></li>`).join('') : `<li class="hint" style="padding:8px">${libraryItems.length ? 'No match.' : 'Nothing exported in this folder yet.'}</li>`;
   if (!exporting) {
@@ -442,11 +478,19 @@ function renderFmValue(v) {
     return `<span class="link">${esc(Object.values(x).join(' · '))}</span>`;
   }).join(v.every((x) => typeof x !== 'object') ? ', ' : '');
 }
-let currentMarkdown = '';
-async function openTask(key, { fromLink = false } = {}) {
+let currentMarkdown = '', currentDiff = null;
+const hasDiff = (key) => Boolean(libraryItems.find((it) => it.key === key)?.changedAt);
+async function openTask(key, { fromLink = false, as } = {}) {
   try {
-    const { markdown } = await api(`/api/task?key=${encodeURIComponent(key)}&dir=${encodeURIComponent(outDir())}`);
-    current = key; currentMarkdown = markdown; renderPreview(); renderLibrary();
+    const q = `key=${encodeURIComponent(key)}&dir=${encodeURIComponent(outDir())}`;
+    const [{ markdown }, diff] = await Promise.all([
+      api(`/api/task?${q}`),
+      hasDiff(key) ? api(`/api/diff?${q}`).catch(() => null) : null,
+    ]);
+    current = key; currentMarkdown = markdown; currentDiff = diff;
+    if (as) view = as;
+    if (view === 'diff' && !currentDiff) view = 'rendered';
+    renderPreview(); renderLibrary();
   } catch (err) {
     // A linked issue that is not exported yet: offer to add it instead of clearing the preview.
     if (fromLink) { addKey(key); toast(`${key} is not exported yet — added to the ticket list`); return; }
@@ -468,14 +512,37 @@ function renderPreview() {
   $('previewHead').hidden = false;
   $('pKey').textContent = current;
   $('pTitle').textContent = (body.match(/^# (.+)$/m) || [])[1] || '';
-  $('toggleSource').textContent = showSource ? 'Rendered' : 'Markdown';
-  if (showSource) { $('previewBody').innerHTML = `<pre class="source">${esc(currentMarkdown)}</pre>`; return; }
+  $('viewDiff').hidden = !currentDiff;
+  if (currentDiff) $('viewDiff').innerHTML = `Diff <span class="plus">+${currentDiff.added}</span> <span class="minus">−${currentDiff.removed}</span>`;
+  for (const b of document.querySelectorAll('.seg button')) b.setAttribute('aria-pressed', String(b.dataset.view === view));
+  $('previewBody').scrollTop = 0;
+  if (view === 'diff') { $('previewBody').innerHTML = renderDiff(currentDiff); return; }
+  if (view === 'source') { $('previewBody').innerHTML = `<pre class="source">${esc(currentMarkdown)}</pre>`; return; }
   const meta = fm.length ? `<dl class="fm">${fm.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${renderFmValue(v)}</dd>`).join('')}</dl>` : '';
   const html = DOMPurify.sanitize(marked.parse(body.replace(/^\s*# .+\n+/, ''), { gfm: true }));
   $('previewBody').innerHTML = meta + `<div class="md">${html}</div>`;
-  $('previewBody').scrollTop = 0;
 }
-$('toggleSource').onclick = () => { showSource = !showSource; renderPreview(); };
+for (const b of document.querySelectorAll('.seg button')) b.onclick = () => { view = b.dataset.view; renderPreview(); };
+
+// git-style unified diff of the last change: hunk headers, old/new line numbers, and the
+// changed words highlighted inside a changed line.
+function renderDiff(diff) {
+  const text = (l) => l.segments
+    ? l.segments.map((s) => (s.changed ? `<mark>${esc(s.text)}</mark>` : esc(s.text))).join('')
+    : esc(l.text);
+  const rows = diff.hunks.map((h) =>
+    `<tr class="hunk"><td class="no"></td><td class="no"></td><td class="code">@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@</td></tr>` +
+    h.lines.map((l) => {
+      const cls = l.type === '+' ? 'add' : l.type === '-' ? 'del' : '';
+      return `<tr class="${cls}"><td class="no">${l.oldNo ?? ''}</td><td class="no">${l.newNo ?? ''}</td>` +
+        `<td class="code"><span class="sign">${l.type === ' ' ? ' ' : l.type === '-' ? '−' : '+'}</span>${text(l)}</td></tr>`;
+    }).join('')).join('');
+  return `<div class="diff-head"><span class="key">task.md</span>
+      <span>changed ${esc(ago(diff.changedAt))}</span>
+      <span class="plus">+${diff.added}</span> <span class="minus">−${diff.removed}</span>
+      <span class="hint">compared with the version before that update</span></div>` +
+    (diff.hunks.length ? `<table class="diff">${rows}</table>` : '<div class="empty">No differences.</div>');
+}
 $('copy').onclick = async () => { try { await navigator.clipboard.writeText(currentMarkdown); toast('Markdown copied'); } catch { toast('Copy failed'); } };
 $('openTask').onclick = () => api('/api/open', { dir: outDir(), key: current }).catch((e) => toast(e.message));
 $('openRoot').onclick = () => api('/api/open', { dir: outDir() }).catch((e) => toast(e.message));
