@@ -206,6 +206,8 @@ async function exportIssues(body, res) {
         withHistory: o.fieldChanges ?? false,
         withStatusChanges: o.statusChanges ?? false,
         withComments: o.comments ?? true,
+        // One issue per call (for progress), so the rest of the run is passed explicitly.
+        batchKeys: keys,
         withWorklog: o.worklog ?? false,
         videoFrames: {
           enabled: (o.videoFrames ?? true) && videoDefaults.enabled !== false,

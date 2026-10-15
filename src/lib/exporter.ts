@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { JiraClient, type JiraConfig, type JiraTaskData } from './jiraClient.js';
+import { linkLocalIssues } from './issueLinks.js';
 import { extractFrames, isVideoFile } from 'framewise';
 import {
   resolveFieldSet,
@@ -19,6 +20,13 @@ export type ExportOptions = {
   withStatusChanges?: boolean;
   /** Write issue comments to task.md. Default: true. */
   withComments?: boolean;
+  /**
+   * Point links to other Jira issues at their local copy in `outputDir` (an exported
+   * `<key>/task.md` or a loose `KEY….md`) when one exists. Default: true.
+   */
+  localIssueLinks?: boolean;
+  /** Issues exported in the same run (linked locally although not written yet). */
+  batchKeys?: string[];
   withWorklog?: boolean;
   videoFrames?: {
     enabled: boolean;
@@ -248,7 +256,7 @@ function buildTaskMarkdown(
   task: JiraTaskData,
   taskDir: string,
   selectedKeys: Set<string>,
-  options: Pick<ExportOptions, 'withStatusChanges' | 'withComments'> = {}
+  options: Partial<ExportOptions> = {}
 ): string {
   const frontmatterBody = buildFrontmatterBlock(task, selectedKeys);
   let md = `---\n${frontmatterBody}\n---\n\n# ${task.title}\n\n`;
@@ -285,6 +293,13 @@ function buildTaskMarkdown(
     }
   }
 
+  if (options.outputDir && options.localIssueLinks !== false) {
+    md = linkLocalIssues(md, {
+      outputDir: options.outputDir,
+      selfKey: task.key,
+      batchKeys: options.batchKeys,
+    });
+  }
   return md;
 }
 
@@ -425,7 +440,10 @@ export class JiraExporter {
       seen.add(dedupeKey);
 
       try {
-        const outcome = await this.exportIssue(key, options);
+        const outcome = await this.exportIssue(key, {
+          ...options,
+          batchKeys: [...issueKeys, ...(options.batchKeys ?? [])],
+        });
         seen.add(outcome.canonicalKey.toLowerCase());
         (outcome.existed ? result.updated : result.imported).push({
           key,

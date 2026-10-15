@@ -504,8 +504,20 @@ function addKey(key) {
   selectTab(false);
 }
 $('previewBody').addEventListener('click', (e) => {
-  const a = e.target.closest('a[data-open]');
-  if (a) { e.preventDefault(); openTask(a.dataset.open, { fromLink: true }); }
+  const a = e.target.closest('a[data-open], .md a[href]');
+  if (!a) return;
+  e.preventDefault();
+  if (a.dataset.open) { openTask(a.dataset.open, { fromLink: true }); return; }
+  const href = a.getAttribute('href');
+  // A link to another ticket's local copy (`../zod-123/task.md`, `../ZOD-123-….md`).
+  const local = !/^[a-z]+:/i.test(href) && href.match(/([A-Z][A-Z0-9]+-\d+)[^/]*\.md$|\/([a-z][a-z0-9]+-\d+)\/task\.md$/i);
+  if (local) {
+    const key = (local[1] || local[2]).toUpperCase();
+    if (libraryItems.some((it) => it.key === key)) openTask(key, { fromLink: true });
+    else if (info?.baseUrl) window.open(`${info.baseUrl}/browse/${key}`, '_blank', 'noopener');
+    return;
+  }
+  if (/^https?:/i.test(href)) window.open(href, '_blank', 'noopener');
 });
 function renderPreview() {
   const { fm, body } = splitFrontmatter(currentMarkdown);

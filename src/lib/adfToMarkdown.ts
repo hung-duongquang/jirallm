@@ -1,3 +1,5 @@
+import { jiraIssueKeyFromUrl } from './issueLinks.js';
+
 export type JiraADFContent = {
   type: string;
   content?: JiraADFContent[];
@@ -110,9 +112,15 @@ export function convertADFToMarkdown(
         case 'strike':
           text = `~~${text}~~`;
           break;
-        case 'link':
-          if (mark.attrs?.href) text = `[${text}](${mark.attrs.href})`;
+        case 'link': {
+          const href = mark.attrs?.href;
+          if (!href) break;
+          // A pasted Jira URL shows its issue key instead of the full URL as link text.
+          const issueKey = core === href ? jiraIssueKeyFromUrl(href) : undefined;
+          if (issueKey) text = text.split(core).join(issueKey);
+          text = `[${text}](${href})`;
           break;
+        }
       }
     }
     return leading + text + trailing;
@@ -145,6 +153,9 @@ export function convertADFToMarkdown(
     if ((node.type === 'inlineCard' || node.type === 'blockCard') && node.attrs?.url) {
       const matched = attachments.find((att) => att.url && node.attrs!.url!.includes(att.id));
       if (matched) return `[${matched.filename}](attachments/${matched.filename})`;
+      // Jira issue smart links: `[ZOD-123](url)`, which the exporter can repoint at a local copy.
+      const issueKey = jiraIssueKeyFromUrl(node.attrs.url);
+      if (issueKey) return `[${issueKey}](${node.attrs.url})`;
       return node.attrs.url;
     }
 

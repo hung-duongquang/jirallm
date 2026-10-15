@@ -72,6 +72,7 @@ type ExportFlags = {
   withHistory?: boolean;
   statusChanges?: boolean;
   comments?: boolean;
+  localLinks?: boolean;
   withWorklog?: boolean;
 };
 
@@ -269,6 +270,7 @@ async function runExport(rawArgs: string[], flags: ExportFlags, program: Command
     withHistory: flags.withHistory,
     withStatusChanges: flags.statusChanges,
     withComments: flags.comments,
+    localIssueLinks: flags.localLinks,
     withWorklog: flags.withWorklog,
   });
 
@@ -340,6 +342,7 @@ function addExportOptions(cmd: Command): Command {
     .option('--with-history', 'Include full field-change history (not just status changes)')
     .option('--no-status-changes', 'Leave status/field changes out of task.md')
     .option('--no-comments', 'Leave issue comments out of task.md')
+    .option('--no-local-links', 'Always link other issues to Jira, not to their local copy')
     .option('--with-worklog', 'Include worklogs')
     .option('--dry-run', 'Resolve config & print plan without calling Jira or writing files');
 }
