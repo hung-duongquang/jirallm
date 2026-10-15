@@ -182,55 +182,45 @@ async function exportIssues(body, res) {
   const emit = (event) => res.write(JSON.stringify(event) + '\n');
   emit({ type: 'start', total: keys.length, outputDir });
 
-  for (const key of keys) {
-    emit({ type: 'progress', key });
-    // Compared after the export, so a re-export reports whether Jira had anything new.
-    const previousFile = join(outputDir, key.toLowerCase(), 'task.md');
-    const previous = existsSync(previousFile) ? await readFile(previousFile, 'utf8') : null;
-    const changeStatus = async (item) => {
-      if (previous === null) return 'new';
-      const now = await readFile(item.path, 'utf8').catch(() => null);
-      if (now === previous) return 'unchanged';
-      // Keep the version this export replaced, for the diff view. An unchanged re-export
-      // leaves it alone, so the last real change stays viewable.
-      await writeFile(join(dirname(item.path), PREVIOUS_FILE), previous, 'utf8');
-      return 'changed';
-    };
-    try {
-      const result = await exporter.exportIssues([key], {
-        outputDir,
-        includeSubtasks: o.subtasks ?? org.includeSubtasks ?? false,
-        includeParent: o.parent ?? false,
-        fieldSelector: org.export?.fieldSelector,
-        customFieldDefs: org.export?.customFieldDefs,
-        withHistory: o.fieldChanges ?? false,
-        withStatusChanges: o.statusChanges ?? false,
-        withComments: o.comments ?? true,
-        // One issue per call (for progress), so the rest of the run is passed explicitly.
-        batchKeys: keys,
-        withWorklog: o.worklog ?? false,
-        videoFrames: {
-          enabled: (o.videoFrames ?? true) && videoDefaults.enabled !== false,
-          fps: videoDefaults.fps ?? 5,
-          maxFrames: videoDefaults.maxFrames ?? 10,
-        },
-      });
-      // With "Parent issues" on, a result can include parents; only `key` itself has a snapshot.
-      for (const item of [...result.imported, ...result.updated]) {
-        const status =
-          item.key.toUpperCase() === key ? await changeStatus(item) : result.imported.includes(item) ? 'new' : 'updated';
-        emit({ type: 'done', key: item.key, status, ...pick(item) });
+  const exportOptions = {
+    outputDir,
+    includeSubtasks: o.subtasks ?? org.includeSubtasks ?? false,
+    includeParent: o.parent ?? false,
+    includeLinked: o.linked ?? false,
+    fieldSelector: org.export?.fieldSelector,
+    customFieldDefs: org.export?.customFieldDefs,
+    withHistory: o.fieldChanges ?? false,
+    withStatusChanges: o.statusChanges ?? false,
+    withComments: o.comments ?? true,
+    withWorklog: o.worklog ?? false,
+    videoFrames: {
+      enabled: (o.videoFrames ?? true) && videoDefaults.enabled !== false,
+      fps: videoDefaults.fps ?? 5,
+      maxFrames: videoDefaults.maxFrames ?? 10,
+    },
+    onIssueStart: (key, { via }) => emit({ type: 'progress', key, via }),
+    // A re-export reports whether Jira had anything new; a changed one keeps the version it
+    // replaced for the diff view. An unchanged re-export leaves that copy alone, so the last
+    // real change stays viewable.
+    onIssueWritten: async ({ key, path, previous, current, via, attachmentCount }) => {
+      let status = 'new';
+      if (previous !== null) {
+        status = previous === current ? 'unchanged' : 'changed';
+        if (status === 'changed') await writeFile(join(dirname(path), PREVIOUS_FILE), previous, 'utf8');
       }
-      for (const fail of result.failed) emit({ type: 'failed', key: fail.key, error: String(fail.error) });
-    } catch (err) {
-      emit({ type: 'failed', key, error: err.message });
-    }
+      emit({ type: 'done', key, status, via, path, attachmentCount });
+    },
+    onIssueFailed: (key, { via, error }) => emit({ type: 'failed', key, via, error }),
+  };
+  try {
+    await exporter.exportIssues(keys, exportOptions);
+  } catch (err) {
+    emit({ type: 'failed', error: err.message });
   }
   emit({ type: 'end' });
   res.end();
 }
 
-const pick = (item) => ({ path: item.path, attachmentCount: item.attachmentCount ?? 0 });
 
 // ---------- library (already exported issues) ----------
 

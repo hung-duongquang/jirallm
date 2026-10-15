@@ -55,7 +55,10 @@ describe('linkLocalIssues', () => {
   it('links an exported bundle relative to the issue folder', () => {
     mkdirSync(join(dir, 'zod-2'));
     writeFileSync(join(dir, 'zod-2', 'task.md'), '# two');
-    const out = linkLocalIssues(`See [ZOD-2](${JIRA}/ZOD-2).`, { outputDir: dir, selfKey: 'ZOD-1' });
+    const out = linkLocalIssues(`See [ZOD-2](${JIRA}/ZOD-2).`, {
+      outputDir: dir,
+      selfKey: 'ZOD-1',
+    });
     expect(out).toBe('See [ZOD-2](../zod-2/task.md).');
   });
 

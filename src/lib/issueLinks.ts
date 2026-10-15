@@ -51,10 +51,13 @@ export function linkLocalIssues(markdown: string, options: LocalIssueLinkOptions
     return target;
   };
 
-  return markdown.replace(/\[([^\]\n]*)\]\((https?:\/\/[^)\s]+)\)/g, (link, text: string, url: string) => {
-    const key = jiraIssueKeyFromUrl(url);
-    if (!key || key === self) return link;
-    const local = resolveLocal(key);
-    return local ? `[${text}](${local})` : link;
-  });
+  return markdown.replace(
+    /\[([^\]\n]*)\]\((https?:\/\/[^)\s]+)\)/g,
+    (link, text: string, url: string) => {
+      const key = jiraIssueKeyFromUrl(url);
+      if (!key || key === self) return link;
+      const local = resolveLocal(key);
+      return local ? `[${text}](${local})` : link;
+    }
+  );
 }

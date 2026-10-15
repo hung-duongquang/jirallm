@@ -8,6 +8,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `export --include-linked` also tries to export the issues each requested issue links to (its
+  issue links plus same-site Jira issue URLs in the description and comments), one level deep, so
+  their links resolve locally. An inaccessible linked issue is skipped with a warning and links to
+  it stay on Jira. In the web UI this is the "Linked issues" option (on by default; "Update all"
+  never follows links).
+- Library hooks `onIssueStart`, `onIssueWritten` (with the replaced content) and `onIssueFailed`
+  on `exportIssues`, which the web UI uses for progress, change detection and diffs of every
+  exported issue, including linked and parent issues.
+
 - Links to other Jira issues point at their local copy when the output folder has one: an
   exported bundle (`../zod-123/task.md`, including issues exported in the same run) or a loose
   `ZOD-123….md` file. Otherwise they stay Jira links, now written as `[ZOD-123](https://…)`

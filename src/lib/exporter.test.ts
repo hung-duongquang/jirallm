@@ -786,3 +786,83 @@ describe('JiraExporter.exportIssues unreachable ancestors', () => {
     warn.mockRestore();
   });
 });
+
+describe('JiraExporter.exportIssues includeLinked', () => {
+  const BROWSE = 'https://example.atlassian.net/browse';
+  const issue = (key: string, extra: Partial<JiraTaskData> = {}): JiraTaskData => ({
+    ...FULL_TASK,
+    key,
+    parent: undefined,
+    attachments: [],
+    history: [],
+    issueLinks: [],
+    ...extra,
+  });
+  const ROOT = issue('PROJ-1', {
+    description: `Depends on [PROJ-3](${BROWSE}/PROJ-3) and [OTHER-1](https://other.atlassian.net/browse/OTHER-1).`,
+    issueLinks: [{ id: '1', type: 'relates to', key: 'PROJ-2', title: 'Two' }],
+  });
+
+  const exporterFor = (issues: Record<string, JiraTaskData>) =>
+    makeExporter(ROOT, {
+      fetchIssueDetails: vi.fn(async (key: string) => {
+        const found = issues[key];
+        if (!found) throw new Error('404 Issue does not exist or you do not have permission');
+        return found;
+      }),
+    });
+
+  it('exports issue links and same-site issue URLs one level deep, linking them locally', async () => {
+    const issues = {
+      'PROJ-1': ROOT,
+      'PROJ-2': issue('PROJ-2', { issueLinks: [{ id: '2', type: 'blocks', key: 'PROJ-9', title: 'Nine' }] }),
+      'PROJ-3': issue('PROJ-3'),
+      'PROJ-9': issue('PROJ-9'),
+    };
+    const exporter = exporterFor(issues);
+    const started: string[] = [];
+    const result = await exporter.exportIssues(['PROJ-1'], {
+      outputDir: tmpDir,
+      includeLinked: true,
+      onIssueStart: (key, { via }) => started.push(via ? `${key}<${via}` : key),
+    });
+
+    expect(started).toEqual(['PROJ-1', 'PROJ-2<PROJ-1', 'PROJ-3<PROJ-1']); // not PROJ-9, not OTHER-1
+    expect(result.imported.map((i) => i.key)).toEqual(['PROJ-1', 'PROJ-2', 'PROJ-3']);
+    const root = readFileSync(join(tmpDir, 'proj-1', 'task.md'), 'utf-8');
+    expect(root).toContain('[PROJ-3](../proj-3/task.md)');
+    expect(root).toContain('[OTHER-1](https://other.atlassian.net/browse/OTHER-1)');
+  });
+
+  it('skips an inaccessible linked issue and points its link back at Jira', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const exporter = exporterFor({ 'PROJ-1': ROOT, 'PROJ-2': issue('PROJ-2') });
+    const failed: string[] = [];
+    const result = await exporter.exportIssues(['PROJ-1'], {
+      outputDir: tmpDir,
+      includeLinked: true,
+      onIssueFailed: (key, { via }) => failed.push(`${key}<${via}`),
+    });
+
+    expect(result.failed).toEqual([]);
+    expect(failed).toEqual(['PROJ-3<PROJ-1']);
+    const root = readFileSync(join(tmpDir, 'proj-1', 'task.md'), 'utf-8');
+    expect(root).toContain(`[PROJ-3](${BROWSE}/PROJ-3)`);
+    expect(existsSync(join(tmpDir, 'proj-2', 'task.md'))).toBe(true);
+    warn.mockRestore();
+  });
+
+  it('does not follow links without the option, and reports previous content', async () => {
+    const exporter = exporterFor({ 'PROJ-1': ROOT });
+    const written: Array<{ key: string; previous: string | null }> = [];
+    const onIssueWritten = ({ key, previous }: { key: string; previous: string | null }) => {
+      written.push({ key, previous });
+    };
+    await exporter.exportIssues(['PROJ-1'], { outputDir: tmpDir, onIssueWritten });
+    await exporter.exportIssues(['PROJ-1'], { outputDir: tmpDir, onIssueWritten });
+
+    expect(written.map((w) => w.key)).toEqual(['PROJ-1', 'PROJ-1']);
+    expect(written[0].previous).toBeNull();
+    expect(written[1].previous).toContain('key: "PROJ-1"');
+  });
+});

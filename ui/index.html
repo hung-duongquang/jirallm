@@ -70,7 +70,7 @@
     max-height: 132px; overflow-y: auto; }
   .progress li { display: flex; gap: 8px; align-items: baseline; }
   .progress .s { font-size: 12px; }
-  .s.ok { color: var(--ok); } .s.err { color: var(--err); } .s.run { color: var(--warn); }
+  .s.ok { color: var(--ok); } .s.err { color: var(--err); } .s.run { color: var(--warn); } .s.skip { color: var(--muted); }
   .library { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .library ul { list-style: none; padding: 0; margin: 8px 0 0; overflow: auto; flex: 1; }
   .library li button { width: 100%; text-align: left; display: grid; grid-template-columns: auto 1fr;
@@ -192,6 +192,7 @@
         <label><input type="checkbox" data-opt="worklog"> Worklog</label>
         <label><input type="checkbox" data-opt="subtasks"> Subtasks</label>
         <label><input type="checkbox" data-opt="parent"> Parent issues</label>
+        <label title="Also export the tickets each ticket links to (one level)"><input type="checkbox" data-opt="linked" checked> Linked issues</label>
         <label><input type="checkbox" data-opt="videoFrames" checked> Video frames</label>
       </div>
 
@@ -337,7 +338,7 @@ const STATUS_TEXT = { new: 'new', changed: 'changed', unchanged: 'unchanged', up
 let exporting = false;
 
 /** Exports `keys` with the current options, streaming progress into the list on the left. */
-async function runExport(keys, { button, busyLabel, idleLabel, openFirst }) {
+async function runExport(keys, { button, busyLabel, idleLabel, openFirst, overrides = {} }) {
   if (exporting) return;
   exporting = true;
   for (const b of [$('export'), $('updateAll')]) b.disabled = true;
@@ -349,11 +350,12 @@ async function runExport(keys, { button, busyLabel, idleLabel, openFirst }) {
     const li = list.querySelector(`[data-k="${key}"]`) || list.appendChild(Object.assign(document.createElement('li'), { innerHTML: `<span class="key">${esc(key)}</span><span class="s"></span>` }));
     li.dataset.k = key; const s = li.querySelector('.s'); s.className = 's ' + cls; s.textContent = text;
   };
-  let lastDone = null, failures = 0;
+  let lastDone = null, failures = 0, skipped = 0;
   const counts = { new: 0, changed: 0, unchanged: 0, updated: 0 };
+  const viaText = (ev) => (ev.via ? ` · via ${ev.via}` : '');
   try {
     const res = await request('/api/export', { method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ keys, outputDir: outDir(), options: options() }) });
+      body: JSON.stringify({ keys, outputDir: outDir(), options: { ...options(), ...overrides } }) });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
     const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
     for (;;) {
@@ -362,11 +364,11 @@ async function runExport(keys, { button, busyLabel, idleLabel, openFirst }) {
       let nl; while ((nl = buf.indexOf('\n')) >= 0) {
         const line = buf.slice(0, nl); buf = buf.slice(nl + 1); if (!line.trim()) continue;
         const ev = JSON.parse(line);
-        if (ev.type === 'progress') setRow(ev.key, 'run', 'exporting…');
+        if (ev.type === 'progress') setRow(ev.key, 'run', 'exporting…' + viaText(ev));
         if (ev.type === 'done') {
           counts[ev.status] = (counts[ev.status] ?? 0) + 1;
           setRow(ev.key, ev.status === 'unchanged' ? '' : 'ok',
-            (STATUS_TEXT[ev.status] ?? ev.status) + (ev.attachmentCount ? ` · ${ev.attachmentCount} attachment(s)` : ''));
+            (STATUS_TEXT[ev.status] ?? ev.status) + viaText(ev) + (ev.attachmentCount ? ` · ${ev.attachmentCount} attachment(s)` : ''));
           if (ev.status === 'changed') {
             const li = list.querySelector(`[data-k="${ev.key}"]`);
             li.classList.add('has-diff'); li.title = 'Show what changed';
@@ -374,10 +376,14 @@ async function runExport(keys, { button, busyLabel, idleLabel, openFirst }) {
           }
           lastDone = lastDone || ev.key;
         }
-        if (ev.type === 'failed') { failures++; setRow(ev.key || 'error', 'err', ev.error); }
+        if (ev.type === 'failed' && ev.via) {
+          // A linked issue is best-effort: no access or deleted is not an export failure.
+          skipped++; setRow(ev.key, 'skip', `skipped${viaText(ev)} · ${ev.error}`);
+        } else if (ev.type === 'failed') { failures++; setRow(ev.key || 'error', 'err', ev.error); }
       }
     }
     const summary = Object.entries(counts).filter(([, n]) => n).map(([s, n]) => `${n} ${s}`);
+    if (skipped) summary.push(`${skipped} linked skipped`);
     if (failures) summary.push(`${failures} failed`);
     toast(summary.join(' · ') || 'Nothing exported');
   } catch (err) { toast(err.message); }
@@ -413,7 +419,9 @@ const visibleLibraryKeys = () => {
 $('updateAll').onclick = () => {
   const keys = visibleLibraryKeys();
   if (!keys.length) { toast('Nothing to update'); return; }
-  runExport(keys, { button: $('updateAll'), busyLabel: `Updating ${keys.length}…`, idleLabel: updateLabel(), openFirst: false });
+  // Refreshes the list as it is; following links here would keep adding new tickets.
+  runExport(keys, { button: $('updateAll'), busyLabel: `Updating ${keys.length}…`, idleLabel: updateLabel(),
+    openFirst: false, overrides: { linked: false } });
 };
 function updateLabel() {
   const n = visibleLibraryKeys().length;

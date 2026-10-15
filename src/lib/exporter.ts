@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { JiraClient, type JiraConfig, type JiraTaskData } from './jiraClient.js';
-import { linkLocalIssues } from './issueLinks.js';
+import { jiraIssueKeyFromUrl, linkLocalIssues } from './issueLinks.js';
 import { extractFrames, isVideoFile } from 'framewise';
 import {
   resolveFieldSet,
@@ -27,6 +27,26 @@ export type ExportOptions = {
   localIssueLinks?: boolean;
   /** Issues exported in the same run (linked locally although not written yet). */
   batchKeys?: string[];
+  /**
+   * Also try to export the issues each requested issue links to (its issue links and Jira
+   * issue URLs in its description/comments), one level deep. An inaccessible linked issue is
+   * skipped and links to it stay pointed at Jira.
+   */
+  includeLinked?: boolean;
+  /** Called before each issue is fetched (`via` names the requested issue that linked it). */
+  onIssueStart?: (key: string, info: { requested: boolean; via?: string }) => void;
+  /** Called after an issue's task.md is final, with the content it replaced (null if new). */
+  onIssueWritten?: (info: {
+    key: string;
+    path: string;
+    previous: string | null;
+    current: string;
+    requested: boolean;
+    via?: string;
+    attachmentCount: number;
+  }) => void | Promise<void>;
+  /** Called when an issue could not be exported. */
+  onIssueFailed?: (key: string, info: { requested: boolean; via?: string; error: string }) => void;
   withWorklog?: boolean;
   videoFrames?: {
     enabled: boolean;
@@ -64,12 +84,44 @@ type ExportIssueOutcome = {
   canonicalKey: string;
   existed: boolean;
   parentKey?: string;
+  /** Issues this one links to on the same Jira site (issue links + issue URLs in its text). */
+  linkedKeys: string[];
+  /** task.md content before this export, or null when it did not exist. */
+  previousContent: string | null;
 };
 
 type QueueEntry = {
   key: string;
   requested: boolean;
+  /** For linked issues: the requested issue that links to it. */
+  via?: string;
 };
+
+/** Issue keys an exported issue refers to on the same Jira site, in order of appearance. */
+function linkedIssueKeys(task: JiraTaskData, baseUrl: string): string[] {
+  const host = (() => {
+    try {
+      return new URL(baseUrl).host.toLowerCase();
+    } catch {
+      return '';
+    }
+  })();
+  const keys = (task.issueLinks ?? []).map((link) => link.key.toUpperCase());
+  const texts = [task.description ?? '', ...task.history.map((entry) => entry.content)];
+  for (const url of texts.join('\n').match(/https?:\/\/[^\s)\]]+/g) ?? []) {
+    const key = jiraIssueKeyFromUrl(url);
+    const sameSite = (() => {
+      try {
+        return new URL(url).host.toLowerCase() === host;
+      } catch {
+        return false;
+      }
+    })();
+    if (key && sameSite) keys.push(key);
+  }
+  const self = task.key.toUpperCase();
+  return [...new Set(keys)].filter((key) => key !== self);
+}
 
 const DEFAULT_VIDEO_OPTS = {
   fps: 5,
@@ -305,12 +357,18 @@ function buildTaskMarkdown(
 
 export class JiraExporter {
   private client: JiraClient;
+  private baseUrl: string;
 
   constructor(config: JiraConfig, apiToken: string) {
     this.client = new JiraClient(config, apiToken);
+    this.baseUrl = config.baseUrl.replace(/\/+$/, '');
   }
 
-  async exportIssue(issueKey: string, options: ExportOptions): Promise<ExportIssueOutcome> {
+  async exportIssue(
+    issueKey: string,
+    options: ExportOptions,
+    context: { expandLinks?: boolean } = {}
+  ): Promise<ExportIssueOutcome> {
     const customFieldDefs = options.customFieldDefs ?? {};
     const resolved = resolveFieldSet(options.fieldSelector, customFieldDefs);
 
@@ -331,7 +389,17 @@ export class JiraExporter {
 
     const selectedKeys = new Set(resolved.friendlyKeys);
     const taskMdPath = join(taskDir, 'task.md');
-    writeFileSync(taskMdPath, buildTaskMarkdown(task, taskDir, selectedKeys, options), 'utf-8');
+    const previousContent = existsSync(taskMdPath) ? readFileSync(taskMdPath, 'utf-8') : null;
+    const linkedKeys = linkedIssueKeys(task, this.baseUrl);
+    // Linked issues about to be exported in this run already count as local copies.
+    const writeOptions = context.expandLinks
+      ? { ...options, batchKeys: [...(options.batchKeys ?? []), ...linkedKeys] }
+      : options;
+    writeFileSync(
+      taskMdPath,
+      buildTaskMarkdown(task, taskDir, selectedKeys, writeOptions),
+      'utf-8'
+    );
 
     const videos: VideoExtractionInfo[] = [];
     if (task.attachments.length > 0) {
@@ -415,6 +483,8 @@ export class JiraExporter {
       canonicalKey: task.key,
       existed,
       parentKey: task.parent?.key,
+      linkedKeys,
+      previousContent,
     };
   }
 
@@ -432,35 +502,80 @@ export class JiraExporter {
 
     const seen = new Set<string>();
     const queue: QueueEntry[] = issueKeys.map((key) => ({ key, requested: true }));
+    // Every issue this run will try to write; links between them are local.
+    const runKeys = new Set(
+      [...issueKeys, ...(options.batchKeys ?? [])].map((k) => k.toUpperCase())
+    );
+    const written: string[] = [];
+    const failedLinked: string[] = [];
 
     for (let i = 0; i < queue.length; i++) {
-      const { key, requested } = queue[i];
+      const { key, requested, via } = queue[i];
       const dedupeKey = key.toLowerCase();
       if (seen.has(dedupeKey)) continue;
       seen.add(dedupeKey);
 
       try {
-        const outcome = await this.exportIssue(key, {
-          ...options,
-          batchKeys: [...issueKeys, ...(options.batchKeys ?? [])],
-        });
+        options.onIssueStart?.(key, { requested, via });
+        const expandLinks = Boolean(options.includeLinked && requested);
+        const outcome = await this.exportIssue(
+          key,
+          { ...options, batchKeys: [...runKeys] },
+          { expandLinks }
+        );
         seen.add(outcome.canonicalKey.toLowerCase());
+        written.push(outcome.taskMdPath);
         (outcome.existed ? result.updated : result.imported).push({
           key,
           path: outcome.taskMdPath,
           attachmentCount: outcome.attachmentCount,
           videos: outcome.videos,
         });
+        await options.onIssueWritten?.({
+          key: outcome.canonicalKey,
+          path: outcome.taskMdPath,
+          previous: outcome.previousContent,
+          current: readFileSync(outcome.taskMdPath, 'utf-8'),
+          requested,
+          via,
+          attachmentCount: outcome.attachmentCount,
+        });
         if (options.includeParent && outcome.parentKey) {
           queue.push({ key: outcome.parentKey, requested: false });
         }
+        if (expandLinks) {
+          for (const linked of outcome.linkedKeys) {
+            runKeys.add(linked);
+            queue.push({ key: linked, requested: false, via: outcome.canonicalKey });
+          }
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        options.onIssueFailed?.(key, { requested, via, error: message });
         if (!requested) {
-          console.warn(`Failed to fetch parent ${key}: ${message}`);
+          const what = via ? `linked issue (from ${via})` : 'parent';
+          console.warn(`Failed to fetch ${what} ${key}: ${message}`);
+          if (via) failedLinked.push(key);
           continue;
         }
         result.failed.push({ key, error: message });
+      }
+    }
+
+    // Linked issues that could not be fetched were already linked locally; point those
+    // links back at Jira unless an earlier export left a local copy.
+    const missing = failedLinked.filter(
+      (key) => !existsSync(join(options.outputDir, key.toLowerCase(), 'task.md'))
+    );
+    if (missing.length > 0) {
+      for (const path of written) {
+        const content = readFileSync(path, 'utf-8');
+        let next = content;
+        for (const key of missing) {
+          const local = `](../${key.toLowerCase()}/task.md)`;
+          next = next.split(local).join(`](${this.baseUrl}/browse/${key})`);
+        }
+        if (next !== content) writeFileSync(path, next, 'utf-8');
       }
     }
 
