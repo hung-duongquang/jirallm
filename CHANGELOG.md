@@ -18,6 +18,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Emoji, mentions, status lozenges and dates are no longer dropped. They were silently omitted, so
+  for example a ✅ permission matrix exported as all-empty cells. Emoji render as their character
+  (or `:short_name:`), mentions as `@Name`, statuses as `**[STATUS]**`, dates as `YYYY-MM-DD`.
+- Task checkboxes inside a table cell render as ☐ / ☑; `- [ ]` only renders inside lists.
 - Jira hard line breaks render as Markdown hard breaks (two trailing spaces) instead of a bare
   newline that is joined into the same line when rendered.
 - A top-level list is followed by a blank line, so the next paragraph no longer renders inside the

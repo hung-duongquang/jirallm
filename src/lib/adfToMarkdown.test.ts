@@ -295,6 +295,85 @@ describe('convertADFToMarkdown marks', () => {
   });
 });
 
+describe('convertADFToMarkdown inline atoms', () => {
+  const atom = (type: string, attrs: Record<string, unknown>) => ({ type, attrs });
+
+  it('renders an emoji by its character, falling back to its short name', () => {
+    const out = convertADFToMarkdown(
+      doc(
+        paragraph(
+          atom('emoji', { shortName: ':white_check_mark:', text: '✅' }),
+          text(' and '),
+          atom('emoji', { shortName: ':custom:' })
+        )
+      )
+    );
+    expect(out).toBe('✅ and :custom:\n');
+  });
+
+  it('keeps emoji in table cells, e.g. a permission matrix', () => {
+    const cell = (...content: unknown[]) => ({ type: 'tableCell', content });
+    const out = convertADFToMarkdown(
+      doc({
+        type: 'table',
+        content: [
+          {
+            type: 'tableRow',
+            content: [cell(paragraph(text('Role'))), cell(paragraph(text('Admin')))],
+          },
+          {
+            type: 'tableRow',
+            content: [
+              cell(paragraph(text('View'))),
+              cell(paragraph(atom('emoji', { shortName: ':white_check_mark:', text: '✅' }))),
+            ],
+          },
+        ],
+      })
+    );
+    expect(out).toBe('| Role | Admin |\n| --- | --- |\n| View | ✅ |\n');
+  });
+
+  it('renders mentions, status lozenges and dates', () => {
+    const out = convertADFToMarkdown(
+      doc(
+        paragraph(
+          atom('mention', { id: 'abc', text: '@Jane Doe' }),
+          text(' '),
+          atom('status', { text: 'IN PROGRESS', color: 'blue' }),
+          text(' '),
+          atom('date', { timestamp: '1767225600000' })
+        )
+      )
+    );
+    expect(out).toBe('@Jane Doe **[IN PROGRESS]** 2026-01-01\n');
+  });
+
+  it('renders task items inside a table cell as ☐ / ☑', () => {
+    const cell = (...content: unknown[]) => ({ type: 'tableCell', content });
+    const task = (state: string, value: string) => ({
+      type: 'taskItem',
+      attrs: { state },
+      content: [text(value)],
+    });
+    const out = convertADFToMarkdown(
+      doc({
+        type: 'table',
+        content: [
+          { type: 'tableRow', content: [cell(paragraph(text('Permission')))] },
+          {
+            type: 'tableRow',
+            content: [
+              cell({ type: 'taskList', content: [task('TODO', 'View'), task('DONE', 'Edit')] }),
+            ],
+          },
+        ],
+      })
+    );
+    expect(out).toBe('| Permission |\n| --- |\n| ☐ View<br/>☑ Edit |\n');
+  });
+});
+
 describe('convertADFToMarkdown nested lists and table spacing', () => {
   const listItem = (...content: unknown[]) => ({ type: 'listItem', content });
   const nested = {

@@ -17,6 +17,9 @@ export type JiraADFContent = {
     state?: string;
     title?: string;
     colspan?: number;
+    text?: string;
+    shortName?: string;
+    timestamp?: string | number;
   };
 };
 
@@ -152,6 +155,19 @@ export function convertADFToMarkdown(
 
     if (node.text) return applyMarks(node.text, node.marks);
 
+    // Inline atoms carry their content in attrs; dropping them can invert a table's meaning
+    // (e.g. a ✅ permission matrix rendering as all-empty cells).
+    if (node.type === 'emoji') return node.attrs?.text || node.attrs?.shortName || '';
+    if (node.type === 'mention') {
+      const name = node.attrs?.text ?? '';
+      return name && !name.startsWith('@') ? `@${name}` : name;
+    }
+    if (node.type === 'status') return node.attrs?.text ? `**[${node.attrs.text}]**` : '';
+    if (node.type === 'date') {
+      const ms = Number(node.attrs?.timestamp ?? NaN);
+      return Number.isFinite(ms) ? new Date(ms).toISOString().slice(0, 10) : '';
+    }
+
     if (node.type === 'heading' && children) {
       const level = node.attrs?.level ?? 1;
       const childContent = children.map((child) => extractText(child)).join('');
@@ -223,7 +239,17 @@ export function convertADFToMarkdown(
       if (rows.length === 0) return '';
 
       // Headings are not valid inside a Markdown table cell, so they render as bold text.
+      // Task checkboxes (`- [ ]`) only render in lists, so a cell uses ☐ / ☑ instead.
       const renderCellBlock = (child: JiraADFContent) => {
+        if (child.type === 'taskList') {
+          return (childNodesOf(child) ?? [])
+            .map((item) => {
+              const box = item.attrs?.state === 'DONE' ? '☑' : '☐';
+              const content = (childNodesOf(item) ?? []).map((c) => extractText(c)).join('');
+              return `${box} ${content}`;
+            })
+            .join('\n');
+        }
         if (child.type !== 'heading') return extractText(child);
         const heading = (childNodesOf(child) ?? []).map((c) => extractText(c)).join('');
         return /^\*\*.*\*\*$/.test(heading) ? heading : applyMarks(heading, [{ type: 'strong' }]);
