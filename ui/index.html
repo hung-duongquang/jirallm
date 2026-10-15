@@ -204,7 +204,7 @@
       <div class="row">
         <h2 class="card-title" style="margin:0;flex:1">Exported</h2>
         <button id="refresh" title="Reload the list from the folder">Reload</button>
-        <button id="updateAll" title="Re-export these tickets from Jira with the options above">Update all</button>
+        <button id="updateAll" title="Re-export these tickets from Jira with the options above (with Linked issues on, also the tickets they mention)">Update all</button>
       </div>
       <input type="text" id="filter" placeholder="Filter by key or title" style="margin-top:8px">
       <ul id="library"></ul>
@@ -338,7 +338,7 @@ const STATUS_TEXT = { new: 'new', changed: 'changed', unchanged: 'unchanged', up
 let exporting = false;
 
 /** Exports `keys` with the current options, streaming progress into the list on the left. */
-async function runExport(keys, { button, busyLabel, idleLabel, openFirst, overrides = {} }) {
+async function runExport(keys, { button, busyLabel, idleLabel, openFirst }) {
   if (exporting) return;
   exporting = true;
   for (const b of [$('export'), $('updateAll')]) b.disabled = true;
@@ -355,7 +355,7 @@ async function runExport(keys, { button, busyLabel, idleLabel, openFirst, overri
   const viaText = (ev) => (ev.via ? ` · via ${ev.via}` : '');
   try {
     const res = await request('/api/export', { method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ keys, outputDir: outDir(), options: { ...options(), ...overrides } }) });
+      body: JSON.stringify({ keys, outputDir: outDir(), options: options() }) });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
     const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
     for (;;) {
@@ -419,9 +419,10 @@ const visibleLibraryKeys = () => {
 $('updateAll').onclick = () => {
   const keys = visibleLibraryKeys();
   if (!keys.length) { toast('Nothing to update'); return; }
-  // Refreshes the list as it is; following links here would keep adding new tickets.
+  // Uses the options above, so with "Linked issues" on it also fetches tickets the listed
+  // ones mention (one level) and adds them to the list.
   runExport(keys, { button: $('updateAll'), busyLabel: `Updating ${keys.length}…`, idleLabel: updateLabel(),
-    openFirst: false, overrides: { linked: false } });
+    openFirst: false });
 };
 function updateLabel() {
   const n = visibleLibraryKeys().length;

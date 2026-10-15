@@ -11,8 +11,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `export --include-linked` also tries to export the issues each requested issue links to (its
   issue links plus same-site Jira issue URLs in the description and comments), one level deep, so
   their links resolve locally. An inaccessible linked issue is skipped with a warning and links to
-  it stay on Jira. In the web UI this is the "Linked issues" option (on by default; "Update all"
-  never follows links).
+  it stay on Jira. In the web UI this is the "Linked issues" option (on by default), which
+  "Update all" also follows, adding newly mentioned tickets to the list.
 - Library hooks `onIssueStart`, `onIssueWritten` (with the replaced content) and `onIssueFailed`
   on `exportIssues`, which the web UI uses for progress, change detection and diffs of every
   exported issue, including linked and parent issues.
