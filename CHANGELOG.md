@@ -8,6 +8,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Links to other Jira issues point at their local copy when the output folder has one: an
+  exported bundle (`../zod-123/task.md`, including issues exported in the same run) or a loose
+  `ZOD-123….md` file. Otherwise they stay Jira links, now written as `[ZOD-123](https://…)`
+  instead of the full URL as link text. `export --no-local-links` keeps every link on Jira.
+
 - `export --no-status-changes` and `--no-comments` leave status/field changes or comments out of
   `task.md` (library: `withStatusChanges` / `withComments`, both default `true`). With status
   changes left out, the remaining comments are written under `## Comments` instead of `## History`.
