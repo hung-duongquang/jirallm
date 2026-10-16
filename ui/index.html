@@ -51,6 +51,7 @@
   button:hover { border-color: var(--muted); }
   button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
   button:disabled { opacity: .55; cursor: default; }
+  button.cancel { background: var(--surface-2); color: var(--err); border-color: var(--err); font-weight: 600; }
   .row { display: flex; gap: 8px; align-items: center; }
   .tabs { display: flex; gap: 4px; margin-bottom: 10px; }
   .tabs button { background: none; border-color: transparent; color: var(--muted); padding: 4px 10px; }
@@ -336,11 +337,23 @@ $('useStack').onclick = () => {
 // ---- export ----
 const STATUS_TEXT = { new: 'new', changed: 'changed', unchanged: 'unchanged', updated: 'updated' };
 let exporting = false;
+let exportRun = null; // { runId, button } of the export in progress, for Cancel
+
+/** Asks the helper to stop the running export after the ticket in progress. */
+async function cancelExport() {
+  if (!exportRun?.runId || exportRun.cancelling) return;
+  exportRun.cancelling = true;
+  exportRun.button.disabled = true;
+  exportRun.button.textContent = 'Cancelling…';
+  try { await api('/api/export/cancel', { runId: exportRun.runId }); }
+  catch (err) { toast(err.message); }
+}
 
 /** Exports `keys` with the current options, streaming progress into the list on the left. */
 async function runExport(keys, { button, busyLabel, idleLabel, openFirst }) {
   if (exporting) return;
   exporting = true;
+  exportRun = { runId: null, button, cancelling: false };
   for (const b of [$('export'), $('updateAll')]) b.disabled = true;
   button.textContent = busyLabel;
   const list = $('progress');
@@ -350,8 +363,12 @@ async function runExport(keys, { button, busyLabel, idleLabel, openFirst }) {
     const li = list.querySelector(`[data-k="${key}"]`) || list.appendChild(Object.assign(document.createElement('li'), { innerHTML: `<span class="key">${esc(key)}</span><span class="s"></span>` }));
     li.dataset.k = key; const s = li.querySelector('.s'); s.className = 's ' + cls; s.textContent = text;
   };
-  let lastDone = null, failures = 0, skipped = 0;
+  let lastDone = null, failures = 0, skipped = 0, cancelled = 0, finished = 0;
   const counts = { new: 0, changed: 0, unchanged: 0, updated: 0 };
+  const queued = new Set(keys); // grows with linked and parent tickets the run adds
+  const showCount = () => {
+    if (exportRun.runId && !exportRun.cancelling) button.textContent = `Cancel (${finished}/${queued.size})`;
+  };
   const viaText = (ev) => (ev.via ? ` · via ${ev.via}` : '');
   try {
     const res = await request('/api/export', { method: 'POST', headers: { 'content-type': 'application/json' },
@@ -364,7 +381,19 @@ async function runExport(keys, { button, busyLabel, idleLabel, openFirst }) {
       let nl; while ((nl = buf.indexOf('\n')) >= 0) {
         const line = buf.slice(0, nl); buf = buf.slice(nl + 1); if (!line.trim()) continue;
         const ev = JSON.parse(line);
-        if (ev.type === 'progress') setRow(ev.key, 'run', 'exporting…' + viaText(ev));
+        if (ev.type === 'start' && ev.runId) {
+          // An older helper sends no run id and cannot cancel; keep the button disabled then.
+          exportRun.runId = ev.runId;
+          button.disabled = false; button.classList.add('cancel');
+          button.title = 'Stop after the ticket in progress';
+          showCount();
+        }
+        if (ev.type === 'progress') { queued.add(ev.key); setRow(ev.key, 'run', 'exporting…' + viaText(ev)); showCount(); }
+        if (ev.type === 'done' || (ev.type === 'failed' && ev.key)) { finished++; showCount(); }
+        if (ev.type === 'cancelled') {
+          cancelled = ev.keys.length;
+          for (const k of ev.keys) setRow(k, 'skip', 'cancelled');
+        }
         if (ev.type === 'done') {
           counts[ev.status] = (counts[ev.status] ?? 0) + 1;
           setRow(ev.key, ev.status === 'unchanged' ? '' : 'ok',
@@ -386,12 +415,16 @@ async function runExport(keys, { button, busyLabel, idleLabel, openFirst }) {
     const summary = Object.entries(counts).filter(([, n]) => n).map(([s, n]) => `${n} ${s}`);
     if (skipped) summary.push(`${skipped} linked skipped`);
     if (failures) summary.push(`${failures} failed`);
+    if (cancelled) summary.push(`${cancelled} cancelled`);
     toast(summary.join(' · ') || 'Nothing exported');
   } catch (err) { toast(err.message); }
   finally {
     exporting = false;
+    exportRun = null;
     for (const b of [$('export'), $('updateAll')]) b.disabled = false;
     button.textContent = idleLabel;
+    button.title = '';
+    button.classList.remove('cancel');
     renderLibrary();
   }
   await loadLibrary();
@@ -405,6 +438,7 @@ $('progress').onclick = (e) => {
 };
 
 $('export').onclick = () => {
+  if (exporting) { cancelExport(); return; }
   const keys = parseKeys($('keys').value);
   if (!keys.length) { selectTab(false); $('keys').focus(); toast('Enter at least one ticket key'); return; }
   runExport(keys, { button: $('export'), busyLabel: `Exporting ${keys.length}…`, idleLabel: 'Export', openFirst: true });
@@ -418,6 +452,7 @@ const visibleLibraryKeys = () => {
     .map((it) => it.key);
 };
 $('updateAll').onclick = () => {
+  if (exporting) { cancelExport(); return; }
   const keys = visibleLibraryKeys();
   if (!keys.length) { toast('Nothing to update'); return; }
   // Uses the options above, so with "Linked issues" on it also fetches tickets the listed

@@ -10,6 +10,7 @@
 //   node ui/server.mjs (same options)
 
 import { createServer } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
@@ -29,6 +30,8 @@ const execFileAsync = promisify(execFile);
 
 /** Hosted copies of this page that may call the local server (besides the server itself). */
 export const DEFAULT_ALLOWED_ORIGINS = ['https://hung-duongquang.github.io'];
+/** The published copy of the page (gh-pages branch). */
+const HOSTED_PAGE = 'https://hung-duongquang.github.io/jirallm/';
 
 // Set by startUiServer().
 const args = { repo: '', org: undefined };
@@ -162,6 +165,9 @@ async function resolveStack(prNumber, repo) {
 
 // ---------- export ----------
 
+/** Running exports by id, so the page can stop one (POST /api/export/cancel). */
+const runningExports = new Map();
+
 async function exportIssues(body, res) {
   const keys = [...new Set((body.keys ?? []).map((k) => String(k).trim().toUpperCase()))].filter(
     (k) => ISSUE_KEY_STRICT.test(k)
@@ -179,8 +185,18 @@ async function exportIssues(body, res) {
 
   // Stream one NDJSON line per issue so the page can show progress.
   res.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8' });
-  const emit = (event) => res.write(JSON.stringify(event) + '\n');
-  emit({ type: 'start', total: keys.length, outputDir });
+  const emit = (event) => {
+    if (!res.destroyed) res.write(JSON.stringify(event) + '\n');
+  };
+  // Cancelling (from the page, or by dropping the request) finishes the issue in progress
+  // and stops there; the stream still ends normally so the page sees the final state.
+  const cancel = new AbortController();
+  const runId = randomUUID();
+  runningExports.set(runId, cancel);
+  res.on('close', () => {
+    if (!res.writableEnded) cancel.abort();
+  });
+  emit({ type: 'start', total: keys.length, outputDir, runId });
 
   const exportOptions = {
     outputDir,
@@ -211,11 +227,15 @@ async function exportIssues(body, res) {
       emit({ type: 'done', key, status, via, path, attachmentCount });
     },
     onIssueFailed: (key, { via, error }) => emit({ type: 'failed', key, via, error }),
+    signal: cancel.signal,
   };
   try {
-    await exporter.exportIssues(keys, exportOptions);
+    const result = await exporter.exportIssues(keys, exportOptions);
+    if (result.cancelled.length > 0) emit({ type: 'cancelled', keys: result.cancelled });
   } catch (err) {
     emit({ type: 'failed', error: err.message });
+  } finally {
+    runningExports.delete(runId);
   }
   emit({ type: 'end' });
   res.end();
@@ -334,6 +354,13 @@ async function handle(req, res) {
         await exportIssues(await readJsonBody(req), res);
         return;
       }
+      case 'POST /api/export/cancel': {
+        const run = runningExports.get(String((await readJsonBody(req)).runId ?? ''));
+        if (!run) throw new HttpError(404, 'That export is no longer running');
+        run.abort();
+        sendJson(res, 200, { ok: true });
+        return;
+      }
       case 'GET /api/library': {
         sendJson(res, 200, await listLibrary(resolveOutputDir(url.searchParams.get('dir'))));
         return;
@@ -408,9 +435,12 @@ export function startUiServer(options = {}) {
     });
     server.listen(port, '127.0.0.1', () => {
       const address = `http://127.0.0.1:${port}`;
-      console.log(`jirallm UI running at ${address}`);
-      for (const origin of DEFAULT_ALLOWED_ORIGINS) console.log(`Also reachable from ${origin}`);
-      console.log(`Exporting to ${defaultOutputDir} (change it in the page). Ctrl+C to stop.`);
+      const hosted = new URL(HOSTED_PAGE);
+      if (port !== 4321) hosted.searchParams.set('port', String(port));
+      if (args.repo) hosted.searchParams.set('repo', args.repo);
+      console.log(`jirallm helper listening on ${address}. Keep this open; Ctrl+C to stop.`);
+      console.log(`Open the UI at ${hosted} (or the local copy at ${address})`);
+      console.log(`Exporting to ${defaultOutputDir} (change it in the page).`);
       if (options.open) openInExplorer(address);
       resolveStart(server);
     });

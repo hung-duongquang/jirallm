@@ -16,6 +16,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Library hooks `onIssueStart`, `onIssueWritten` (with the replaced content) and `onIssueFailed`
   on `exportIssues`, which the web UI uses for progress, change detection and diffs of every
   exported issue, including linked and parent issues.
+- `exportIssues` takes a `signal` (`AbortSignal`): once aborted it finishes the issue in progress
+  and skips the rest (listed in `result.cancelled`), pointing links to them back at Jira. In the
+  web UI the Export / "Update all" button turns into Cancel while a run is in progress.
 
 - Links to other Jira issues point at their local copy when the output folder has one: an
   exported bundle (`../zod-123/task.md`, including issues exported in the same run) or a loose

@@ -47,6 +47,11 @@ export type ExportOptions = {
   }) => void | Promise<void>;
   /** Called when an issue could not be exported. */
   onIssueFailed?: (key: string, info: { requested: boolean; via?: string; error: string }) => void;
+  /**
+   * Stops the run before the next issue once aborted; the issue in progress is finished.
+   * Links to issues that were not reached point back at Jira unless a local copy exists.
+   */
+  signal?: AbortSignal;
   withWorklog?: boolean;
   videoFrames?: {
     enabled: boolean;
@@ -74,6 +79,8 @@ export type ExportResult = {
   imported: ExportedItem[];
   updated: ExportedItem[];
   failed: Array<{ key: string; error: string }>;
+  /** Issues not reached because `signal` was aborted. */
+  cancelled: string[];
 };
 
 type ExportIssueOutcome = {
@@ -489,7 +496,7 @@ export class JiraExporter {
   }
 
   async exportIssues(issueKeys: string[], options: ExportOptions): Promise<ExportResult> {
-    const result: ExportResult = { imported: [], updated: [], failed: [] };
+    const result: ExportResult = { imported: [], updated: [], failed: [], cancelled: [] };
 
     if (!existsSync(options.outputDir)) {
       mkdirSync(options.outputDir, { recursive: true });
@@ -514,6 +521,10 @@ export class JiraExporter {
       const dedupeKey = key.toLowerCase();
       if (seen.has(dedupeKey)) continue;
       seen.add(dedupeKey);
+      if (options.signal?.aborted) {
+        result.cancelled.push(key);
+        continue;
+      }
 
       try {
         options.onIssueStart?.(key, { requested, via });
@@ -562,9 +573,9 @@ export class JiraExporter {
       }
     }
 
-    // Linked issues that could not be fetched were already linked locally; point those
-    // links back at Jira unless an earlier export left a local copy.
-    const missing = failedLinked.filter(
+    // Linked issues that could not be fetched (or were cancelled) were already linked locally;
+    // point those links back at Jira unless an earlier export left a local copy.
+    const missing = [...failedLinked, ...result.cancelled].filter(
       (key) => !existsSync(join(options.outputDir, key.toLowerCase(), 'task.md'))
     );
     if (missing.length > 0) {

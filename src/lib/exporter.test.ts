@@ -852,6 +852,32 @@ describe('JiraExporter.exportIssues includeLinked', () => {
     warn.mockRestore();
   });
 
+  it('stops at the next issue when aborted and points links to unreached issues at Jira', async () => {
+    const exporter = exporterFor({
+      'PROJ-1': ROOT,
+      'PROJ-2': issue('PROJ-2'),
+      'PROJ-3': issue('PROJ-3'),
+    });
+    const controller = new AbortController();
+    const started: string[] = [];
+    const result = await exporter.exportIssues(['PROJ-1'], {
+      outputDir: tmpDir,
+      includeLinked: true,
+      signal: controller.signal,
+      onIssueStart: (key) => started.push(key),
+      onIssueWritten: ({ key }) => {
+        if (key === 'PROJ-2') controller.abort();
+      },
+    });
+
+    expect(started).toEqual(['PROJ-1', 'PROJ-2']);
+    expect(result.imported.map((i) => i.key)).toEqual(['PROJ-1', 'PROJ-2']);
+    expect(result.cancelled).toEqual(['PROJ-3']);
+    expect(existsSync(join(tmpDir, 'proj-3', 'task.md'))).toBe(false);
+    const root = readFileSync(join(tmpDir, 'proj-1', 'task.md'), 'utf-8');
+    expect(root).toContain(`[PROJ-3](${BROWSE}/PROJ-3)`);
+  });
+
   it('does not follow links without the option, and reports previous content', async () => {
     const exporter = exporterFor({ 'PROJ-1': ROOT });
     const written: Array<{ key: string; previous: string | null }> = [];
