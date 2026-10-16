@@ -1,0 +1,694 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jirallm</title>
+<link rel="icon" href="data:,">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+<style>
+  :root {
+    --bg: #f6f7f9; --surface: #ffffff; --surface-2: #f0f2f5; --border: #dfe3e8;
+    --text: #1d2330; --muted: #5d6676; --accent: #2f5bd3; --accent-text: #ffffff;
+    --ok: #1f7a4d; --warn: #9a6200; --err: #b42318; --code-bg: #f3f4f6;
+    --add-bg: #e6ffec; --add-word: #abf2bc; --del-bg: #ffebe9; --del-word: #ffc1c0; --hunk-bg: #ddf4ff;
+    --radius: 8px; --shadow: 0 1px 2px rgb(16 24 40 / 6%);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12151b; --surface: #1a1e26; --surface-2: #222833; --border: #2e3542;
+      --text: #e6e9ef; --muted: #98a2b3; --accent: #7aa2ff; --accent-text: #0d1220;
+      --ok: #4cc38a; --warn: #f0b545; --err: #ff7b72; --code-bg: #232a35;
+      --add-bg: #12261e; --add-word: #1f6f43; --del-bg: #2d1517; --del-word: #8b2c2e; --hunk-bg: #121d2f;
+      --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    padding: 12px 20px; border-bottom: 1px solid var(--border); background: var(--surface); }
+  header h1 { font-size: 16px; margin: 0; letter-spacing: .2px; }
+  .conn { color: var(--muted); font-size: 13px; }
+  .conn.err { color: var(--err); }
+  .outdir { margin-left: auto; display: flex; gap: 6px; align-items: center; min-width: 280px; flex: 0 1 520px; }
+  .outdir label { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  main { display: grid; grid-template-columns: minmax(320px, 400px) 1fr; gap: 16px; padding: 16px 20px;
+    height: calc(100vh - 58px); }
+  .col { display: flex; flex-direction: column; gap: 16px; min-height: 0; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 14px; }
+  .card-title { font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted);
+    margin: 0 0 10px; font-weight: 600; }
+  input[type=text], textarea { width: 100%; font: inherit; color: var(--text); background: var(--surface-2);
+    border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; }
+  textarea { resize: vertical; min-height: 64px; font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+  input:focus, textarea:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  button { font: inherit; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-2);
+    color: var(--text); padding: 6px 12px; cursor: pointer; white-space: nowrap; }
+  button:hover { border-color: var(--muted); }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+  button:disabled { opacity: .55; cursor: default; }
+  button.cancel { background: var(--surface-2); color: var(--err); border-color: var(--err); font-weight: 600; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 10px; }
+  .tabs button { background: none; border-color: transparent; color: var(--muted); padding: 4px 10px; }
+  .tabs button[aria-selected=true] { background: var(--surface-2); border-color: var(--border); color: var(--text); }
+  .hint { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+  .opts { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; margin: 12px 0; }
+  .opts label { display: flex; gap: 6px; align-items: center; font-size: 13px; }
+  .opts label.disabled { color: var(--muted); }
+  .stack { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+  .stack li label { display: grid; grid-template-columns: auto auto 1fr; gap: 8px; align-items: baseline;
+    padding: 4px 6px; border-radius: 4px; font-size: 13px; }
+  .stack li label:hover { background: var(--surface-2); }
+  .stack .pr { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .stack .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+  .key { font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; font-weight: 600; }
+  .progress { list-style: none; padding: 0; margin: 10px 0 0; display: flex; flex-direction: column; gap: 2px; font-size: 13px;
+    max-height: 132px; overflow-y: auto; }
+  .progress li { display: flex; gap: 8px; align-items: baseline; }
+  .progress .s { font-size: 12px; }
+  .s.ok { color: var(--ok); } .s.err { color: var(--err); } .s.run { color: var(--warn); } .s.skip { color: var(--muted); }
+  .library { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .library ul { list-style: none; padding: 0; margin: 8px 0 0; overflow: auto; flex: 1; }
+  .library li button { width: 100%; text-align: left; display: grid; grid-template-columns: auto 1fr;
+    gap: 2px 10px; background: none; border-color: transparent; padding: 6px 8px; }
+  .library li button:hover, .library li button[aria-current=true] { background: var(--surface-2); border-color: var(--border); }
+  .library .title { grid-column: 1 / -1; color: var(--muted); font-size: 12.5px; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .library .meta { color: var(--muted); font-size: 12px; text-align: right; }
+  .preview { min-height: 0; display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+  .preview-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 12px 16px;
+    border-bottom: 1px solid var(--border); }
+  .preview-head .ptitle { font-weight: 600; flex: 1; min-width: 200px; }
+  .preview-body { overflow: auto; padding: 8px 24px 32px; flex: 1; }
+  .empty { color: var(--muted); padding: 40px 24px; text-align: center; }
+  .fm { display: grid; grid-template-columns: max-content 1fr; gap: 2px 14px; font-size: 13px;
+    background: var(--surface-2); border-radius: 6px; padding: 10px 14px; margin: 12px 0; }
+  .fm dt { color: var(--muted); } .fm dd { margin: 0; overflow-wrap: anywhere; }
+  .fm .link { display: block; }
+  .fm .link .type { color: var(--muted); }
+  .fm a { color: var(--accent); cursor: pointer; }
+  .md h1 { font-size: 22px; } .md h2 { font-size: 18px; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+  .md h3 { font-size: 15px; }
+  .md table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 13px; display: block; overflow-x: auto; }
+  .md th, .md td { border: 1px solid var(--border); padding: 6px 9px; vertical-align: top; text-align: left; }
+  .md th { background: var(--surface-2); }
+  .md code { background: var(--code-bg); padding: 1px 4px; border-radius: 4px; font-size: 12.5px; }
+  .md pre { background: var(--code-bg); padding: 10px; border-radius: 6px; overflow: auto; }
+  .md pre code { background: none; padding: 0; }
+  .md a { color: var(--accent); }
+  .md img { max-width: 100%; }
+  .source { white-space: pre-wrap; font: 12.5px/1.5 ui-monospace, Consolas, monospace; margin: 12px 0; }
+  .toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--text);
+    color: var(--bg); padding: 8px 14px; border-radius: 6px; font-size: 13px; opacity: 0; transition: opacity .2s;
+    pointer-events: none; }
+  .toast.show { opacity: 1; }
+  .error { color: var(--err); font-size: 13px; margin: 8px 0 0; }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; background: none; color: var(--muted); }
+  .seg button + button { border-left: 1px solid var(--border); }
+  .seg button[aria-pressed=true] { background: var(--surface-2); color: var(--text); font-weight: 600; }
+  .plus { color: var(--ok); font-weight: 600; } .minus { color: var(--err); font-weight: 600; }
+  .changed { color: var(--accent); font-weight: 600; }
+  .progress li.has-diff { cursor: pointer; border-radius: 4px; }
+  .progress li.has-diff:hover { background: var(--surface-2); }
+  .progress li.has-diff .s { text-decoration: underline; text-underline-offset: 2px; }
+  .diff-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; margin: 14px 0 10px; font-size: 13px; }
+  .diff { width: 100%; border-collapse: collapse; font: 12.5px/1.55 ui-monospace, Consolas, monospace;
+    border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .diff td { padding: 0 8px; vertical-align: top; }
+  .diff td.no { width: 1%; min-width: 40px; text-align: right; color: var(--muted); user-select: none;
+    border-right: 1px solid var(--border); }
+  .diff td.code { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .diff .sign { display: inline-block; width: 1.2em; color: var(--muted); user-select: none; }
+  .diff tr.add td { background: var(--add-bg); } .diff tr.add mark { background: var(--add-word); color: inherit; border-radius: 2px; }
+  .diff tr.del td { background: var(--del-bg); } .diff tr.del mark { background: var(--del-word); color: inherit; border-radius: 2px; }
+  .diff tr.hunk td { background: var(--hunk-bg); color: var(--muted); padding-top: 2px; padding-bottom: 2px; }
+  .setup { max-width: 680px; margin: 8px auto; }
+  .setup h2 { font-size: 18px; margin: 16px 0 4px; }
+  .setup .problem { color: var(--err); margin: 0 0 12px; }
+  .setup ol { padding-left: 20px; display: flex; flex-direction: column; gap: 14px; }
+  .setup li.done { color: var(--muted); }
+  .setup code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
+  .setup a { color: var(--accent); }
+  .cmd { display: flex; gap: 8px; align-items: center; margin-top: 6px; background: var(--code-bg);
+    border: 1px solid var(--border); border-radius: 6px; padding: 6px 6px 6px 10px; }
+  .cmd code { flex: 1; background: none; padding: 0; overflow-x: auto; white-space: nowrap; }
+  .cmd button { padding: 3px 10px; font-size: 12px; }
+  @media (max-width: 860px) {
+    main { grid-template-columns: 1fr; height: auto; padding: 16px; }
+    header { padding: 12px 16px; }
+    .outdir { margin-left: 0; flex: 1 1 100%; min-width: 0; }
+    .library ul { max-height: 320px; }
+    .preview { min-height: 60vh; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>jirallm</h1>
+  <span class="conn" id="conn">Connecting…</span>
+  <div class="outdir">
+    <label for="outdir">Output folder</label>
+    <input type="text" id="outdir" spellcheck="false">
+    <button id="openRoot" title="Open the output folder">Open</button>
+  </div>
+</header>
+
+<main>
+  <div class="col">
+    <section class="card">
+      <div class="tabs" role="tablist">
+        <button role="tab" id="tabKeys" aria-selected="true">Tickets</button>
+        <button role="tab" id="tabStack" aria-selected="false">PR stack</button>
+      </div>
+
+      <div id="paneStack" hidden>
+        <div class="row">
+          <input type="text" id="repo" placeholder="owner/repo" spellcheck="false" style="flex:1.4">
+          <input type="text" id="pr" placeholder="PR #" style="flex:.6" inputmode="numeric">
+          <button id="resolve">Find</button>
+        </div>
+        <p class="hint">Any PR in the stack works; the whole stack is found from "Stacked on" lines.</p>
+        <ul class="stack" id="stackList"></ul>
+        <div class="row" id="stackActions" hidden style="margin-top:8px">
+          <button id="useStack">Use selected tickets</button>
+        </div>
+        <p class="error" id="stackError" hidden></p>
+      </div>
+
+      <div id="paneKeys">
+        <textarea id="keys" placeholder="ZOD-3619 ZOD-3602&#10;or paste Jira links" spellcheck="false"></textarea>
+        <p class="hint" id="keyCount">Separate keys with spaces, commas or new lines.</p>
+      </div>
+
+      <div class="opts" id="opts">
+        <label><input type="checkbox" data-opt="comments" checked> Comments</label>
+        <label><input type="checkbox" data-opt="statusChanges"> Status changes</label>
+        <label id="fieldChangesLabel"><input type="checkbox" data-opt="fieldChanges"> Field changes</label>
+        <label><input type="checkbox" data-opt="worklog"> Worklog</label>
+        <label><input type="checkbox" data-opt="subtasks"> Subtasks</label>
+        <label><input type="checkbox" data-opt="parent"> Parent issues</label>
+        <label title="Also export the tickets each ticket links to (one level)"><input type="checkbox" data-opt="linked" checked> Linked issues</label>
+        <label title="Also export the Confluence pages each ticket links to (one level)"><input type="checkbox" data-opt="confluence" checked> Confluence pages</label>
+        <label><input type="checkbox" data-opt="videoFrames" checked> Video frames</label>
+      </div>
+
+      <button class="primary" id="export" style="width:100%">Export</button>
+      <ul class="progress" id="progress"></ul>
+    </section>
+
+    <section class="card library">
+      <div class="row">
+        <h2 class="card-title" style="margin:0;flex:1">Exported</h2>
+        <button id="refresh" title="Reload the list from the folder">Reload</button>
+        <button id="updateAll" title="Re-export these tickets from Jira with the options above (with Linked issues on, also the tickets they mention)">Update all</button>
+      </div>
+      <input type="text" id="filter" placeholder="Filter by key or title" style="margin-top:8px">
+      <ul id="library"></ul>
+    </section>
+  </div>
+
+  <section class="card preview">
+    <div class="preview-head" id="previewHead" hidden>
+      <span class="key" id="pKey"></span>
+      <span class="ptitle" id="pTitle"></span>
+      <div class="seg" role="group" aria-label="View">
+        <button data-view="rendered" aria-pressed="true">Rendered</button>
+        <button data-view="source" aria-pressed="false">Markdown</button>
+        <button data-view="diff" aria-pressed="false" id="viewDiff" hidden>Diff</button>
+      </div>
+      <button id="copy">Copy</button>
+      <button id="openTask">Open folder</button>
+    </div>
+    <div class="preview-body" id="previewBody">
+      <div class="empty">Export a ticket, or pick one from the list, to preview it here.</div>
+    </div>
+  </section>
+</main>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const store = {
+  get(k, fallback) { try { const v = localStorage.getItem('jirallm-ui:' + k); return v === null ? fallback : JSON.parse(v); } catch { return fallback; } },
+  set(k, v) { try { localStorage.setItem('jirallm-ui:' + k, JSON.stringify(v)); } catch {} },
+};
+const KEY_RE = /\b[A-Z][A-Z0-9]+-\d+\b/g;
+let info = null, current = null, view = 'rendered', libraryItems = [];
+
+function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('show'), 1800); }
+const outDir = () => $('outdir').value.trim();
+
+// Served by `jirallm ui` itself, or hosted (GitHub Pages). A hosted page talks to the helper the
+// user runs on their own machine: Jira sends no CORS headers, so the browser cannot call Jira, and
+// each user's token stays in their own OS keychain.
+const params = new URLSearchParams(location.search);
+const HOSTED = !['127.0.0.1', 'localhost'].includes(location.hostname);
+let localPort = Number(params.get('port') || store.get('port', 4321)) || 4321;
+const apiBase = () => (HOSTED ? `http://127.0.0.1:${localPort}` : '');
+// github:<owner>/<repo> of the fork this page is published from (owner.github.io/repo/).
+const FORK = HOSTED && location.hostname.endsWith('.github.io')
+  ? `${location.hostname.split('.')[0]}/${location.pathname.split('/')[1] || 'jirallm'}`
+  : 'hung-duongquang/jirallm';
+const INSTALL_CMD = `npm install -g github:${FORK}#release`;
+
+class OfflineError extends Error {}
+async function request(path, init = {}) {
+  try { return await fetch(apiBase() + path, init); }
+  catch { throw new OfflineError(`The jirallm helper is not running on port ${localPort}.`); }
+}
+async function api(path, body) {
+  const res = await request(path, body === undefined ? {} : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+function parseKeys(text) { return [...new Set((text.toUpperCase().match(KEY_RE) || []))]; }
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function ago(iso) {
+  const s = (Date.now() - new Date(iso)) / 1000;
+  if (s < 60) return 'just now'; if (s < 3600) return Math.floor(s / 60) + 'm ago';
+  if (s < 86400) return Math.floor(s / 3600) + 'h ago'; return new Date(iso).toLocaleDateString();
+}
+
+// ---- tabs ----
+function selectTab(stack) {
+  $('tabKeys').setAttribute('aria-selected', String(!stack));
+  $('tabStack').setAttribute('aria-selected', String(stack));
+  $('paneStack').hidden = !stack; $('paneKeys').hidden = stack;
+  store.set('tab', stack ? 'stack' : 'keys');
+}
+$('tabKeys').onclick = () => selectTab(false);
+$('tabStack').onclick = () => selectTab(true);
+
+// ---- options ----
+const optBoxes = [...document.querySelectorAll('[data-opt]')];
+const savedOpts = store.get('opts', {});
+for (const box of optBoxes) {
+  if (box.dataset.opt in savedOpts) box.checked = savedOpts[box.dataset.opt];
+  box.onchange = () => { syncOpts(); store.set('opts', options()); };
+}
+function options() { return Object.fromEntries(optBoxes.map((b) => [b.dataset.opt, b.checked])); }
+function syncOpts() {
+  const status = optBoxes.find((b) => b.dataset.opt === 'statusChanges').checked;
+  const field = optBoxes.find((b) => b.dataset.opt === 'fieldChanges');
+  field.disabled = !status; if (!status) field.checked = false;
+  $('fieldChangesLabel').classList.toggle('disabled', !status);
+}
+
+// ---- keys ----
+$('keys').value = store.get('keys', '');
+function updateKeyCount() {
+  const n = parseKeys($('keys').value).length;
+  $('keyCount').textContent = n ? `${n} ticket${n > 1 ? 's' : ''}: ${parseKeys($('keys').value).join(', ')}` : 'Separate keys with spaces, commas or new lines.';
+  store.set('keys', $('keys').value);
+}
+$('keys').oninput = updateKeyCount;
+
+// ---- PR stack ----
+$('repo').value = store.get('repo', '');
+$('pr').value = store.get('pr', '');
+$('pr').onkeydown = (e) => { if (e.key === 'Enter') $('resolve').click(); };
+$('resolve').onclick = async () => {
+  const btn = $('resolve'); btn.disabled = true; btn.textContent = 'Finding…';
+  $('stackError').hidden = true; $('stackList').innerHTML = ''; $('stackActions').hidden = true;
+  store.set('repo', $('repo').value.trim()); store.set('pr', $('pr').value.trim());
+  try {
+    const { items } = await api('/api/stack', { pr: $('pr').value, repo: $('repo').value });
+    $('stackList').innerHTML = items.map((it, i) => `
+      <li><label title="${esc(it.title)}">
+        <input type="checkbox" data-key="${esc(it.key || '')}" ${it.key ? 'checked' : 'disabled'}>
+        <span><span class="key">${esc(it.key || '—')}</span> <span class="pr">#${it.pr}</span></span>
+        <span class="t">${i + 1}. ${esc(it.title)}</span>
+      </label></li>`).join('');
+    $('stackActions').hidden = false;
+  } catch (err) { $('stackError').textContent = err.message; $('stackError').hidden = false; }
+  finally { btn.disabled = false; btn.textContent = 'Find'; }
+};
+$('useStack').onclick = () => {
+  const keys = [...$('stackList').querySelectorAll('input:checked')].map((b) => b.dataset.key).filter(Boolean);
+  $('keys').value = keys.join(' '); updateKeyCount(); selectTab(false);
+};
+
+// ---- export ----
+const STATUS_TEXT = { new: 'new', changed: 'changed', unchanged: 'unchanged', updated: 'updated' };
+let exporting = false;
+let exportRun = null; // { runId, button } of the export in progress, for Cancel
+
+/** Asks the helper to stop the running export after the ticket in progress. */
+async function cancelExport() {
+  if (!exportRun?.runId || exportRun.cancelling) return;
+  exportRun.cancelling = true;
+  exportRun.button.disabled = true;
+  exportRun.button.textContent = 'Cancelling…';
+  try { await api('/api/export/cancel', { runId: exportRun.runId }); }
+  catch (err) { toast(err.message); }
+}
+
+/** Exports `keys` with the current options, streaming progress into the list on the left. */
+async function runExport(keys, { button, busyLabel, idleLabel, openFirst }) {
+  if (exporting) return;
+  exporting = true;
+  exportRun = { runId: null, button, cancelling: false };
+  for (const b of [$('export'), $('updateAll')]) b.disabled = true;
+  button.textContent = busyLabel;
+  const list = $('progress');
+  list.scrollIntoView({ block: 'nearest' });
+  list.innerHTML = keys.map((k) => `<li data-k="${k}"><span class="key">${k}</span><span class="s">waiting</span></li>`).join('');
+  const setRow = (key, cls, text) => {
+    const li = list.querySelector(`[data-k="${key}"]`) || list.appendChild(Object.assign(document.createElement('li'), { innerHTML: `<span class="key">${esc(key)}</span><span class="s"></span>` }));
+    li.dataset.k = key; const s = li.querySelector('.s'); s.className = 's ' + cls; s.textContent = text;
+  };
+  let lastDone = null, failures = 0, skipped = 0, cancelled = 0, finished = 0;
+  const counts = { new: 0, changed: 0, unchanged: 0, updated: 0 };
+  const pagesByKey = {}; let pages = 0, pagesFailed = 0; // Confluence pages, shown on the ticket that linked them
+  const queued = new Set(keys); // grows with linked and parent tickets the run adds
+  const showCount = () => {
+    if (exportRun.runId && !exportRun.cancelling) button.textContent = `Cancel (${finished}/${queued.size})`;
+  };
+  const viaText = (ev) => (ev.via ? ` · via ${ev.via}` : '');
+  try {
+    const res = await request('/api/export', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ keys, outputDir: outDir(), options: options() }) });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+    const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
+    for (;;) {
+      const { value, done } = await reader.read(); if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl; while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl); buf = buf.slice(nl + 1); if (!line.trim()) continue;
+        const ev = JSON.parse(line);
+        if (ev.type === 'start' && ev.runId) {
+          // An older helper sends no run id and cannot cancel; keep the button disabled then.
+          exportRun.runId = ev.runId;
+          button.disabled = false; button.classList.add('cancel');
+          button.title = 'Stop after the ticket in progress';
+          showCount();
+        }
+        if (ev.type === 'progress') { queued.add(ev.key); setRow(ev.key, 'run', 'exporting…' + viaText(ev)); showCount(); }
+        if (ev.type === 'done' || (ev.type === 'failed' && ev.key)) { finished++; showCount(); }
+        if (ev.type === 'cancelled') {
+          cancelled = ev.keys.length;
+          for (const k of ev.keys) setRow(k, 'skip', 'cancelled');
+        }
+        if (ev.type === 'confluence') {
+          if (ev.status === 'failed') pagesFailed++; else if (ev.kind === 'page') pages++;
+          (pagesByKey[ev.via] ??= []).push(ev);
+        }
+        if (ev.type === 'done') {
+          counts[ev.status] = (counts[ev.status] ?? 0) + 1;
+          const linkedPages = (pagesByKey[ev.key] ?? []).filter((p) => p.kind === 'page' && p.status !== 'failed').length;
+          setRow(ev.key, ev.status === 'unchanged' ? '' : 'ok',
+            (STATUS_TEXT[ev.status] ?? ev.status) + viaText(ev) + (ev.attachmentCount ? ` · ${ev.attachmentCount} attachment(s)` : '') +
+            (linkedPages ? ` · ${linkedPages} Confluence page(s)` : ''));
+          if (ev.status === 'changed') {
+            changedThisSession.add(ev.key);
+            const li = list.querySelector(`[data-k="${ev.key}"]`);
+            li.classList.add('has-diff'); li.title = 'Show what changed';
+            li.querySelector('.s').textContent += ' · view diff';
+          }
+          lastDone = lastDone || ev.key;
+        }
+        if (ev.type === 'failed' && ev.via) {
+          // A linked issue is best-effort: no access or deleted is not an export failure.
+          skipped++; setRow(ev.key, 'skip', `skipped${viaText(ev)} · ${ev.error}`);
+        } else if (ev.type === 'failed') { failures++; setRow(ev.key || 'error', 'err', ev.error); }
+      }
+    }
+    const summary = Object.entries(counts).filter(([, n]) => n).map(([s, n]) => `${n} ${s}`);
+    if (skipped) summary.push(`${skipped} linked skipped`);
+    if (pages) summary.push(`${pages} Confluence page(s)`);
+    if (pagesFailed) summary.push(`${pagesFailed} Confluence link(s) unreadable`);
+    if (failures) summary.push(`${failures} failed`);
+    if (cancelled) summary.push(`${cancelled} cancelled`);
+    toast(summary.join(' · ') || 'Nothing exported');
+  } catch (err) { toast(err.message); }
+  finally {
+    exporting = false;
+    exportRun = null;
+    for (const b of [$('export'), $('updateAll')]) b.disabled = false;
+    button.textContent = idleLabel;
+    button.title = '';
+    button.classList.remove('cancel');
+    renderLibrary();
+  }
+  await loadLibrary();
+  if (openFirst && lastDone) openTask(lastDone);
+  else if (current) openTask(current); // show the refreshed content of the open ticket
+}
+
+$('progress').onclick = (e) => {
+  const li = e.target.closest('li.has-diff');
+  if (li) openTask(li.dataset.k, { as: 'diff' });
+};
+
+$('export').onclick = () => {
+  if (exporting) { cancelExport(); return; }
+  const keys = parseKeys($('keys').value);
+  if (!keys.length) { selectTab(false); $('keys').focus(); toast('Enter at least one ticket key'); return; }
+  runExport(keys, { button: $('export'), busyLabel: `Exporting ${keys.length}…`, idleLabel: 'Export', openFirst: true });
+};
+
+// Re-export the tickets in the list (all of them, or only those matching the filter).
+const visibleLibraryKeys = () => {
+  const q = $('filter').value.trim().toLowerCase();
+  return libraryItems
+    .filter((it) => !q || it.key.toLowerCase().includes(q) || it.title.toLowerCase().includes(q))
+    .map((it) => it.key);
+};
+$('updateAll').onclick = () => {
+  if (exporting) { cancelExport(); return; }
+  const keys = visibleLibraryKeys();
+  if (!keys.length) { toast('Nothing to update'); return; }
+  // Uses the options above, so with "Linked issues" on it also fetches tickets the listed
+  // ones mention (one level) and adds them to the list.
+  runExport(keys, { button: $('updateAll'), busyLabel: `Updating ${keys.length}…`, idleLabel: updateLabel(),
+    openFirst: false });
+};
+function updateLabel() {
+  const n = visibleLibraryKeys().length;
+  return $('filter').value.trim() ? `Update ${n} shown` : `Update all (${n})`;
+}
+
+// ---- library ----
+async function loadLibrary() {
+  try { libraryItems = await api('/api/library?dir=' + encodeURIComponent(outDir())); }
+  catch (err) { libraryItems = []; toast(err.message); }
+  renderLibrary();
+}
+function renderLibrary() {
+  const q = $('filter').value.trim().toLowerCase();
+  const items = libraryItems.filter((it) => !q || it.key.toLowerCase().includes(q) || it.title.toLowerCase().includes(q));
+  $('library').innerHTML = items.length ? items.map((it) => `
+    <li><button data-key="${esc(it.key)}" aria-current="${it.key === current}">
+      <span class="key">${esc(it.key)}</span><span class="meta">${it.changedAt ? `<span class="changed" title="Changed in an update; open it and choose Diff">changed ${ago(it.changedAt)}</span> · ` : ''}${esc(it.status)} · ${ago(it.modified)}</span>
+      <span class="title">${esc(it.title)}</span>
+    </button></li>`).join('') : `<li class="hint" style="padding:8px">${libraryItems.length ? 'No match.' : 'Nothing exported in this folder yet.'}</li>`;
+  if (!exporting) {
+    $('updateAll').textContent = updateLabel();
+    $('updateAll').disabled = items.length === 0;
+  }
+}
+$('library').onclick = (e) => { const b = e.target.closest('button[data-key]'); if (b) openTask(b.dataset.key); };
+$('filter').oninput = renderLibrary;
+$('refresh').onclick = loadLibrary;
+$('outdir').onchange = () => { store.set('outdir', outDir()); loadLibrary(); };
+
+// ---- preview ----
+// Parses the exporter's frontmatter: `key: value` lines, plus `key:` followed by
+// `  - field: value` list items (issueLinks, subtasks, ...).
+function splitFrontmatter(md) {
+  const m = md.replace(/\r/g, '').match(/^---\n([\s\S]*?)\n---\n/);
+  if (!m) return { fm: [], body: md };
+  const unquote = (v) => { try { return JSON.parse(v); } catch { return v; } };
+  const fm = [];
+  for (const line of m[1].split('\n')) {
+    const top = line.match(/^([A-Za-z]\w*):\s*(.*)$/);
+    const item = line.match(/^\s+-\s+(?:(\w+):\s*)?(.*)$/);
+    const field = line.match(/^\s+(\w+):\s*(.*)$/);
+    if (top) fm.push([top[1], top[2] === '' ? [] : unquote(top[2])]);
+    else if (item && fm.length && Array.isArray(fm.at(-1)[1])) {
+      fm.at(-1)[1].push(item[1] ? { [item[1]]: unquote(item[2]) } : unquote(item[2]));
+    } else if (field && fm.length && typeof fm.at(-1)[1].at?.(-1) === 'object') {
+      fm.at(-1)[1].at(-1)[field[1]] = unquote(field[2]);
+    }
+  }
+  return { fm, body: md.slice(m[0].length) };
+}
+function renderFmValue(v) {
+  if (!Array.isArray(v)) return esc(v);
+  return v.map((x) => {
+    if (typeof x !== 'object' || x === null) return esc(x);
+    if (x.key) {
+      const label = [x.type, x.direction].filter(Boolean).join(' ');
+      return `<span class="link">${label ? `<span class="type">${esc(label)}</span> ` : ''}` +
+        `<a data-open="${esc(x.key)}">${esc(x.key)}</a> ${esc(x.title || '')}` +
+        `${x.status ? ` <span class="type">(${esc(x.status)})</span>` : ''}</span>`;
+    }
+    return `<span class="link">${esc(Object.values(x).join(' · '))}</span>`;
+  }).join(v.every((x) => typeof x !== 'object') ? ', ' : '');
+}
+let currentMarkdown = '', currentDiff = null;
+// Tickets reported "changed" during this page's runs. The Exported list only learns about a
+// change when it reloads after the whole run, so a diff clicked mid-run must not depend on it.
+const changedThisSession = new Set();
+const hasDiff = (key) =>
+  changedThisSession.has(key) || Boolean(libraryItems.find((it) => it.key === key)?.changedAt);
+async function openTask(key, { fromLink = false, as } = {}) {
+  try {
+    const q = `key=${encodeURIComponent(key)}&dir=${encodeURIComponent(outDir())}`;
+    const [{ markdown }, diff] = await Promise.all([
+      api(`/api/task?${q}`),
+      as === 'diff' || hasDiff(key) ? api(`/api/diff?${q}`).catch(() => null) : null,
+    ]);
+    current = key; currentMarkdown = markdown; currentDiff = diff;
+    if (as) view = as;
+    if (view === 'diff' && !currentDiff) {
+      view = 'rendered';
+      if (as === 'diff') toast(`No earlier version of ${key} to compare with`);
+    }
+    renderPreview(); renderLibrary();
+  } catch (err) {
+    // A linked issue that is not exported yet: offer to add it instead of clearing the preview.
+    if (fromLink) { addKey(key); toast(`${key} is not exported yet — added to the ticket list`); return; }
+    current = key; renderLibrary();
+    $('previewBody').innerHTML = `<div class="empty">${esc(err.message)}</div>`;
+  }
+}
+function addKey(key) {
+  const keys = parseKeys($('keys').value);
+  if (!keys.includes(key)) { $('keys').value = [...keys, key].join(' '); updateKeyCount(); }
+  selectTab(false);
+}
+$('previewBody').addEventListener('click', (e) => {
+  const a = e.target.closest('a[data-open], .md a[href]');
+  if (!a) return;
+  e.preventDefault();
+  if (a.dataset.open) { openTask(a.dataset.open, { fromLink: true }); return; }
+  const href = a.getAttribute('href');
+  // A link to another ticket's local copy (`../zod-123/task.md`, `../ZOD-123-….md`).
+  const local = !/^[a-z]+:/i.test(href) && href.match(/([A-Z][A-Z0-9]+-\d+)[^/]*\.md$|\/([a-z][a-z0-9]+-\d+)\/task\.md$/i);
+  if (local) {
+    const key = (local[1] || local[2]).toUpperCase();
+    if (libraryItems.some((it) => it.key === key)) openTask(key, { fromLink: true });
+    else if (info?.baseUrl) window.open(`${info.baseUrl}/browse/${key}`, '_blank', 'noopener');
+    return;
+  }
+  if (/^https?:/i.test(href)) window.open(href, '_blank', 'noopener');
+});
+function renderPreview() {
+  const { fm, body } = splitFrontmatter(currentMarkdown);
+  $('previewHead').hidden = false;
+  $('pKey').textContent = current;
+  $('pTitle').textContent = (body.match(/^# (.+)$/m) || [])[1] || '';
+  $('viewDiff').hidden = !currentDiff;
+  if (currentDiff) $('viewDiff').innerHTML = `Diff <span class="plus">+${currentDiff.added}</span> <span class="minus">−${currentDiff.removed}</span>`;
+  for (const b of document.querySelectorAll('.seg button')) b.setAttribute('aria-pressed', String(b.dataset.view === view));
+  $('previewBody').scrollTop = 0;
+  if (view === 'diff') { $('previewBody').innerHTML = renderDiff(currentDiff); return; }
+  if (view === 'source') { $('previewBody').innerHTML = `<pre class="source">${esc(currentMarkdown)}</pre>`; return; }
+  const meta = fm.length ? `<dl class="fm">${fm.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${renderFmValue(v)}</dd>`).join('')}</dl>` : '';
+  const html = DOMPurify.sanitize(marked.parse(body.replace(/^\s*# .+\n+/, ''), { gfm: true }));
+  $('previewBody').innerHTML = meta + `<div class="md">${html}</div>`;
+}
+for (const b of document.querySelectorAll('.seg button')) b.onclick = () => { view = b.dataset.view; renderPreview(); };
+
+// git-style unified diff of the last change: hunk headers, old/new line numbers, and the
+// changed words highlighted inside a changed line.
+function renderDiff(diff) {
+  const text = (l) => l.segments
+    ? l.segments.map((s) => (s.changed ? `<mark>${esc(s.text)}</mark>` : esc(s.text))).join('')
+    : esc(l.text);
+  const rows = diff.hunks.map((h) =>
+    `<tr class="hunk"><td class="no"></td><td class="no"></td><td class="code">@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@</td></tr>` +
+    h.lines.map((l) => {
+      const cls = l.type === '+' ? 'add' : l.type === '-' ? 'del' : '';
+      return `<tr class="${cls}"><td class="no">${l.oldNo ?? ''}</td><td class="no">${l.newNo ?? ''}</td>` +
+        `<td class="code"><span class="sign">${l.type === ' ' ? ' ' : l.type === '-' ? '−' : '+'}</span>${text(l)}</td></tr>`;
+    }).join('')).join('');
+  return `<div class="diff-head"><span class="key">task.md</span>
+      <span>changed ${esc(ago(diff.changedAt))}</span>
+      <span class="plus">+${diff.added}</span> <span class="minus">−${diff.removed}</span>
+      <span class="hint">compared with the version before that update</span></div>` +
+    (diff.hunks.length ? `<table class="diff">${rows}</table>` : '<div class="empty">No differences.</div>');
+}
+$('copy').onclick = async () => { try { await navigator.clipboard.writeText(currentMarkdown); toast('Markdown copied'); } catch { toast('Copy failed'); } };
+$('openTask').onclick = () => api('/api/open', { dir: outDir(), key: current }).catch((e) => toast(e.message));
+$('openRoot').onclick = () => api('/api/open', { dir: outDir() }).catch((e) => toast(e.message));
+
+// ---- setup guide (shown until the helper answers) ----
+function code(cmd) {
+  return `<div class="cmd"><code>${esc(cmd)}</code><button data-copy="${esc(cmd)}">Copy</button></div>`;
+}
+function renderSetup(problem, offline) {
+  $('previewHead').hidden = true;
+  const jira = params.get('jira');
+  $('previewBody').innerHTML = `
+    <div class="setup">
+      <h2>Connect your computer</h2>
+      <p class="problem">${esc(problem)}</p>
+      <p>This page runs exports through a small helper on your own machine. Your Jira token is stored
+        in your OS keychain by the helper and is never sent to this website.</p>
+      <ol>
+        <li class="${offline ? '' : 'done'}"><b>Install the helper</b> (once; needs Node.js 20+):${code(INSTALL_CMD)}
+          <span class="hint">To update later, run the same command again. <code>jirallm upgrade</code> would switch to the npm release, which has no web UI.</span></li>
+        <li><b>Add your Jira token.</b>
+          <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noopener">Create an API token</a>,
+          then run the wizard and enter ${jira ? `<code>${esc(jira)}</code>` : 'your Jira URL'}, your e-mail and the token:${code('jirallm init')}</li>
+        <li class="${offline ? '' : 'done'}"><b>Start the helper</b> and keep the terminal open:${code('jirallm ui')}</li>
+        <li><b>Connect.</b> If the browser asks to allow access to devices on your local network, allow it.
+          <div class="row" style="margin-top:8px">
+            <label for="port" class="hint" style="margin:0">Port</label>
+            <input type="text" id="port" value="${localPort}" inputmode="numeric" style="width:90px">
+            <button class="primary" id="connect">Connect</button>
+          </div>
+        </li>
+      </ol>
+      <p class="hint">Optional, for PR stacks: install the <a href="https://cli.github.com" target="_blank" rel="noopener">GitHub CLI</a> and run <code>gh auth login</code>.
+        Safari blocks pages from reaching your own computer; use Chrome, Edge or Firefox.</p>
+    </div>`;
+  $('connect').onclick = () => {
+    localPort = Number($('port').value) || 4321; store.set('port', localPort); connect();
+  };
+}
+$('previewBody').addEventListener('click', async (e) => {
+  const b = e.target.closest('button[data-copy]');
+  if (!b) return;
+  try { await navigator.clipboard.writeText(b.dataset.copy); toast('Copied'); } catch { toast('Copy failed'); }
+});
+
+// ---- init ----
+async function connect() {
+  $('conn').classList.remove('err');
+  $('conn').textContent = 'Connecting…';
+  try {
+    info = await api('/api/info');
+  } catch (err) {
+    info = null;
+    $('conn').textContent = err instanceof OfflineError ? 'Not connected' : err.message;
+    $('conn').classList.add('err');
+    renderSetup(err.message, err instanceof OfflineError);
+    return;
+  }
+  $('conn').textContent = `${info.org} · ${info.project} · ${info.userEmail}`;
+  $('outdir').value = store.get('outdir', info.outputDir);
+  if (!$('repo').value && info.repo) $('repo').value = info.repo;
+  if (!('subtasks' in savedOpts)) optBoxes.find((b) => b.dataset.opt === 'subtasks').checked = info.includeSubtasks;
+  if (!current) $('previewBody').innerHTML = '<div class="empty">Export a ticket, or pick one from the list, to preview it here.</div>';
+  await loadLibrary();
+}
+
+(async () => {
+  selectTab(store.get('tab', 'keys') === 'stack');
+  syncOpts(); updateKeyCount();
+  if (params.get('repo')) $('repo').value = params.get('repo');
+  await connect();
+})();
+</script>
+</body>
+</html>

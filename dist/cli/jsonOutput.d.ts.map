@@ -1,0 +1,1 @@
+{"version":3,"file":"jsonOutput.d.ts","sourceRoot":"","sources":["../../src/cli/jsonOutput.ts"],"names":[],"mappings":"AAAA,MAAM,MAAM,cAAc,GAAG;IAAE,IAAI,CAAC,EAAE,OAAO,CAAA;CAAE,CAAC;AAEhD,wBAAgB,gBAAgB,CAAC,KAAK,EAAE,cAAc,GAAG,OAAO,CAE/D;AAED,wBAAgB,SAAS,CAAC,KAAK,EAAE,OAAO,GAAG,IAAI,CAE9C"}
