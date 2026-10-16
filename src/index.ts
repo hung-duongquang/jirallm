@@ -42,7 +42,7 @@ export type { ParsedField } from './lib/customFieldWrite.js';
 export { markdownToWiki } from './lib/markdownToWiki.js';
 export { splitIntoChunks } from './lib/chunkMarkdown.js';
 export { JiraExporter } from './lib/exporter.js';
-export type { ExportOptions, ExportResult } from './lib/exporter.js';
+export type { ConfluenceItemInfo, ExportOptions, ExportResult } from './lib/exporter.js';
 export { extractFrames, isVideoFile, checkFfmpeg } from 'framewise';
 export type { ExtractOptions, ExtractResult } from 'framewise';
 export {

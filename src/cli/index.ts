@@ -74,6 +74,7 @@ type ExportFlags = {
   comments?: boolean;
   localLinks?: boolean;
   includeLinked?: boolean;
+  confluence?: boolean;
   withWorklog?: boolean;
 };
 
@@ -163,6 +164,7 @@ async function runExport(rawArgs: string[], flags: ExportFlags, program: Command
   const flagSelector = flags.fields ? parseFieldsFlag(flags.fields) : undefined;
   let fieldSelector = flagSelector;
   let customFieldDefs: CustomFieldDefs | undefined;
+  let confluenceSites: string[] | undefined;
 
   let keys: string[];
   let org: string | undefined = flags.org;
@@ -187,6 +189,7 @@ async function runExport(rawArgs: string[], flags: ExportFlags, program: Command
       if (!flags.outputDir && resolved.project.outputDir) {
         outputDir = resolved.project.outputDir;
       }
+      confluenceSites = resolved.org.confluenceUrls;
       if (flags.includeSubtasks === undefined && resolved.org.includeSubtasks !== undefined) {
         includeSubtasks = resolved.org.includeSubtasks;
       }
@@ -239,6 +242,9 @@ async function runExport(rawArgs: string[], flags: ExportFlags, program: Command
     console.log(`With history:  ${flags.withHistory ?? false}`);
     console.log(`With worklog:  ${flags.withWorklog ?? false}`);
     console.log(
+      `Confluence:    ${flags.confluence === false ? 'disabled' : (confluenceSites ?? [baseUrl]).join(', ')}`
+    );
+    console.log(
       `Video frames:  ${videoEnabled ? `enabled (fps=${fps}, maxFrames=${maxFrames})` : 'disabled'}`
     );
     console.log(`Issues (${keys.length}): ${keys.join(', ')}`);
@@ -273,6 +279,8 @@ async function runExport(rawArgs: string[], flags: ExportFlags, program: Command
     withComments: flags.comments,
     localIssueLinks: flags.localLinks,
     includeLinked: flags.includeLinked,
+    withConfluence: flags.confluence,
+    confluenceSites,
     withWorklog: flags.withWorklog,
   });
 
@@ -292,6 +300,15 @@ async function runExport(rawArgs: string[], flags: ExportFlags, program: Command
   if (result.updated.length > 0) {
     console.log(`  Updated (${result.updated.length}):`);
     for (const item of result.updated) printItem(item);
+  }
+  if (result.confluence.length > 0) {
+    console.log(`  Confluence (${result.confluence.length}):`);
+    for (const item of result.confluence) {
+      const name = item.title ?? item.url;
+      const where = item.path ? `: ${item.path}` : '';
+      const note = item.error ? ` (${item.status}: ${item.error})` : ` (${item.status})`;
+      console.log(`    - ${item.kind === 'whiteboard' ? 'Whiteboard: ' : ''}${name}${where}${note}`);
+    }
   }
   if (result.failed.length > 0) {
     console.log(`  Failed (${result.failed.length}):`);
@@ -348,6 +365,10 @@ function addExportOptions(cmd: Command): Command {
     .option(
       '--include-linked',
       'Also try to export the issues each requested issue links to (one level; inaccessible ones are skipped)'
+    )
+    .option(
+      '--no-confluence',
+      'Do not export the Confluence pages issues link to (sites: the Jira site, or confluence_urls in the org config)'
     )
     .option('--with-worklog', 'Include worklogs')
     .option('--dry-run', 'Resolve config & print plan without calling Jira or writing files');

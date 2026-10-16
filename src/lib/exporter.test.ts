@@ -892,3 +892,132 @@ describe('JiraExporter.exportIssues includeLinked', () => {
     expect(written[1].previous).toContain('key: "PROJ-1"');
   });
 });
+
+describe('JiraExporter.exportIssues Confluence pages', () => {
+  const WIKI = 'https://wiki.example.net';
+  const PAGE_ADF = {
+    version: 1,
+    type: 'doc',
+    content: [
+      { type: 'paragraph', content: [{ type: 'text', text: 'Spec body for ' }, {
+        type: 'inlineCard',
+        attrs: { url: 'https://example.atlassian.net/browse/PROJ-2' },
+      }] },
+      { type: 'mediaSingle', content: [{ type: 'media', attrs: { id: 'file-1', type: 'file' } }] },
+      { type: 'extension', attrs: {
+        extensionKey: 'native-embed:whiteboard',
+        parameters: { macroParams: { url: { value: `${WIKI}/wiki/spaces/ZOD/whiteboard/7` } } },
+      } },
+    ],
+  };
+  let calls: string[];
+
+  beforeEach(() => {
+    calls = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: string) => {
+      const url = String(input);
+      calls.push(url);
+      const json = (body: unknown, status = 200) =>
+        new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+      if (url === `${WIKI}/wiki/api/v2/pages/1001?body-format=atlas_doc_format`) {
+        return json({
+          id: '1001',
+          title: 'Payable Claim',
+          version: { number: 3 },
+          body: { atlas_doc_format: { value: JSON.stringify(PAGE_ADF) } },
+          _links: { base: `${WIKI}/wiki`, webui: '/spaces/ZOD/pages/1001/Payable+Claim' },
+        });
+      }
+      if (url.startsWith(`${WIKI}/wiki/api/v2/pages/1001/attachments`)) {
+        return json({
+          results: [
+            { fileId: 'file-1', title: 'flow chart.png', downloadLink: '/download/flow.png' },
+            { fileId: 'file-9', title: 'unused.png', downloadLink: '/download/unused.png' },
+          ],
+          _links: {},
+        });
+      }
+      if (url === `${WIKI}/wiki/download/flow.png`) return new Response('PNG');
+      if (url === `${WIKI}/wiki/api/v2/whiteboards/7`) return json({ title: 'Upload flow' });
+      return json({ message: 'not found' }, 404);
+    }));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const taskLinking = (key: string, text: string): JiraTaskData => ({
+    key,
+    title: `Issue ${key}`,
+    status: 'Open',
+    description: text,
+    attachments: [],
+    history: [],
+  });
+
+  it('exports linked pages once, with the images they show, and links them locally', async () => {
+    const tasks: Record<string, JiraTaskData> = {
+      'PROJ-1': taskLinking(
+        'PROJ-1',
+        `Fields as defined on ${WIKI}/wiki/spaces/ZOD/pages/1001/Payable+Claim. Flow: ${WIKI}/wiki/spaces/ZOD/whiteboard/7`
+      ),
+      'PROJ-2': taskLinking('PROJ-2', `[the spec](${WIKI}/wiki/spaces/ZOD/pages/1001)`),
+    };
+    const exporter = makeExporter(FULL_TASK, {
+      fetchIssueDetails: vi.fn(async (key: string) => tasks[key]),
+    });
+    const seen: string[] = [];
+
+    const result = await exporter.exportIssues(['PROJ-1', 'PROJ-2'], {
+      outputDir: tmpDir,
+      confluenceSites: [WIKI],
+      onConfluenceItem: (item) => seen.push(`${item.kind}:${item.status}`),
+    });
+
+    // The page's own whiteboard is looked up while the page is written, and only once.
+    expect(seen).toEqual(['whiteboard:linked', 'page:new']);
+    expect(calls.filter((c) => c.includes('/whiteboards/7'))).toHaveLength(1);
+    expect(calls.filter((c) => c.includes('/pages/1001?'))).toHaveLength(1);
+    expect(calls).not.toContain(`${WIKI}/wiki/download/unused.png`);
+
+    const pageDir = join(tmpDir, 'confluence', '1001-payable-claim');
+    const page = readFileSync(join(pageDir, 'page.md'), 'utf-8');
+    expect(page).toContain('  title: "Payable Claim"\n  version: 3\n');
+    expect(page).toContain('Spec body for [PROJ-2](../../proj-2/task.md)');
+    expect(page).toContain('![image](attachments/flow_chart.png)');
+    expect(page).toContain(`[Whiteboard: Upload flow](${WIKI}/wiki/spaces/ZOD/whiteboard/7)`);
+    expect(readFileSync(join(pageDir, 'attachments', 'flow_chart.png'), 'utf-8')).toBe('PNG');
+
+    const one = readFileSync(join(tmpDir, 'proj-1', 'task.md'), 'utf-8');
+    const local = '../confluence/1001-payable-claim/page.md';
+    expect(one).toContain(`Fields as defined on [Payable Claim](${local}). Flow: [Whiteboard: Upload flow](${WIKI}/wiki/spaces/ZOD/whiteboard/7)`);
+    expect(one).toContain(`## Confluence\n\n- [Payable Claim](${local})\n- [Whiteboard: Upload flow](`);
+    const two = readFileSync(join(tmpDir, 'proj-2', 'task.md'), 'utf-8');
+    expect(two).toContain(`[the spec](${local})`);
+    expect(result.confluence.map((c) => c.title)).toEqual(['Upload flow', 'Payable Claim']);
+  });
+
+  it('keeps the Confluence link of an unreadable page and says so', async () => {
+    const url = `${WIKI}/wiki/spaces/ZOD/pages/404/Gone`;
+    const exporter = makeExporter(taskLinking('PROJ-1', `See ${url}`));
+
+    await exporter.exportIssues(['PROJ-1'], { outputDir: tmpDir, confluenceSites: [WIKI] });
+
+    const md = readFileSync(join(tmpDir, 'proj-1', 'task.md'), 'utf-8');
+    expect(md).toContain(`See ${url}`);
+    expect(md).toContain(`## Confluence\n\n- ${url} — could not be exported (HTTP 404)`);
+  });
+
+  it('only fetches from configured sites, and not at all when disabled', async () => {
+    const text = `${WIKI}/wiki/spaces/ZOD/pages/1001/Payable+Claim`;
+    await makeExporter(taskLinking('PROJ-1', text)).exportIssues(['PROJ-1'], { outputDir: tmpDir });
+    await makeExporter(taskLinking('PROJ-1', text)).exportIssues(['PROJ-1'], {
+      outputDir: tmpDir,
+      confluenceSites: [WIKI],
+      withConfluence: false,
+    });
+    expect(calls).toEqual([]);
+    expect(readFileSync(join(tmpDir, 'proj-1', 'task.md'), 'utf-8')).not.toContain('## Confluence');
+  });
+});

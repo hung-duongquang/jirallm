@@ -427,3 +427,60 @@ describe('convertADFToMarkdown nested lists and table spacing', () => {
     expect(out).toBe('| H |\n| --- |\n\nafter\n');
   });
 });
+
+describe('convertADFToMarkdown – Confluence nodes', () => {
+  const p = (text: string) => ({ type: 'paragraph', content: [{ type: 'text', text }] });
+  const macro = (extensionKey: string, macroParams: Record<string, unknown> = {}, title?: string) => ({
+    type: 'extension',
+    attrs: {
+      extensionKey,
+      parameters: { macroParams, macroMetadata: title ? { title } : {} },
+    },
+  });
+
+  it('drops navigation macros, links embeds and notes other macros', () => {
+    const board = 'https://acme.atlassian.net/wiki/spaces/ZOD/whiteboard/7';
+    const out = convertADFToMarkdown(
+      doc(
+        macro('toc', {}, 'Table of Contents'),
+        macro('native-embed:whiteboard', { url: { value: board } }),
+        { type: 'extension', attrs: { extensionKey: 'chart:default', parameters: {
+          chartGroup: { customizeTab: { titlesField: { chartTitle: 'Results' } } },
+        } } },
+        macro('roadmap', {}, 'Roadmap Planner')
+      )
+    );
+    expect(out).toBe(
+      `\n[Whiteboard](${board})\n*[Chart: Results (view it in Confluence)]*\n*[Confluence macro: Roadmap Planner]*`
+    );
+  });
+
+  it('renders the body of a bodied macro as blocks', () => {
+    const out = convertADFToMarkdown(
+      doc({ type: 'bodiedExtension', attrs: { extensionKey: 'details' }, content: [p('one'), p('two')] })
+    );
+    expect(out).toBe('one\n\ntwo\n');
+  });
+
+  it('matches media to attachments by file id and puts a caption under the image', () => {
+    const out = convertADFToMarkdown(
+      doc(
+        {
+          type: 'mediaSingle',
+          content: [
+            { type: 'media', attrs: { id: 'f-2', type: 'file', alt: 'image-1.png' } },
+            { type: 'caption', content: [{ type: 'text', text: 'Upload screen' }] },
+          ],
+        },
+        { type: 'paragraph', content: [{ type: 'mediaInline', attrs: { id: 'f-1' } }] }
+      ),
+      [
+        { id: 'f-1', filename: 'data.json' },
+        { id: 'f-2', filename: 'image-1.png' },
+      ]
+    );
+    expect(out).toBe(
+      '![image](attachments/image-1.png)\n*Upload screen*\n[data.json](attachments/data.json)\n'
+    );
+  });
+});

@@ -209,6 +209,8 @@ async function exportIssues(body, res) {
     withStatusChanges: o.statusChanges ?? false,
     withComments: o.comments ?? true,
     withWorklog: o.worklog ?? false,
+    withConfluence: o.confluence ?? true,
+    confluenceSites: org.confluenceUrls,
     videoFrames: {
       enabled: (o.videoFrames ?? true) && videoDefaults.enabled !== false,
       fps: videoDefaults.fps ?? 5,
@@ -227,6 +229,7 @@ async function exportIssues(body, res) {
       emit({ type: 'done', key, status, via, path, attachmentCount });
     },
     onIssueFailed: (key, { via, error }) => emit({ type: 'failed', key, via, error }),
+    onConfluenceItem: (item) => emit({ type: 'confluence', ...item }),
     signal: cancel.signal,
   };
   try {

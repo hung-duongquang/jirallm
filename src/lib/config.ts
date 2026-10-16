@@ -29,6 +29,8 @@ export type Organization = {
   baseUrl: string;
   userEmail: string;
   includeSubtasks?: boolean;
+  /** Confluence sites whose linked pages are exported; undefined means the Jira site. */
+  confluenceUrls?: string[];
   videoFrames?: VideoFramesConfig;
   export?: ExportConfig;
   projects: Record<string, Project>;
@@ -96,6 +98,7 @@ function buildOrg(name: string, raw: RawConfig): Organization {
     baseUrl: r.base_url,
     userEmail: r.user_email,
     includeSubtasks: r.include_subtasks,
+    confluenceUrls: r.confluence_urls,
     videoFrames: r.video_frames
       ? {
           enabled: r.video_frames.enabled,

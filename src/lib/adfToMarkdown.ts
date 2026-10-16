@@ -22,6 +22,8 @@ export type JiraADFContent = {
     text?: string;
     shortName?: string;
     timestamp?: string | number;
+    extensionKey?: string;
+    parameters?: unknown;
   };
 };
 
@@ -37,7 +39,14 @@ const BLOCK_CONTAINERS = new Set([
   'nestedExpand',
   'layoutSection',
   'layoutColumn',
+  // Confluence macros with a body (e.g. Page Properties) render their body.
+  'bodiedExtension',
+  'multiBodiedExtension',
+  'extensionFrame',
 ]);
+
+/** Confluence macros that only navigate the page (their output is not content). */
+const NAVIGATION_MACROS = new Set(['toc', 'toc-zone', 'children', 'pagetree', 'anchor']);
 
 type JiraADFMark = NonNullable<JiraADFContent['marks']>[number];
 
@@ -52,6 +61,44 @@ const isAdfMark = (value: unknown): value is JiraADFMark => hasStringType(value)
 
 const childNodesOf = (node: { content?: unknown }) =>
   Array.isArray(node.content) ? node.content.filter(isAdfNode) : undefined;
+
+/** Reads a macro parameter (`parameters.macroParams.<name>.value`) as a string. */
+const macroParam = (node: JiraADFContent, name: string): string | undefined => {
+  const params = isRecord(node.attrs?.parameters) ? node.attrs.parameters.macroParams : undefined;
+  const param = isRecord(params) ? params[name] : undefined;
+  const value = isRecord(param) ? param.value : undefined;
+  return typeof value === 'string' && value !== '' ? value : undefined;
+};
+
+const macroTitle = (node: JiraADFContent): string => {
+  const params = isRecord(node.attrs?.parameters) ? node.attrs.parameters : undefined;
+  const meta = isRecord(params?.macroMetadata) ? params.macroMetadata : undefined;
+  if (typeof meta?.title === 'string' && meta.title) return meta.title;
+  return node.attrs?.extensionKey || 'macro';
+};
+
+/**
+ * Confluence macros without a body. Embeds become links, navigation macros disappear, and
+ * anything else leaves a note so the reader knows the page shows more than its text.
+ */
+const renderExtension = (node: JiraADFContent): string => {
+  const key = node.attrs?.extensionKey ?? '';
+  if (NAVIGATION_MACROS.has(key)) return '';
+  if (key.startsWith('native-embed:')) {
+    const url = macroParam(node, 'url');
+    const label = key === 'native-embed:whiteboard' ? 'Whiteboard' : 'Embedded content';
+    return url ? `[${label}](${url})` : `*[${label}]*`;
+  }
+  if (key === 'jira') return macroParam(node, 'key') ?? '*[Jira issues]*';
+  if (key.startsWith('chart:')) {
+    const params = node.attrs?.parameters as
+      | { chartGroup?: { customizeTab?: { titlesField?: { chartTitle?: unknown } } } }
+      | undefined;
+    const title = params?.chartGroup?.customizeTab?.titlesField?.chartTitle;
+    return `*[Chart${typeof title === 'string' && title ? `: ${title}` : ''} (view it in Confluence)]*`;
+  }
+  return `*[Confluence macro: ${macroTitle(node)}]*`;
+};
 
 /**
  * Converts a Jira ADF document to Markdown.
@@ -72,10 +119,16 @@ export function convertADFToMarkdown(
   const topLevelNodes = childNodesOf(content) ?? [];
 
   const filenameSet = new Set(attachments.map((att) => att.filename));
+  // Confluence media reference their attachment by file id.
+  const filenameById = new Map(attachments.map((att) => [att.id, att.filename]));
   const altMatchedFilenames = new Set<string>();
   const collectAltMatches = (node: JiraADFContent) => {
-    if ((node.type === 'media' || node.type === 'mediaInline') && node.attrs?.alt) {
-      if (filenameSet.has(node.attrs.alt)) altMatchedFilenames.add(node.attrs.alt);
+    if (node.type === 'media' || node.type === 'mediaInline') {
+      const byId = node.attrs?.id ? filenameById.get(node.attrs.id) : undefined;
+      if (byId) altMatchedFilenames.add(byId);
+      else if (node.attrs?.alt && filenameSet.has(node.attrs.alt)) {
+        altMatchedFilenames.add(node.attrs.alt);
+      }
     }
     childNodesOf(node)?.forEach(collectAltMatches);
   };
@@ -131,6 +184,8 @@ export function convertADFToMarkdown(
     const children = childNodesOf(node);
 
     if ((node.type === 'media' || node.type === 'mediaInline') && node.attrs) {
+      const byId = node.attrs.id ? filenameById.get(node.attrs.id) : undefined;
+      if (byId) return formatMediaLink(byId);
       const filename = node.attrs.alt;
       if (filename && filenameSet.has(filename)) return formatMediaLink(filename);
       if (unmatchedAttachments.length > 0) {
@@ -142,9 +197,16 @@ export function convertADFToMarkdown(
       return mediaId ? `![embedded media](media/${mediaId})` : '![embedded media]()';
     }
 
+    // A caption goes on its own line under the image.
     if (node.type === 'mediaSingle' && children) {
-      return children.map((child) => extractText(child)).join('');
+      return children.map((child) => extractText(child)).filter(Boolean).join('\n');
     }
+    if (node.type === 'caption') {
+      const caption = children?.map((child) => extractText(child)).join('').trim() ?? '';
+      return caption ? `*${caption}*` : '';
+    }
+
+    if (node.type === 'extension' || node.type === 'inlineExtension') return renderExtension(node);
 
     if (node.type === 'mediaGroup' && children) {
       return children.map((child) => extractText(child)).join('\n');

@@ -2,6 +2,19 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join } from 'path';
 import { JiraClient, type JiraConfig, type JiraTaskData } from './jiraClient.js';
 import { jiraIssueKeyFromUrl, linkLocalIssues } from './issueLinks.js';
+import {
+  CONFLUENCE_DIR,
+  ConfluenceClient,
+  exportConfluencePage,
+  findLocalPageDir,
+} from './confluence.js';
+import {
+  collectConfluenceRefs,
+  confluenceRefKey,
+  rewriteConfluenceLinks,
+  type ConfluenceRef,
+  type ResolvedConfluenceRef,
+} from './confluenceLinks.js';
 import { extractFrames, isVideoFile } from 'framewise';
 import {
   resolveFieldSet,
@@ -52,6 +65,18 @@ export type ExportOptions = {
    * Links to issues that were not reached point back at Jira unless a local copy exists.
    */
   signal?: AbortSignal;
+  /**
+   * Export the Confluence pages an issue links to (one level) into `<outputDir>/confluence/`
+   * and point the links at them; whiteboard links get their title. Default: true.
+   */
+  withConfluence?: boolean;
+  /**
+   * Confluence sites (e.g. `https://acme.atlassian.net`) whose pages are fetched with the
+   * Jira credentials. Links to other sites are left alone. Default: the Jira site.
+   */
+  confluenceSites?: string[];
+  /** Called once per Confluence page or whiteboard an export run looked up. */
+  onConfluenceItem?: (info: ConfluenceItemInfo) => void;
   withWorklog?: boolean;
   videoFrames?: {
     enabled: boolean;
@@ -81,7 +106,205 @@ export type ExportResult = {
   failed: Array<{ key: string; error: string }>;
   /** Issues not reached because `signal` was aborted. */
   cancelled: string[];
+  /** Confluence pages and whiteboards looked up for the exported issues. */
+  confluence: ConfluenceItemInfo[];
 };
+
+export type ConfluenceItemInfo = {
+  kind: 'page' | 'whiteboard';
+  id: string;
+  url: string;
+  title?: string;
+  /** Local page.md (pages only). */
+  path?: string;
+  status: 'new' | 'changed' | 'unchanged' | 'linked' | 'failed';
+  attachmentCount?: number;
+  error?: string;
+  /** The issue that first linked it. */
+  via: string;
+};
+
+type ConfluenceItem = ConfluenceItemInfo & {
+  origin: string;
+  /** Folder name below `<outputDir>/confluence/` of the local copy, if any. */
+  dirName?: string;
+};
+
+const toInfo = ({ origin: _origin, dirName: _dirName, ...info }: ConfluenceItem): ConfluenceItemInfo =>
+  info;
+
+const shortError = (error: unknown): string => {
+  const status = (error as { status?: unknown })?.status;
+  if (typeof status === 'number') return `HTTP ${status}`;
+  return (error instanceof Error ? error.message : String(error)).split('\n')[0];
+};
+
+/** Title of an earlier page export, read from its frontmatter. */
+function localPageTitle(outputDir: string, dirName: string): string | undefined {
+  try {
+    const text = readFileSync(join(outputDir, CONFLUENCE_DIR, dirName, 'page.md'), 'utf-8');
+    const raw = /^ {2}title: "((?:[^"\\]|\\.)*)"$/m.exec(text)?.[1];
+    return raw?.replace(/\\(.)/g, '$1');
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Confluence lookups of one export run: every page or whiteboard is fetched once, however
+ * many issues link to it, and links resolve against what the run (or an earlier one) wrote.
+ */
+class ConfluenceRun {
+  private readonly items = new Map<string, Promise<ConfluenceItem>>();
+  private readonly settled = new Map<string, ConfluenceItem>();
+  private readonly clients = new Map<string, ConfluenceClient>();
+  private readonly sites: Set<string>;
+
+  constructor(
+    private readonly options: ExportOptions,
+    private readonly credentials: { userEmail: string; apiToken: string; jiraOrigin: string },
+    private readonly redirects: JiraConfig['redirects']
+  ) {
+    const configured = options.confluenceSites ?? [credentials.jiraOrigin];
+    this.sites = new Set(
+      configured.flatMap((site) => {
+        try {
+          return [new URL(site).origin.toLowerCase()];
+        } catch {
+          return [];
+        }
+      })
+    );
+  }
+
+  /** Confluence items in `markdown` on a configured site. */
+  refsIn(markdown: string): Array<ConfluenceRef & { url: string }> {
+    return collectConfluenceRefs(markdown).filter((ref) => this.sites.has(ref.origin));
+  }
+
+  private client(origin: string): ConfluenceClient {
+    let client = this.clients.get(origin);
+    if (!client) {
+      const { userEmail, apiToken } = this.credentials;
+      client = new ConfluenceClient(origin, userEmail, apiToken, this.redirects);
+      this.clients.set(origin, client);
+    }
+    return client;
+  }
+
+  fetch(ref: ConfluenceRef, url: string, via: string, batchKeys: string[]): Promise<ConfluenceItem> {
+    const key = confluenceRefKey(ref);
+    let pending = this.items.get(key);
+    if (!pending) {
+      pending = this.load(ref, url, via, batchKeys).then((item) => {
+        this.settled.set(key, item);
+        this.options.onConfluenceItem?.(toInfo(item));
+        return item;
+      });
+      this.items.set(key, pending);
+    }
+    return pending;
+  }
+
+  private async load(
+    ref: ConfluenceRef,
+    url: string,
+    via: string,
+    batchKeys: string[]
+  ): Promise<ConfluenceItem> {
+    const base = { kind: ref.kind, id: ref.id, origin: ref.origin, url, via };
+    const client = this.client(ref.origin);
+    if (ref.kind === 'whiteboard') {
+      try {
+        return { ...base, title: await client.getWhiteboardTitle(ref.id), status: 'linked' };
+      } catch (error) {
+        return { ...base, status: 'failed', error: shortError(error) };
+      }
+    }
+    try {
+      const page = await exportConfluencePage(client, ref.id, {
+        outputDir: this.options.outputDir,
+        batchKeys,
+        localIssueLinks: this.options.localIssueLinks,
+        resolveRef: (other) => this.resolve(other, '../'),
+        // Whiteboards a page shows get their title; linked pages are not followed further.
+        lookupRefs: async (refs) => {
+          for (const other of refs) {
+            if (other.kind === 'whiteboard' && this.sites.has(other.origin)) {
+              await this.fetch(other, other.url, via, batchKeys);
+            }
+          }
+        },
+      });
+      return {
+        ...base,
+        title: page.title,
+        path: page.path,
+        dirName: page.dirName,
+        status: page.status,
+        attachmentCount: page.attachmentCount,
+      };
+    } catch (error) {
+      // An earlier export still serves as the local copy.
+      const dirName = findLocalPageDir(this.options.outputDir, ref.id);
+      return {
+        ...base,
+        status: 'failed',
+        error: shortError(error),
+        dirName,
+        title: dirName ? localPageTitle(this.options.outputDir, dirName) : undefined,
+      };
+    }
+  }
+
+  /**
+   * How a link to `ref` is written from a file `pathToConfluenceDir` away from the
+   * confluence folder: local page copies (this run's or earlier ones) and titled whiteboards.
+   */
+  resolve(ref: ConfluenceRef, pathToConfluenceDir: string): ResolvedConfluenceRef | undefined {
+    const item = this.settled.get(confluenceRefKey(ref));
+    if (ref.kind === 'whiteboard') return item?.title ? { title: item.title } : undefined;
+    // Pages this run did not look up may still have a copy from an earlier export.
+    const dirName = item
+      ? item.dirName
+      : this.sites.has(ref.origin)
+        ? findLocalPageDir(this.options.outputDir, ref.id)
+        : undefined;
+    if (!dirName) return undefined;
+    const title = item?.title ?? localPageTitle(this.options.outputDir, dirName) ?? dirName;
+    return { title, path: `${pathToConfluenceDir}${dirName}/page.md` };
+  }
+
+  all(): ConfluenceItemInfo[] {
+    return [...this.settled.values()].map(toInfo);
+  }
+}
+
+/** The "Confluence" section of task.md: what the issue links to, and what could not be read. */
+function confluenceSection(
+  items: ConfluenceItem[],
+  resolve: (ref: ConfluenceRef) => ResolvedConfluenceRef | undefined
+): string {
+  if (items.length === 0) return '';
+  const escape = (text: string) => text.replace(/([[\]])/g, '\\$1');
+  const lines = items.map((item) => {
+    const resolved = resolve(item);
+    if (item.kind === 'whiteboard') {
+      const title = escape(`Whiteboard: ${item.title ?? item.id}`);
+      const note =
+        item.status === 'failed'
+          ? `could not be read (${item.error})`
+          : 'content is not exported (Confluence has no API for whiteboard content)';
+      return `- [${title}](${item.url}) — ${note}`;
+    }
+    if (resolved?.path) {
+      const stale = item.status === 'failed' ? ` — earlier copy; refreshing failed (${item.error})` : '';
+      return `- [${escape(resolved.title)}](${resolved.path})${stale}`;
+    }
+    return `- ${item.url} — could not be exported (${item.error ?? 'unknown error'})`;
+  });
+  return `## Confluence\n\n${lines.join('\n')}\n\n`;
+}
 
 type ExportIssueOutcome = {
   taskDir: string;
@@ -315,7 +538,11 @@ function buildTaskMarkdown(
   task: JiraTaskData,
   taskDir: string,
   selectedKeys: Set<string>,
-  options: Partial<ExportOptions> = {}
+  options: Partial<ExportOptions> = {},
+  confluence?: {
+    section: string;
+    resolve: (ref: ConfluenceRef) => ResolvedConfluenceRef | undefined;
+  }
 ): string {
   const frontmatterBody = buildFrontmatterBlock(task, selectedKeys);
   let md = `---\n${frontmatterBody}\n---\n\n# ${task.title}\n\n`;
@@ -323,6 +550,7 @@ function buildTaskMarkdown(
   if (task.description?.trim()) {
     md += `## Description\n\n${addFrameLinksToContent(task.description, taskDir)}\n\n`;
   }
+  if (confluence) md += confluence.section;
 
   const withStatusChanges = options.withStatusChanges ?? true;
   const withComments = options.withComments ?? true;
@@ -359,22 +587,42 @@ function buildTaskMarkdown(
       batchKeys: options.batchKeys,
     });
   }
+  if (confluence) md = rewriteConfluenceLinks(md, confluence.resolve);
   return md;
 }
 
 export class JiraExporter {
   private client: JiraClient;
   private baseUrl: string;
+  private config: JiraConfig;
+  private apiToken: string;
 
   constructor(config: JiraConfig, apiToken: string) {
     this.client = new JiraClient(config, apiToken);
     this.baseUrl = config.baseUrl.replace(/\/+$/, '');
+    this.config = config;
+    this.apiToken = apiToken;
+  }
+
+  private confluenceRun(options: ExportOptions): ConfluenceRun | undefined {
+    if (options.withConfluence === false) return undefined;
+    let jiraOrigin = '';
+    try {
+      jiraOrigin = new URL(this.baseUrl).origin.toLowerCase();
+    } catch {
+      // An unusable base URL fails the Jira calls anyway.
+    }
+    return new ConfluenceRun(
+      options,
+      { userEmail: this.config.userEmail, apiToken: this.apiToken, jiraOrigin },
+      this.config.redirects
+    );
   }
 
   async exportIssue(
     issueKey: string,
     options: ExportOptions,
-    context: { expandLinks?: boolean } = {}
+    context: { expandLinks?: boolean; confluence?: ConfluenceRun } = {}
   ): Promise<ExportIssueOutcome> {
     const customFieldDefs = options.customFieldDefs ?? {};
     const resolved = resolveFieldSet(options.fieldSelector, customFieldDefs);
@@ -402,11 +650,22 @@ export class JiraExporter {
     const writeOptions = context.expandLinks
       ? { ...options, batchKeys: [...(options.batchKeys ?? []), ...linkedKeys] }
       : options;
-    writeFileSync(
-      taskMdPath,
-      buildTaskMarkdown(task, taskDir, selectedKeys, writeOptions),
-      'utf-8'
-    );
+    let markdown = buildTaskMarkdown(task, taskDir, selectedKeys, writeOptions);
+
+    // Confluence pages the issue links to are exported first so task.md can link their copies.
+    const confluence = context.confluence ?? this.confluenceRun(options);
+    if (confluence) {
+      const items: ConfluenceItem[] = [];
+      for (const ref of confluence.refsIn(markdown)) {
+        items.push(await confluence.fetch(ref, ref.url, task.key, writeOptions.batchKeys ?? []));
+      }
+      const resolve = (ref: ConfluenceRef) => confluence.resolve(ref, `../${CONFLUENCE_DIR}/`);
+      markdown = buildTaskMarkdown(task, taskDir, selectedKeys, writeOptions, {
+        section: confluenceSection(items, resolve),
+        resolve,
+      });
+    }
+    writeFileSync(taskMdPath, markdown, 'utf-8');
 
     const videos: VideoExtractionInfo[] = [];
     if (task.attachments.length > 0) {
@@ -496,7 +755,14 @@ export class JiraExporter {
   }
 
   async exportIssues(issueKeys: string[], options: ExportOptions): Promise<ExportResult> {
-    const result: ExportResult = { imported: [], updated: [], failed: [], cancelled: [] };
+    const result: ExportResult = {
+      imported: [],
+      updated: [],
+      failed: [],
+      cancelled: [],
+      confluence: [],
+    };
+    const confluence = this.confluenceRun(options);
 
     if (!existsSync(options.outputDir)) {
       mkdirSync(options.outputDir, { recursive: true });
@@ -532,7 +798,7 @@ export class JiraExporter {
         const outcome = await this.exportIssue(
           key,
           { ...options, batchKeys: [...runKeys] },
-          { expandLinks }
+          { expandLinks, confluence }
         );
         seen.add(outcome.canonicalKey.toLowerCase());
         written.push(outcome.taskMdPath);
@@ -590,6 +856,7 @@ export class JiraExporter {
       }
     }
 
+    result.confluence = confluence?.all() ?? [];
     return result;
   }
 }

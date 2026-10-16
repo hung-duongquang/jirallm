@@ -8,6 +8,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Linked Confluence pages are exported with their issues (on by default; `--no-confluence` or the
+  web UI's "Confluence pages" option turns it off). Each page an issue links to (page URLs and
+  short links) is written once to `confluence/<id>-<title>/page.md` with the images and files it
+  shows, task.md gets a `## Confluence` section, and its links point at the local copies. Pages
+  link back to locally exported issues. Whiteboard links get the whiteboard's title. Pages come
+  from the Jira site unless the org config lists `confluence_urls`. Library: `withConfluence`,
+  `confluenceSites`, `onConfluenceItem` and `result.confluence`.
+- ADF: Confluence macros render (body macros such as Page Properties as their body, whiteboard
+  embeds as links, charts and other macros as a note, table of contents dropped), media match
+  attachments by file id, and image captions are kept.
+
 - `export --include-linked` also tries to export the issues each requested issue links to (its
   issue links plus same-site Jira issue URLs in the description and comments), one level deep, so
   their links resolve locally. An inaccessible linked issue is skipped with a warning and links to

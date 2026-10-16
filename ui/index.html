@@ -194,6 +194,7 @@
         <label><input type="checkbox" data-opt="subtasks"> Subtasks</label>
         <label><input type="checkbox" data-opt="parent"> Parent issues</label>
         <label title="Also export the tickets each ticket links to (one level)"><input type="checkbox" data-opt="linked" checked> Linked issues</label>
+        <label title="Also export the Confluence pages each ticket links to (one level)"><input type="checkbox" data-opt="confluence" checked> Confluence pages</label>
         <label><input type="checkbox" data-opt="videoFrames" checked> Video frames</label>
       </div>
 
@@ -365,6 +366,7 @@ async function runExport(keys, { button, busyLabel, idleLabel, openFirst }) {
   };
   let lastDone = null, failures = 0, skipped = 0, cancelled = 0, finished = 0;
   const counts = { new: 0, changed: 0, unchanged: 0, updated: 0 };
+  const pagesByKey = {}; let pages = 0, pagesFailed = 0; // Confluence pages, shown on the ticket that linked them
   const queued = new Set(keys); // grows with linked and parent tickets the run adds
   const showCount = () => {
     if (exportRun.runId && !exportRun.cancelling) button.textContent = `Cancel (${finished}/${queued.size})`;
@@ -394,10 +396,16 @@ async function runExport(keys, { button, busyLabel, idleLabel, openFirst }) {
           cancelled = ev.keys.length;
           for (const k of ev.keys) setRow(k, 'skip', 'cancelled');
         }
+        if (ev.type === 'confluence') {
+          if (ev.status === 'failed') pagesFailed++; else if (ev.kind === 'page') pages++;
+          (pagesByKey[ev.via] ??= []).push(ev);
+        }
         if (ev.type === 'done') {
           counts[ev.status] = (counts[ev.status] ?? 0) + 1;
+          const linkedPages = (pagesByKey[ev.key] ?? []).filter((p) => p.kind === 'page' && p.status !== 'failed').length;
           setRow(ev.key, ev.status === 'unchanged' ? '' : 'ok',
-            (STATUS_TEXT[ev.status] ?? ev.status) + viaText(ev) + (ev.attachmentCount ? ` · ${ev.attachmentCount} attachment(s)` : ''));
+            (STATUS_TEXT[ev.status] ?? ev.status) + viaText(ev) + (ev.attachmentCount ? ` · ${ev.attachmentCount} attachment(s)` : '') +
+            (linkedPages ? ` · ${linkedPages} Confluence page(s)` : ''));
           if (ev.status === 'changed') {
             changedThisSession.add(ev.key);
             const li = list.querySelector(`[data-k="${ev.key}"]`);
@@ -414,6 +422,8 @@ async function runExport(keys, { button, busyLabel, idleLabel, openFirst }) {
     }
     const summary = Object.entries(counts).filter(([, n]) => n).map(([s, n]) => `${n} ${s}`);
     if (skipped) summary.push(`${skipped} linked skipped`);
+    if (pages) summary.push(`${pages} Confluence page(s)`);
+    if (pagesFailed) summary.push(`${pagesFailed} Confluence link(s) unreadable`);
     if (failures) summary.push(`${failures} failed`);
     if (cancelled) summary.push(`${cancelled} cancelled`);
     toast(summary.join(' · ') || 'Nothing exported');

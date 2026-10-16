@@ -15,6 +15,8 @@ export type LocalIssueLinkOptions = {
   selfKey?: string;
   /** Issues exported in the same run, which may not be on disk yet. */
   batchKeys?: string[];
+  /** Path from the file being written back to `outputDir`. Default: `../` (an issue bundle). */
+  pathToOutputDir?: string;
 };
 
 /**
@@ -26,6 +28,7 @@ export type LocalIssueLinkOptions = {
 export function linkLocalIssues(markdown: string, options: LocalIssueLinkOptions): string {
   const self = options.selfKey?.toUpperCase();
   const batch = new Set((options.batchKeys ?? []).map((k) => k.toUpperCase()));
+  const up = options.pathToOutputDir ?? '../';
   let looseFiles: string[] | undefined;
   const cache = new Map<string, string | undefined>();
 
@@ -34,7 +37,7 @@ export function linkLocalIssues(markdown: string, options: LocalIssueLinkOptions
     const dirName = key.toLowerCase();
     let target: string | undefined;
     if (batch.has(key) || existsSync(join(options.outputDir, dirName, 'task.md'))) {
-      target = `../${dirName}/task.md`;
+      target = `${up}${dirName}/task.md`;
     } else {
       looseFiles ??= existsSync(options.outputDir)
         ? readdirSync(options.outputDir).filter((name) => name.toLowerCase().endsWith('.md'))
@@ -45,7 +48,7 @@ export function linkLocalIssues(markdown: string, options: LocalIssueLinkOptions
       const match = looseFiles
         .filter((name) => keyPrefix.test(name))
         .sort((a, b) => a.length - b.length)[0];
-      if (match) target = `../${match.replace(/ /g, '%20')}`;
+      if (match) target = `${up}${match.replace(/ /g, '%20')}`;
     }
     cache.set(key, target);
     return target;

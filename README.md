@@ -19,6 +19,7 @@ It exists because every team that uses Jira + LLMs ends up writing the same brit
 - Renders Jira ADF descriptions and comments to clean Markdown
 - Downloads all attachments with original filenames (auth handled)
 - Extracts frames from attached videos via `ffmpeg` and deduplicates near-identical frames using `pixelmatch`
+- Exports the Confluence pages an issue links to (with the images and files they show) next to the issues, and points the links at the local copies
 - Produces an `index.md` summary per issue, ready to paste into an LLM context window
 - Works as a CLI (`jirallm`) and as a programmatic library
 - TypeScript-first, ESM, zero hidden globals
@@ -87,6 +88,9 @@ output_dir = "~/jira/widgets"
 [orgs.acme]
 base_url   = "https://acme.atlassian.net"
 user_email = "user@acme.example"
+# Confluence sites whose pages linked from issues are exported (default: the Jira site).
+# The Jira API token is sent to these sites, so list only your own.
+confluence_urls = ["https://acme-wiki.atlassian.net"]
 
 # Three projects share the same Jira instance + token
 [orgs.acme.projects.PROJ]
@@ -202,6 +206,9 @@ jirallm PROJ-123 --include-subtasks
 # Also export the parent (and its own parent, up the chain) as full bundles
 jirallm PROJ-123 --include-parent
 
+# Leave linked Confluence pages out (they are exported by default)
+jirallm PROJ-123 --no-confluence
+
 # Show all options
 jirallm --help
 ```
@@ -219,7 +226,17 @@ jira-export/
       screen-recording/
         frame-0001.jpg
         frame-0042.jpg   # only meaningfully different frames are kept
+  confluence/
+    2297398151-payable-claim/
+      page.md           # a page an issue links to (shared by every issue that links it)
+      attachments/      # only the images and files the page shows
 ```
+
+Confluence pages are exported one level deep: the pages an issue links to (page URLs, short
+`/wiki/x/…` links, and their inline links), not the pages those link to. task.md lists them in a
+`## Confluence` section and its links point at the local `page.md`. Whiteboards are listed with
+their title only, since Confluence has no API for whiteboard content. An unchanged page is not
+downloaded again.
 
 ### Programmatic
 

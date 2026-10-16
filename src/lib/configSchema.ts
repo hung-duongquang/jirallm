@@ -42,6 +42,8 @@ const orgRawSchema = z
     base_url: z.url(),
     user_email: z.email(),
     include_subtasks: z.boolean().optional(),
+    /** Confluence sites whose pages linked from issues are exported (default: the Jira site). */
+    confluence_urls: z.array(z.url()).optional(),
     video_frames: videoFramesRawSchema.optional(),
     export: exportRawSchema.optional(),
     projects: z.record(z.string(), projectRawSchema).optional(),
