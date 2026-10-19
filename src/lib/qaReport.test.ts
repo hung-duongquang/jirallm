@@ -73,4 +73,10 @@ describe('qa report', () => {
     const row = wiki.split('\n').find((l) => l.startsWith('|TC-01'))!;
     expect(row).not.toMatch(/(?<!\\)\|\|/); // empty cells stay data cells
   });
+
+  it('escapes literal braces, which wiki would read as macros', () => {
+    const wiki = reportToWiki('| ID | Expected |\n| --- | --- |\n| TC-01 | PUT series/{id} and `GET /{x}` |');
+    expect(wiki).toContain('PUT series/\\{id\\}');
+    expect(wiki).toContain('{{GET /\\{x\\}}}');
+  });
 });

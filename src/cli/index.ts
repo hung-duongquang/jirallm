@@ -46,7 +46,8 @@ import { runStart, type StartOptions } from './commands/start.js';
 import { runAgentGuide, type AgentGuideOptions } from './commands/agentGuide.js';
 import { runPage, type PageOptions } from './commands/page.js';
 import {
-  runQaInit, runQaPublish, runQaResult, type QaInitOptions, type QaPublishOptions, type QaResultOptions,
+  runQaImport, runQaInit, runQaPublish, runQaResult,
+  type QaImportOptions, type QaInitOptions, type QaPublishOptions, type QaResultOptions,
 } from './commands/qa.js';
 import { runLink, runLinkRemove } from './commands/link.js';
 import { runAttach, runAttachRemove } from './commands/attach.js';
@@ -1512,6 +1513,16 @@ qa.command('result <issue-key> <case-id> <verdict>')
   .option('--evidence <files...>', 'Screenshots, JSON responses, … for the Evidence cell')
   .action((issueKey: string, caseId: string, verdict: string, opts: QaResultOptions) => {
     try { runQaResult(issueKey, caseId, verdict, opts); } catch (err) { exitOnError(err); }
+  });
+
+qa.command('import <issue-key> <playwright-json>')
+  .description('Record a Playwright run (JSON reporter output): one case per test, matched on title, with steps, verdict and screenshots')
+  .option('--output-dir <path>', 'Export directory', './jira-export')
+  .option('--grep <regex>', 'Only tests whose describe + title match')
+  .option('--layer <text>', 'Automation Layer column, e.g. "API (Playwright)"')
+  .option('--report-dir <path>', 'Directory relative attachment paths resolve against (default: the directory of the JSON file)')
+  .action((issueKey: string, json: string, opts: QaImportOptions) => {
+    try { runQaImport(issueKey, json, opts); } catch (err) { exitOnError(err); }
   });
 
 qa.command('publish <issue-key>')

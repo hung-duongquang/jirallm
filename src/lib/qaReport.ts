@@ -220,7 +220,10 @@ export function setResult(
 
 /** Jira-wiki for Confluence's wiki→storage converter: cell line breaks and attachment images. */
 export function reportToWiki(report: string): string {
-  return markdownToWiki(report)
+  // Literal braces (e.g. "series/{id}") read as macros in wiki; park them so only the converter's own markup keeps its braces.
+  return markdownToWiki(report.replace(/\{/g, '\u0001').replace(/\}/g, '\u0002'))
+    .replace(/\u0001/g, '\\{')
+    .replace(/\u0002/g, '\\}')
     .split('\n')
     // In a data row an empty cell gives "||", which wiki reads as a header cell from there on.
     .map((line) => {

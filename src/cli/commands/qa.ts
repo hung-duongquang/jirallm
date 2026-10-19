@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadProfile } from '../../lib/config.js';
-import { qaInit, qaPublish, qaRecordResult, type PublishResult } from '../../lib/qa.js';
+import { qaImportPlaywright, qaInit, qaPublish, qaRecordResult, type PublishResult } from '../../lib/qa.js';
 import type { Verdict } from '../../lib/qaReport.js';
 import { parseIssueKey } from '../issueKey.js';
 import { resolveOrg } from '../resolveOrg.js';
@@ -17,7 +17,9 @@ export type QaInitOptions = { org?: string; outputDir?: string; env?: string; fo
 export async function runQaInit(issueKeyArg: string, opts: QaInitOptions): Promise<void> {
   const { key, profile } = await profileFor(issueKeyArg, opts.org);
   const { path: file, caseCount } = await qaInit(profile, key, { outputDir: opts.outputDir ?? './jira-export', env: opts.env, force: opts.force });
-  console.log(`✓ ${file}: ${caseCount} test case(s) from the acceptance criteria. Fill in steps, then record results with \`jirallm qa result\`.`);
+  console.log(caseCount > 0
+    ? `✓ ${file}: ${caseCount} test case(s) from the acceptance criteria. Fill in steps, then record results with \`jirallm qa result\`.`
+    : `✓ ${file}: no Scenario/Given/When/Then table in the acceptance criteria. Add cases by hand, or run the e2e tests and \`jirallm qa import\` their JSON report.`);
 }
 
 export type QaResultOptions = { outputDir?: string; note?: string; evidence?: string[] };
@@ -27,6 +29,15 @@ export function runQaResult(issueKey: string, caseId: string, verdict: string, o
   const files = (opts.evidence ?? []).map((f) => ({ name: path.basename(f), data: readFileSync(f) }));
   const { counts } = qaRecordResult(opts.outputDir ?? './jira-export', key, caseId, verdict as Verdict, { note: opts.note, files });
   console.log(`✓ ${caseId} ${verdict}. Results: ${counts.passed}/${counts.total} passed, ${counts.failed} failed.`);
+}
+
+export type QaImportOptions = { outputDir?: string; grep?: string; layer?: string; reportDir?: string };
+
+export function runQaImport(issueKey: string, json: string, opts: QaImportOptions): void {
+  const key = parseIssueKey(issueKey).key;
+  const r = qaImportPlaywright(opts.outputDir ?? './jira-export', key, json, opts);
+  const { passed, failed, blocked, total } = r.counts;
+  console.log(`✓ ${r.created.length} new, ${r.updated.length} updated case(s), ${r.evidence} screenshot(s). Results: ${passed}/${total} passed, ${failed} failed, ${blocked} blocked.`);
 }
 
 export type QaPublishOptions = {

@@ -63,7 +63,9 @@ export type {
   VideoFramesConfig,
 } from './lib/config.js';
 export { getToken, setToken, removeToken, hasStoredToken } from './lib/credentials.js';
-export { qaPaths, loadReport, saveReport, qaInit, qaRecordResult, qaPublish } from './lib/qa.js';
-export type { LoadedReport, PublishPlan, PublishResult } from './lib/qa.js';
+export { qaPaths, loadReport, saveReport, qaInit, qaRecordResult, qaPublish, qaImportPlaywright } from './lib/qa.js';
+export type { LoadedReport, PublishPlan, PublishResult, ImportSummary } from './lib/qa.js';
 export { countCases, toCell, fromCell } from './lib/qaReport.js';
+export { playwrightResults } from './lib/qaPlaywright.js';
+export type { PlaywrightReport, PlaywrightResult } from './lib/qaPlaywright.js';
 export type { QaReport, QaCase, Verdict } from './lib/qaReport.js';

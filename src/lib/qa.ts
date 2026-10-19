@@ -1,10 +1,11 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ResolvedProfile } from './config.js';
 import { ConfluenceClient } from './confluence.js';
 import { JiraClient } from './jiraClient.js';
+import { playwrightResults, type PlaywrightReport } from './qaPlaywright.js';
 import {
-  countCases, evidenceCell, newReport, parseAcceptanceScenarios, parseReport, renderReport, reportToWiki,
+  countCases, evidenceCell, fromCell, newReport, NOT_RUN, parseAcceptanceScenarios, parseReport, renderReport, reportToWiki, toCell,
   type QaReport, type Verdict,
 } from './qaReport.js';
 
@@ -96,6 +97,68 @@ export function qaRecordResult(
   target.evidence = evidenceCell(verdict, { note: opts.note, evidence });
   saveReport(outputDir, issueKey, loaded.report, loaded.page);
   return { counts: countCases(loaded.report.cases), evidence };
+}
+
+export type ImportSummary = { created: string[]; updated: string[]; counts: ReturnType<typeof countCases>; evidence: number };
+
+const isPlaceholder = (c: QaReport['cases'][number]) => !c.title && !c.steps && !c.expected && c.evidence === NOT_RUN;
+
+/**
+ * Records a Playwright run in the report: each test becomes a case (matched on its title, so a re-run
+ * updates the same case), with its steps, verdict and screenshots. Cases written by hand are kept.
+ */
+export function qaImportPlaywright(
+  outputDir: string,
+  issueKey: string,
+  playwrightJson: string,
+  opts: { grep?: string; layer?: string; reportDir?: string } = {}
+): ImportSummary {
+  const loaded = loadReport(outputDir, issueKey);
+  if (!loaded) throw new Error(`No test report for ${issueKey} yet; run qa init first.`);
+  const results = playwrightResults(JSON.parse(readFileSync(playwrightJson, 'utf8')) as PlaywrightReport,
+    opts.grep ? new RegExp(opts.grep, 'i') : undefined);
+  if (results.length === 0) throw new Error(`No tests${opts.grep ? ` matching /${opts.grep}/` : ''} in ${playwrightJson}.`);
+
+  const report = loaded.report;
+  report.cases = report.cases.filter((c) => !isPlaceholder(c));
+  const paths = qaPaths(outputDir, issueKey);
+  mkdirSync(paths.evidence, { recursive: true });
+  // Attachment paths are absolute, or relative to the directory Playwright ran in.
+  const base = opts.reportDir ?? path.dirname(path.resolve(playwrightJson));
+  const summary: ImportSummary = { created: [], updated: [], counts: countCases(report.cases), evidence: 0 };
+  let next = report.cases.reduce((max, c) => Math.max(max, Number(/\d+$/.exec(c.id)?.[0] ?? 0)), 0);
+
+  for (const r of results) {
+    let target = report.cases.find((c) => fromCell(c.title) === r.title);
+    if (!target) {
+      target = {
+        id: `TC-${String(++next).padStart(2, '0')}`, title: toCell(r.title), precondition: toCell(r.describe.join(' › ')),
+        steps: '', expected: toCell(r.annotations.join('\n')), priority: '', type: 'Functional', automation: '', coverage: '', evidence: NOT_RUN,
+      };
+      report.cases.push(target);
+      summary.created.push(target.id);
+    } else {
+      summary.updated.push(target.id);
+    }
+    if (r.steps.length > 0) target.steps = toCell(r.steps.map((s, i) => `${i + 1}. ${s}`).join('\n'));
+    target.automation = opts.layer ?? (target.automation || 'Playwright');
+    target.coverage = toCell(r.location);
+
+    // A re-run replaces this case's earlier evidence.
+    const prefix = evidenceName(issueKey, target.id, '');
+    for (const old of readdirSync(paths.evidence)) if (old.startsWith(prefix)) rmSync(path.join(paths.evidence, old));
+    const names = r.images.map((img, i) => {
+      const source = path.resolve(base, img.path);
+      const name = evidenceName(issueKey, target.id, `${r.images.length > 1 ? `${i + 1}-` : ''}${img.name}${path.extname(source)}`);
+      copyFileSync(source, path.join(paths.evidence, name));
+      return name;
+    });
+    summary.evidence += names.length;
+    target.evidence = evidenceCell(r.verdict, { note: r.note, evidence: names });
+  }
+  saveReport(outputDir, issueKey, report, loaded.page);
+  summary.counts = countCases(report.cases);
+  return summary;
 }
 
 export type PublishPlan = {
