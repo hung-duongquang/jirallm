@@ -43,6 +43,7 @@ import { runCreate } from './commands/create.js';
 import { runEdit } from './commands/edit.js';
 import { runAssign } from './commands/assign.js';
 import { runStart, type StartOptions } from './commands/start.js';
+import { runAgentGuide, type AgentGuideOptions } from './commands/agentGuide.js';
 import { runLink, runLinkRemove } from './commands/link.js';
 import { runAttach, runAttachRemove } from './commands/attach.js';
 import { runWatchers } from './commands/watchers.js';
@@ -992,6 +993,9 @@ program
     `How an opt-in \`description\` is rendered in JSON rows: ${DESCRIPTION_FORMATS.join('|')} (default: ${DEFAULT_DESCRIPTION_FORMAT}); \`adf\`/\`both\` expose the raw ADF under \`descriptionAdf\``
   )
   .option('--json', 'Output JSON instead of human-readable')
+  .option('--format <format>', 'json | text | tsv (tsv = header + one line per issue; compact for LLMs). Default: json when piped, text on a TTY')
+  .option('--all', 'Follow the cursor and return every page (up to --max)')
+  .option('--max <n>', 'Row cap for --all (default 1000)')
   .action(async (jql: string, opts: Omit<import('./commands/search.js').SearchOptions, 'jql'>) => {
     try {
       const { nextPageToken, ...rest } = opts;
@@ -1482,6 +1486,14 @@ Examples:
 is also given; otherwise the files are uploaded and the description is left alone.
 `
   );
+
+program
+  .command('agent-guide')
+  .description('Print a guide for LLM agents (which command answers what, compact outputs, write safety); --install writes it as a Claude Code skill')
+  .option('--install [dir]', 'Write it to <dir>/.claude/skills/jirallm/SKILL.md (default: current directory)')
+  .action((opts: AgentGuideOptions) => {
+    try { runAgentGuide(opts); } catch (err) { exitOnError(err); }
+  });
 
 program
   .command('start <issue-key>')

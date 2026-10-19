@@ -32,7 +32,41 @@ export type SearchOptions = {
   fields?: string;
   descriptionFormat?: string;
   json?: boolean;
+  format?: string;
+  all?: boolean;
+  max?: string;
 };
+
+const OUTPUT_FORMATS = ['json', 'text', 'tsv'] as const;
+type OutputFormat = (typeof OUTPUT_FORMATS)[number];
+
+function resolveOutputFormat(opts: SearchOptions): OutputFormat {
+  if (opts.format === undefined) return shouldOutputJson(opts) ? 'json' : 'text';
+  if (!(OUTPUT_FORMATS as readonly string[]).includes(opts.format)) {
+    throw new Error(`Unknown --format "${opts.format}". Use one of: ${OUTPUT_FORMATS.join(', ')}.`);
+  }
+  return opts.format as OutputFormat;
+}
+
+/** One TSV cell: objects collapse to their most human identifier, so a row stays one line. */
+export function tsvCell(value: unknown): string {
+  if (value === undefined || value === null) return '';
+  if (Array.isArray(value)) return value.map(tsvCell).filter(Boolean).join(', ');
+  if (typeof value === 'object') {
+    const o = value as Record<string, unknown>;
+    const id = o.key ?? o.name ?? o.displayName ?? o.value;
+    return id !== undefined ? tsvCell(id) : JSON.stringify(value);
+  }
+  return String(value).replace(/[\t\r\n]+/g, ' ').trim();
+}
+
+export function toTsv(rows: readonly SearchRow[]): string {
+  const columns: string[] = [];
+  for (const row of rows) {
+    for (const k of Object.keys(row)) if (!columns.includes(k) && k !== DESCRIPTION_ADF_KEY) columns.push(k);
+  }
+  return [columns.join('\t'), ...rows.map((r) => columns.map((c) => tsvCell(r[c])).join('\t'))].join('\n');
+}
 
 export type SearchRow = Partial<Omit<JiraTaskData, 'key' | 'title'>> & {
   key: string;
@@ -428,25 +462,38 @@ export async function runSearch(opts: SearchOptions): Promise<void> {
     friendlyKeys.includes(DESCRIPTION_KEY) && !descriptionIsOverridden(customFieldDefs);
   const ctx = await resolveProjectionContext(client, friendlyKeys, customFieldDefs);
   const limit = opts.limit ? parseInt(opts.limit, 10) : 50;
+  const max = opts.max ? parseInt(opts.max, 10) : 1000;
+  const format = resolveOutputFormat(opts);
+  const fields = withAttachmentField(withDiscoveredIds(jiraFieldIds, friendlyKeys, ctx), rendersDescription);
 
-  const page = await client.searchIssues(opts.jql, {
-    fields: withAttachmentField(
-      withDiscoveredIds(jiraFieldIds, friendlyKeys, ctx),
-      rendersDescription
-    ),
+  const issues: Awaited<ReturnType<JiraClient['searchIssues']>>['issues'] = [];
+  let page = await client.searchIssues(opts.jql, {
+    fields,
     limit,
     nextPageToken: opts.nextPageToken || opts.cursor,
   });
+  issues.push(...page.issues);
+  while (opts.all && !page.isLast && page.nextPageToken && issues.length < max) {
+    page = await client.searchIssues(opts.jql, { fields, limit, nextPageToken: page.nextPageToken });
+    issues.push(...page.issues);
+  }
 
-  const rows = page.issues.map((issue) =>
+  const rows = issues.slice(0, opts.all ? max : undefined).map((issue) =>
     buildRow(
       { key: issue.key, fields: issue.fields as Record<string, unknown> },
       { friendlyKeys, ctx, descriptionFormat, rendersDescription }
     )
   );
 
-  if (shouldOutputJson(opts)) {
+  if (format === 'json') {
     printJson({ issues: rows, nextPageToken: page.nextPageToken, isLast: page.isLast });
+    return;
+  }
+  if (format === 'tsv') {
+    if (rows.length > 0) console.log(toTsv(rows));
+    if (!page.isLast && page.nextPageToken) {
+      console.error(`# more results: --cursor ${page.nextPageToken}${opts.all ? ` (stopped at --max ${max})` : ' or --all'}`);
+    }
     return;
   }
 
