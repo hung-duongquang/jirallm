@@ -42,6 +42,7 @@ import { runFetch } from './commands/fetch.js';
 import { runCreate } from './commands/create.js';
 import { runEdit } from './commands/edit.js';
 import { runAssign } from './commands/assign.js';
+import { runStart, type StartOptions } from './commands/start.js';
 import { runLink, runLinkRemove } from './commands/link.js';
 import { runAttach, runAttachRemove } from './commands/attach.js';
 import { runWatchers } from './commands/watchers.js';
@@ -1480,6 +1481,35 @@ Examples:
 --attach / --attach-images only rewrite the description when --description/--description-file
 is also given; otherwise the files are uploaded and the description is left alone.
 `
+  );
+
+program
+  .command('start <issue-key>')
+  .description('Start work on an issue: export it, create a branch + git worktree, assign it to you and move it to In Progress.')
+  .option('-o, --org <name>', 'Organization name override')
+  .option('--repo <path>', 'Git repository to create the worktree in (omit to only print the branch name)')
+  .option('--worktree-root <path>', 'Folder that holds worktrees (default: $JIRALLM_WORKTREE_ROOT, else <repo>-worktrees)')
+  .option('--base <ref>', 'Start point of the branch', 'origin/main')
+  .option('--type <prefix>', 'Branch prefix, e.g. feature or bugfix', 'feature')
+  .option('--slug <slug>', 'Branch slug (default: derived from the summary)')
+  .option('--status <name>', 'Status to transition to', 'In Progress')
+  .option('--output-dir <path>', 'Export directory', './jira-export')
+  .option('--no-export', 'Skip the export')
+  .option('--no-assign', 'Do not assign the issue to you')
+  .option('--no-transition', 'Do not transition the issue')
+  .option('--dry-run', 'Print the plan without changing anything')
+  .action(async (issueKey: string, opts: StartOptions) => {
+    try { await runStart(issueKey, opts); } catch (err) { exitOnError(err); }
+  })
+  .addHelpText(
+    'after',
+    `
+Git runs before the Jira changes, so a failed worktree leaves the issue untouched.
+
+Examples:
+  $ jirallm start ZOD-1234 --repo ./zorgdeclaraties --worktree-root C:/w
+  $ jirallm start ZOD-1234 --repo ./zorgdeclaraties --type bugfix --dry-run
+  $ jirallm start ZOD-1234 --no-export --no-transition`,
   );
 
 program
