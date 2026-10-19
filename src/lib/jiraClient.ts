@@ -1353,6 +1353,22 @@ export class JiraClient {
     return [...seen.values()];
   }
 
+  /** URLs of the issue's remote links: the "Confluence content" panel and other web links. */
+  async getRemoteLinkUrls(issueKey: string): Promise<string[]> {
+    const links = await this.makeRequest<Array<{ object?: { url?: string } }>>(
+      `/issue/${issueKey}/remotelink`
+    );
+    return links.flatMap((l) => (l.object?.url ? [l.object.url] : []));
+  }
+
+  /** Adds (or, for the same URL, updates) a web link shown under the issue's links. */
+  async addRemoteLink(issueKey: string, url: string, title: string): Promise<void> {
+    await this.makeRequest(`/issue/${issueKey}/remotelink`, {
+      method: 'POST',
+      body: JSON.stringify({ globalId: url, object: { url, title } }),
+    });
+  }
+
   async getIssueTransitions(issueKey: string): Promise<JiraTransition[]> {
     const response = await this.makeRequest<{ transitions: JiraTransition[] }>(
       `/issue/${issueKey}/transitions`

@@ -21,6 +21,7 @@ Output switches to JSON when stdout is piped. Prefer the compact forms below: th
 | Full ticket as markdown (description, AC, comments, attachments, linked Confluence pages) | \`jirallm PROJ-1 --no-status-changes --output-dir ./jira-export\` then read \`jira-export/proj-1/task.md\` |
 | Ticket plus its parent chain / linked issues | add \`--include-parent\` / \`--include-linked\` |
 | Quick look, no files | \`jirallm fetch PROJ-1\` |
+| One Confluence page by URL (e.g. a test report) | \`jirallm page <url>\` → \`jira-export/confluence/<id>-<slug>/page.md\` |
 | List issues (compact) | \`jirallm search --org <org> '<JQL>' --fields key,summary,status,assignee --format tsv --all\` |
 | Active sprint, by status | JQL \`project = PROJ AND sprint in openSprints() AND status = "To Do"\` |
 | A board **column** (columns are not statuses) | \`jirallm boards --org <org>\` → \`jirallm board:issues --help\` |
@@ -39,6 +40,12 @@ Search tips: \`--fields\` takes friendly names (\`key,summary,status,assignee,sp
 | Transition | \`jirallm transition PROJ-1 --to "Code Review"\` (positional status is an error) |
 | Comment | \`jirallm comment PROJ-1 --help\` (markdown is converted) |
 | Log work | \`jirallm worklog PROJ-1 "1h 30m"\` |
+
+## Testing a ticket (tester workflow)
+
+1. \`jirallm PROJ-1 --no-status-changes\`, then \`jirallm qa init PROJ-1 --env <url>\`: writes \`jira-export/proj-1/test-report.md\` with one test case (TC-01…) per acceptance-criteria scenario. Edit it to add steps, expected results and preconditions. Keep the table shape.
+2. After running each case: \`jirallm qa result PROJ-1 TC-03 pass|fail|blocked --note "<observed>" --evidence shot.png resp.json\`. Evidence is copied next to the report and the Results line is recounted.
+3. \`jirallm qa publish PROJ-1 --space <KEY> [--parent <pageId>] --dry-run\`, then run it without \`--dry-run\` (a **write**). It creates the page, or updates it on later runs, uploads the evidence and links the page from the issue.
 
 Every write command accepts \`--dry-run\`: use it when unsure. \`start\` runs git before touching Jira, so a failed worktree leaves the issue unchanged.
 

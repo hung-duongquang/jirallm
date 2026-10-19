@@ -59,6 +59,69 @@ export class ConfluenceClient {
     return response.json() as Promise<T>;
   }
 
+  private async send<T>(method: string, path: string, body: unknown): Promise<T> {
+    const response = await requestWithRedirectPolicy(
+      `${this.wiki}${path}`,
+      {
+        method,
+        headers: { Authorization: this.authHeader, Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      },
+      this.redirects
+    );
+    if (!response.ok) throw await JiraApiError.fromResponse(response, 'Confluence API request failed');
+    return response.json() as Promise<T>;
+  }
+
+  /** Server-side conversion, so tables, images and links render as Confluence's own markup. */
+  async wikiToStorage(wiki: string): Promise<string> {
+    const res = await this.send<{ value: string }>('POST', '/rest/api/contentbody/convert/storage', {
+      value: wiki,
+      representation: 'wiki',
+    });
+    return res.value;
+  }
+
+  /** Creates the page, or updates it (next version) when `pageId` is given. Returns id + web URL. */
+  async savePage(page: {
+    pageId?: string;
+    spaceKey: string;
+    parentId?: string;
+    title: string;
+    storage: string;
+  }): Promise<{ id: string; url: string; version: number }> {
+    const body = { type: 'page', title: page.title, body: { storage: { value: page.storage, representation: 'storage' } } };
+    type Saved = { id: string; version: { number: number }; _links: { base: string; webui: string } };
+    let saved: Saved;
+    if (page.pageId) {
+      const current = await this.getJson<{ version: { number: number } }>(`/rest/api/content/${page.pageId}`);
+      saved = await this.send<Saved>('PUT', `/rest/api/content/${page.pageId}`, {
+        ...body,
+        version: { number: current.version.number + 1 },
+      });
+    } else {
+      saved = await this.send<Saved>('POST', '/rest/api/content', {
+        ...body,
+        space: { key: page.spaceKey },
+        ...(page.parentId ? { ancestors: [{ id: page.parentId }] } : {}),
+      });
+    }
+    return { id: saved.id, url: `${saved._links.base}${saved._links.webui}`, version: saved.version.number };
+  }
+
+  /** Uploads a file; a file with the same name becomes a new version of that attachment. */
+  async uploadAttachment(pageId: string, filename: string, data: Buffer): Promise<void> {
+    const form = new FormData();
+    form.append('file', new Blob([new Uint8Array(data)]), filename);
+    form.append('minorEdit', 'true');
+    const response = await requestWithRedirectPolicy(
+      `${this.wiki}/rest/api/content/${pageId}/child/attachment`,
+      { method: 'PUT', headers: { Authorization: this.authHeader, 'X-Atlassian-Token': 'no-check' }, body: form },
+      this.redirects
+    );
+    if (!response.ok) throw await JiraApiError.fromResponse(response, 'Confluence attachment upload failed');
+  }
+
   async getPage(id: string): Promise<ConfluencePage> {
     const page = await this.getJson<{
       id: string;

@@ -44,6 +44,10 @@ import { runEdit } from './commands/edit.js';
 import { runAssign } from './commands/assign.js';
 import { runStart, type StartOptions } from './commands/start.js';
 import { runAgentGuide, type AgentGuideOptions } from './commands/agentGuide.js';
+import { runPage, type PageOptions } from './commands/page.js';
+import {
+  runQaInit, runQaPublish, runQaResult, type QaInitOptions, type QaPublishOptions, type QaResultOptions,
+} from './commands/qa.js';
 import { runLink, runLinkRemove } from './commands/link.js';
 import { runAttach, runAttachRemove } from './commands/attach.js';
 import { runWatchers } from './commands/watchers.js';
@@ -1486,6 +1490,51 @@ Examples:
 is also given; otherwise the files are uploaded and the description is left alone.
 `
   );
+
+const qa = program
+  .command('qa')
+  .description('Tester workflow: draft a test report from the acceptance criteria, record pass/fail with evidence, publish it to Confluence');
+
+qa.command('init <issue-key>')
+  .description('Create <output-dir>/<key>/test-report.md with one test case per acceptance-criteria scenario (needs a prior export)')
+  .option('-o, --org <name>', 'Organization name override')
+  .option('--output-dir <path>', 'Export directory', './jira-export')
+  .option('--env <url>', 'Environment the tests run against (shown in the header)')
+  .option('--force', 'Overwrite an existing report')
+  .action(async (issueKey: string, opts: QaInitOptions) => {
+    try { await runQaInit(issueKey, opts); } catch (err) { exitOnError(err); }
+  });
+
+qa.command('result <issue-key> <case-id> <verdict>')
+  .description('Record pass | fail | blocked for a test case, with optional note and evidence files (copied next to the report)')
+  .option('--output-dir <path>', 'Export directory', './jira-export')
+  .option('--note <text>', 'What was observed')
+  .option('--evidence <files...>', 'Screenshots, JSON responses, … for the Evidence cell')
+  .action((issueKey: string, caseId: string, verdict: string, opts: QaResultOptions) => {
+    try { runQaResult(issueKey, caseId, verdict, opts); } catch (err) { exitOnError(err); }
+  });
+
+qa.command('publish <issue-key>')
+  .description('Create or update the Confluence page from the report, upload evidence, and link it from the issue')
+  .option('-o, --org <name>', 'Organization name override')
+  .option('--output-dir <path>', 'Export directory', './jira-export')
+  .option('--space <key>', 'Confluence space for the first publish (e.g. ZOD)')
+  .option('--parent <pageId>', 'Parent page for the first publish')
+  .option('--site <url>', 'Confluence site (default: first confluence_urls entry)')
+  .option('--no-link', 'Do not add the page to the issue\'s links')
+  .option('--dry-run', 'Print what would be published')
+  .action(async (issueKey: string, opts: QaPublishOptions) => {
+    try { await runQaPublish(issueKey, opts); } catch (err) { exitOnError(err); }
+  });
+
+program
+  .command('page <url>')
+  .description('Export one Confluence page by URL to <output-dir>/confluence/<id>-<slug>/page.md')
+  .option('-o, --org <name>', 'Organization whose credentials and sites to use')
+  .option('--output-dir <path>', 'Export directory', './jira-export')
+  .action(async (url: string, opts: PageOptions) => {
+    try { await runPage(url, opts); } catch (err) { exitOnError(err); }
+  });
 
 program
   .command('agent-guide')

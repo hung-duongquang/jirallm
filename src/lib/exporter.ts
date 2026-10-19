@@ -656,7 +656,12 @@ export class JiraExporter {
     const confluence = context.confluence ?? this.confluenceRun(options);
     if (confluence) {
       const items: ConfluenceItem[] = [];
-      for (const ref of confluence.refsIn(markdown)) {
+      // Pages attached through the issue's "Confluence content" panel (e.g. test reports) are
+      // remote links, not text in the description.
+      const remoteUrls = await Promise.resolve()
+        .then(() => this.client.getRemoteLinkUrls(task.key))
+        .catch(() => [] as string[]);
+      for (const ref of confluence.refsIn([markdown, ...remoteUrls].join('\n'))) {
         items.push(await confluence.fetch(ref, ref.url, task.key, writeOptions.batchKeys ?? []));
       }
       const resolve = (ref: ConfluenceRef) => confluence.resolve(ref, `../${CONFLUENCE_DIR}/`);
