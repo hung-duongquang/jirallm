@@ -24,6 +24,33 @@
       --shadow: none;
     }
   }
+  /* ---- test report ---- */
+  .qa-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; position: sticky; top: 0; z-index: 1;
+    background: var(--surface); padding: 10px 0; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+  .qa-bar .count { font-weight: 600; }
+  .pill { font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); white-space: nowrap; }
+  .pill.pass { color: var(--ok); border-color: var(--ok); }
+  .pill.fail { color: var(--err); border-color: var(--err); }
+  .pill.blocked { color: var(--warn); border-color: var(--warn); }
+  .qa-grid { display: grid; grid-template-columns: 140px 1fr; gap: 6px 10px; align-items: start; margin-bottom: 12px; }
+  .qa-grid label { color: var(--muted); font-size: 12px; padding-top: 6px; }
+  .qa-case { border: 1px solid var(--border); border-radius: var(--radius); margin: 0 0 10px; background: var(--surface); }
+  .qa-case > summary { list-style: none; cursor: pointer; display: flex; gap: 10px; align-items: center; padding: 8px 12px; }
+  .qa-case > summary::-webkit-details-marker { display: none; }
+  .qa-case .cid { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--muted); min-width: 48px; }
+  .qa-case .ctitle { flex: 1; }
+  .qa-case .body { padding: 4px 12px 12px; border-top: 1px solid var(--border); }
+  .qa-case textarea { min-height: 52px; font-family: inherit; font-size: 13px; }
+  .qa-case .meta { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .evidence { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-start; margin: 6px 0; }
+  .evidence img { max-width: 220px; max-height: 140px; border: 1px solid var(--border); border-radius: 6px; cursor: zoom-in; }
+  .evidence .verdict-text { flex-basis: 100%; font-size: 13px; }
+  .verdict { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+  .verdict input[type=text] { flex: 1; min-width: 180px; }
+  .verdict button.pass { color: var(--ok); } .verdict button.fail { color: var(--err); } .verdict button.blocked { color: var(--warn); }
+  .drop { border: 1px dashed var(--border); border-radius: 6px; padding: 6px 10px; color: var(--muted); font-size: 12px; cursor: pointer; }
+  .drop.over { border-color: var(--accent); color: var(--accent); }
+  .qa-publish { border-top: 1px solid var(--border); margin-top: 16px; padding-top: 12px; }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
   body { margin: 0; background: var(--bg); color: var(--text);
@@ -221,6 +248,7 @@
         <button data-view="rendered" aria-pressed="true">Rendered</button>
         <button data-view="source" aria-pressed="false">Markdown</button>
         <button data-view="diff" aria-pressed="false" id="viewDiff" hidden>Diff</button>
+        <button data-view="qa" aria-pressed="false" title="Test cases, pass/fail with evidence, publish to Confluence">Test report</button>
       </div>
       <button id="copy">Copy</button>
       <button id="openTask">Open folder</button>
@@ -590,6 +618,7 @@ function renderPreview() {
   if (currentDiff) $('viewDiff').innerHTML = `Diff <span class="plus">+${currentDiff.added}</span> <span class="minus">−${currentDiff.removed}</span>`;
   for (const b of document.querySelectorAll('.seg button')) b.setAttribute('aria-pressed', String(b.dataset.view === view));
   $('previewBody').scrollTop = 0;
+  if (view === 'qa') { renderQa(); return; }
   if (view === 'diff') { $('previewBody').innerHTML = renderDiff(currentDiff); return; }
   if (view === 'source') { $('previewBody').innerHTML = `<pre class="source">${esc(currentMarkdown)}</pre>`; return; }
   const meta = fm.length ? `<dl class="fm">${fm.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${renderFmValue(v)}</dd>`).join('')}</dl>` : '';
@@ -620,6 +649,191 @@ function renderDiff(diff) {
 $('copy').onclick = async () => { try { await navigator.clipboard.writeText(currentMarkdown); toast('Markdown copied'); } catch { toast('Copy failed'); } };
 $('openTask').onclick = () => api('/api/open', { dir: outDir(), key: current }).catch((e) => toast(e.message));
 $('openRoot').onclick = () => api('/api/open', { dir: outDir() }).catch((e) => toast(e.message));
+
+// ---- test report (tester workflow: same files and rules as `jirallm qa …`) ----
+let qa = null; // { key, report, page, counts, dirty }
+const qaQuery = (extra = '') => `key=${encodeURIComponent(current)}&dir=${encodeURIComponent(outDir())}${extra}`;
+const fromCell = (c) => String(c ?? '').replace(/<br\s*\/?>/g, '\n').replace(/\\\|/g, '|');
+const toCell = (t) => String(t ?? '').replace(/\r?\n/g, '<br/>').replace(/(?<!\\)\|/g, '\\|').trim();
+const CASE_FIELDS = [['title', 'Title'], ['precondition', 'Precondition'], ['steps', 'Steps'], ['expected', 'Expected result']];
+const META_FIELDS = [['priority', 'Priority'], ['type', 'Type'], ['automation', 'Automation layer'], ['coverage', 'Dev test coverage']];
+function caseStatus(c) {
+  if (/\bPASSED\b/.test(c.evidence)) return ['pass', 'Passed'];
+  if (/\bFAILED\b/.test(c.evidence)) return ['fail', 'Failed'];
+  if (/\bBLOCKED\b/.test(c.evidence)) return ['blocked', 'Blocked'];
+  return ['', 'Not run'];
+}
+function countLocal(cases) {
+  const n = (s) => cases.filter((c) => caseStatus(c)[0] === s).length;
+  return { passed: n('pass'), failed: n('fail'), blocked: n('blocked'), total: cases.length };
+}
+/** The Evidence cell as HTML, with attachments/<file> served by the helper. */
+function evidenceHtml(cell) {
+  const md = fromCell(cell).replace(/\]\(attachments\/([\w.-]+)\)/g, (_, f) => `](${apiBase()}/api/qa/evidence?${qaQuery(`&file=${encodeURIComponent(f)}`)})`);
+  return DOMPurify.sanitize(marked.parseInline(md.replace(/\n/g, '  \n')));
+}
+
+async function renderQa() {
+  const body = $('previewBody');
+  if (!qa || qa.key !== current) {
+    body.innerHTML = '<div class="empty">Loading test report…</div>';
+    try {
+      const data = await api(`/api/qa?${qaQuery()}`);
+      qa = data.exists ? { key: current, report: data.report, page: data.page, dirty: false } : { key: current, missing: data };
+    } catch (err) { body.innerHTML = `<div class="empty">${esc(err.message)}</div>`; return; }
+  }
+  if (view !== 'qa') return;
+  if (qa.missing) {
+    body.innerHTML = `<div class="empty">
+      <p>No test report for ${esc(current)} yet.</p>
+      <p class="hint">One test case is drafted per acceptance-criteria scenario of the ticket. You can edit everything afterwards.</p>
+      <div class="row" style="max-width:520px;margin:12px auto;gap:6px">
+        <input type="text" id="qaEnv" placeholder="Environment, e.g. https://feature8.zorgdeclaraties.viplive.nl" value="${esc(store.get('qaEnv', ''))}">
+        <button class="primary" id="qaInit">Create test report</button>
+      </div></div>`;
+    $('qaInit').onclick = async () => {
+      store.set('qaEnv', $('qaEnv').value.trim());
+      try {
+        const r = await api('/api/qa/init', { key: current, dir: outDir(), env: $('qaEnv').value.trim() });
+        toast(`${r.caseCount} test case(s) drafted`); qa = null; renderQa();
+      } catch (err) { toast(err.message); }
+    };
+    return;
+  }
+  const { report, page } = qa;
+  const counts = countLocal(report.cases);
+  const notRun = counts.total - counts.passed - counts.failed - counts.blocked;
+  const header = report.header.map((h, i) => `<label>${esc(h.label)}</label>
+      <input type="text" data-h="${i}" value="${esc(fromCell(h.value))}">`).join('');
+  const cases = report.cases.map((c, i) => {
+    const [cls, label] = caseStatus(c);
+    return `<details class="qa-case" data-i="${i}" ${qa.open === i ? 'open' : ''}>
+      <summary><span class="cid">${esc(c.id)}</span><span class="ctitle">${esc(fromCell(c.title)) || '<span class="hint">Untitled</span>'}</span>
+        <span class="pill ${cls}">${label}</span></summary>
+      <div class="body">
+        <div class="qa-grid">${CASE_FIELDS.map(([f, l]) => `<label>${l}</label><textarea data-f="${f}">${esc(fromCell(c[f]))}</textarea>`).join('')}</div>
+        <div class="meta">${META_FIELDS.map(([f, l]) => `<input type="text" data-f="${f}" placeholder="${l}" title="${l}" value="${esc(fromCell(c[f]))}">`).join('')}</div>
+        <div class="evidence">${c.evidence && c.evidence !== 'NOT RUN' ? `<div class="verdict-text">${evidenceHtml(c.evidence)}</div>` : ''}</div>
+        <div class="verdict">
+          <input type="text" class="note" placeholder="What did you observe?">
+          <label class="drop" title="Pick, drop or paste screenshots / JSON">📎 <span class="files">Evidence</span><input type="file" multiple hidden></label>
+          <button class="pass" data-v="pass">Pass</button><button class="fail" data-v="fail">Fail</button><button class="blocked" data-v="blocked">Blocked</button>
+        </div>
+      </div></details>`;
+  }).join('');
+  body.innerHTML = `
+    <div class="qa-bar">
+      <span class="count">${counts.passed}/${counts.total} passed</span>
+      ${counts.failed ? `<span class="pill fail">${counts.failed} failed</span>` : ''}
+      ${counts.blocked ? `<span class="pill blocked">${counts.blocked} blocked</span>` : ''}
+      ${notRun ? `<span class="pill">${notRun} not run</span>` : ''}
+      ${page ? `<span class="hint">Published (page ${esc(page.pageId)})</span>` : ''}
+      <span style="flex:1"></span>
+      <button id="qaAdd">Add case</button>
+      <button class="primary" id="qaSave" ${qa.dirty ? '' : 'disabled'}>Save</button>
+    </div>
+    <div class="qa-grid">${header}<label>Precondition</label><textarea id="qaPre">${esc(report.precondition)}</textarea></div>
+    ${cases}
+    <div class="qa-publish">
+      <h3 style="margin:0 0 8px">Publish to Confluence</h3>
+      <div class="row" style="gap:6px;flex-wrap:wrap">
+        ${page ? '' : `<input type="text" id="qaSpace" placeholder="Space key, e.g. ZOD" style="max-width:160px" value="${esc(store.get('qaSpace', 'ZOD'))}">
+        <input type="text" id="qaParent" placeholder="Parent page id (optional)" style="max-width:220px" value="${esc(store.get('qaParent', ''))}">`}
+        <label class="hint"><input type="checkbox" id="qaLink" checked> Link the page from ${esc(current)}</label>
+        <button id="qaPreview">Preview</button>
+        <button class="primary" id="qaPublish">${page ? 'Update page' : 'Publish'}</button>
+      </div>
+      <p class="hint" id="qaPlan"></p>
+    </div>`;
+  wireQa();
+}
+
+function markDirty() { qa.dirty = true; const b = $('qaSave'); if (b) b.disabled = false; }
+function collectQa() {
+  const body = $('previewBody');
+  for (const input of body.querySelectorAll('[data-h]')) qa.report.header[input.dataset.h].value = toCell(input.value);
+  const pre = $('qaPre'); if (pre) qa.report.precondition = pre.value;
+  for (const card of body.querySelectorAll('.qa-case')) {
+    const c = qa.report.cases[card.dataset.i];
+    for (const el of card.querySelectorAll('[data-f]')) c[el.dataset.f] = toCell(el.value);
+  }
+}
+async function saveQa({ quiet = false } = {}) {
+  collectQa();
+  await api('/api/qa/save', { key: current, dir: outDir(), report: qa.report });
+  qa.dirty = false;
+  if (!quiet) { toast('Test report saved'); renderQa(); }
+}
+const readAsBase64 = (file) => new Promise((ok, fail) => {
+  const r = new FileReader();
+  r.onload = () => ok(String(r.result).split(',')[1] ?? '');
+  r.onerror = () => fail(r.error);
+  r.readAsDataURL(file);
+});
+
+function wireQa() {
+  const body = $('previewBody');
+  body.querySelectorAll('input, textarea').forEach((el) => {
+    if (!el.closest('.verdict') && !el.closest('.qa-publish')) el.addEventListener('input', markDirty);
+  });
+  body.querySelectorAll('.qa-case').forEach((card) => {
+    card.addEventListener('toggle', () => { if (card.open) qa.open = Number(card.dataset.i); });
+    const picked = [];
+    const drop = card.querySelector('.drop'), fileInput = drop.querySelector('input'), label = drop.querySelector('.files');
+    const add = (files) => { picked.push(...files); label.textContent = picked.length ? picked.map((f) => f.name).join(', ') : 'Evidence'; };
+    fileInput.onchange = () => add([...fileInput.files]);
+    drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
+    drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+    drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); add([...e.dataTransfer.files]); });
+    // Paste a screenshot straight into the case.
+    card.addEventListener('paste', (e) => {
+      const images = [...e.clipboardData.files].filter((f) => f.type.startsWith('image/'));
+      if (!images.length) return;
+      e.preventDefault();
+      add(images.map((f, n) => new File([f], `screenshot-${Date.now()}-${n}.png`, { type: f.type })));
+    });
+    card.querySelectorAll('.verdict button[data-v]').forEach((btn) => btn.onclick = async () => {
+      try {
+        if (qa.dirty) await saveQa({ quiet: true });
+        const files = await Promise.all(picked.map(async (f) => ({ name: f.name, data: await readAsBase64(f) })));
+        const c = qa.report.cases[card.dataset.i];
+        await api('/api/qa/result', { key: current, dir: outDir(), caseId: c.id, verdict: btn.dataset.v, note: card.querySelector('.note').value.trim(), files });
+        toast(`${c.id} ${btn.dataset.v}`);
+        qa.open = Number(card.dataset.i) + 1 < qa.report.cases.length ? Number(card.dataset.i) + 1 : undefined;
+        qa.key = null; renderQa();
+      } catch (err) { toast(err.message); }
+    });
+  });
+  body.querySelectorAll('.evidence img').forEach((img) => img.onclick = () => window.open(img.src, '_blank', 'noopener'));
+  $('qaSave').onclick = () => saveQa().catch((e) => toast(e.message));
+  $('qaAdd').onclick = () => {
+    collectQa();
+    const next = Math.max(0, ...qa.report.cases.map((c) => Number((c.id.match(/\d+/) || [0])[0]))) + 1;
+    qa.report.cases.push({ id: `TC-${String(next).padStart(2, '0')}`, title: '', precondition: '', steps: '', expected: '',
+      priority: '', type: 'Functional', automation: '', coverage: '', evidence: 'NOT RUN' });
+    qa.open = qa.report.cases.length - 1; qa.dirty = true; renderQa();
+  };
+  const publish = async (dryRun) => {
+    try {
+      if (qa.dirty) await saveQa({ quiet: true });
+      const space = $('qaSpace')?.value.trim(), parent = $('qaParent')?.value.trim();
+      if (space !== undefined) { store.set('qaSpace', space); store.set('qaParent', parent ?? ''); }
+      const args = { key: current, dir: outDir(), space, parent, link: $('qaLink').checked };
+      const plan = await api('/api/qa/publish', { ...args, dryRun: true });
+      const what = plan.action === 'update' ? `update page ${plan.pageId}` : `create “${plan.title}” in space ${plan.space}`;
+      const summary = `${what} on ${plan.site}: ${plan.counts.passed}/${plan.counts.total} passed, ${plan.counts.failed} failed, ${plan.evidenceFiles.length} evidence file(s)${plan.link ? `, linked from ${current}` : ''}.`;
+      $('qaPlan').textContent = `Would ${summary}`;
+      if (dryRun) return;
+      if (!confirm(`This will ${summary}\n\nContinue?`)) return;
+      const done = await api('/api/qa/publish', args);
+      $('qaPlan').innerHTML = `Published: <a href="${esc(done.url)}" target="_blank" rel="noopener">${esc(done.url)}</a> (v${done.version})`;
+      qa.page = { site: done.site, pageId: done.pageId };
+      toast('Published to Confluence');
+    } catch (err) { $('qaPlan').textContent = err.message; }
+  };
+  $('qaPreview').onclick = () => publish(true);
+  $('qaPublish').onclick = () => publish(false);
+}
 
 // ---- setup guide (shown until the helper answers) ----
 function code(cmd) {

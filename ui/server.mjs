@@ -398,6 +398,88 @@ async function handle(req, res) {
         sendJson(res, 200, { ok: true });
         return;
       }
+      case 'GET /api/qa': {
+        const outputDir = resolveOutputDir(url.searchParams.get('dir'));
+        const key = url.searchParams.get('key');
+        taskDirFor(outputDir, key);
+        const loaded = lib.loadReport(outputDir, key.toUpperCase());
+        sendJson(res, 200, loaded
+          ? { exists: true, ...loaded, counts: lib.countCases(loaded.report.cases) }
+          : { exists: false, exported: existsSync(lib.qaPaths(outputDir, key).taskMd) });
+        return;
+      }
+      case 'POST /api/qa/init': {
+        const body = await readJsonBody(req);
+        const outputDir = resolveOutputDir(body.dir);
+        taskDirFor(outputDir, body.key);
+        const result = await lib.qaInit(await profile(), String(body.key).toUpperCase(), {
+          outputDir, env: body.env ? String(body.env) : undefined, force: body.force === true,
+        }).catch((err) => { throw new HttpError(400, err.message); });
+        sendJson(res, 200, result);
+        return;
+      }
+      case 'POST /api/qa/save': {
+        const body = await readJsonBody(req);
+        const outputDir = resolveOutputDir(body.dir);
+        taskDirFor(outputDir, body.key);
+        const key = String(body.key).toUpperCase();
+        const report = body.report;
+        if (!report || typeof report.title !== 'string' || !Array.isArray(report.cases) || !Array.isArray(report.header)) {
+          throw new HttpError(400, 'Invalid report');
+        }
+        const existing = lib.loadReport(outputDir, key);
+        lib.saveReport(outputDir, key, report, existing?.page);
+        sendJson(res, 200, { ok: true, counts: lib.countCases(report.cases) });
+        return;
+      }
+      case 'POST /api/qa/result': {
+        const body = await readJsonBody(req);
+        const outputDir = resolveOutputDir(body.dir);
+        taskDirFor(outputDir, body.key);
+        const files = (Array.isArray(body.files) ? body.files : []).map((f) => ({
+          name: String(f.name ?? 'evidence'),
+          data: Buffer.from(String(f.data ?? ''), 'base64'),
+        }));
+        let result;
+        try {
+          result = lib.qaRecordResult(outputDir, String(body.key).toUpperCase(), String(body.caseId), String(body.verdict), {
+            note: body.note ? String(body.note) : undefined, files,
+          });
+        } catch (err) {
+          throw new HttpError(400, err.message);
+        }
+        sendJson(res, 200, result);
+        return;
+      }
+      case 'POST /api/qa/publish': {
+        const body = await readJsonBody(req);
+        const outputDir = resolveOutputDir(body.dir);
+        taskDirFor(outputDir, body.key);
+        const result = await lib.qaPublish(await profile(), String(body.key).toUpperCase(), {
+          outputDir,
+          space: body.space ? String(body.space) : undefined,
+          parent: body.parent ? String(body.parent) : undefined,
+          link: body.link !== false,
+          dryRun: body.dryRun === true,
+        }).catch((err) => { throw new HttpError(400, err.message); });
+        sendJson(res, 200, result);
+        return;
+      }
+      case 'GET /api/qa/evidence': {
+        const outputDir = resolveOutputDir(url.searchParams.get('dir'));
+        const key = url.searchParams.get('key');
+        taskDirFor(outputDir, key);
+        const file = url.searchParams.get('file') ?? '';
+        // A bare file name only: nothing outside the report's evidence folder can be read.
+        if (!/^[\w.-]+$/.test(file)) throw new HttpError(400, 'Invalid file name');
+        const target = join(lib.qaPaths(outputDir, key).evidence, file);
+        if (!existsSync(target)) throw new HttpError(404, 'No such evidence file');
+        const ext = file.split('.').pop().toLowerCase();
+        const types = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', json: 'application/json' };
+        res.writeHead(200, { 'content-type': types[ext] ?? 'application/octet-stream' });
+        res.end(await readFile(target));
+        return;
+      }
       default:
         throw new HttpError(404, 'Not found');
     }

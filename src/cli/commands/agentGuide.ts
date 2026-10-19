@@ -47,6 +47,8 @@ Search tips: \`--fields\` takes friendly names (\`key,summary,status,assignee,sp
 2. After running each case: \`jirallm qa result PROJ-1 TC-03 pass|fail|blocked --note "<observed>" --evidence shot.png resp.json\`. Evidence is copied next to the report and the Results line is recounted.
 3. \`jirallm qa publish PROJ-1 --space <KEY> [--parent <pageId>] --dry-run\`, then run it without \`--dry-run\` (a **write**). It creates the page, or updates it on later runs, uploads the evidence and links the page from the issue.
 
+People who prefer a screen use the same files through \`jirallm ui\`: pick a ticket, then **Test report** (edit cases, Pass/Fail/Blocked with pasted screenshots, Preview, Publish). A report title must be unique in the space; an existing page is never overwritten.
+
 Every write command accepts \`--dry-run\`: use it when unsure. \`start\` runs git before touching Jira, so a failed worktree leaves the issue unchanged.
 
 ## Gotchas

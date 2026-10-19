@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { buildReport, countResults, parseAcceptanceScenarios, reportToWiki, setResult, splitRow } from './qaReport.js';
+import {
+  buildReport, countResults, parseAcceptanceScenarios, parseReport, renderReport, reportToWiki, setResult, splitRow,
+} from './qaReport.js';
 
 const TASK_MD = `# Ticket
 
@@ -39,6 +41,26 @@ describe('qa report', () => {
     expect(countResults(report)).toEqual({ passed: 1, failed: 1, total: 2 });
     expect(report).toContain('| **Results** | 1/2 (1 failed) |\n\n## Precondition');
     expect(() => setResult(report, 'TC-99', 'pass')).toThrow('TC-99');
+  });
+
+  it('round-trips a tester-written report, keeping extra header rows and recomputing Results', () => {
+    const md = [
+      '# BE - Data maintenance', '', '| **Jira** |  |', '| --- | --- |',
+      '| **Env** | [feature8](https://feature8.example) |', '| **API** | /api/v1/paramedical/simulate |',
+      '| **Results** | 45/45 |', '', '## Precondition', '', '- Create creditor contract', '- RHO 53538585', '',
+      '| ID | Title | Precondition | Steps | Expected Result | Priority | Type | Automation Layer | Dev test coverage | **Evidence** |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+      '| TC-01 | Valid intake | Base data | 1. POST<br/>2. Open | - 200 OK | High | Functional | API | Yes | ![image](attachments/a.png)<br/>PASSED |',
+      '| TC-02 | Invalid | Base data | 1. POST | - 400 | High | Negative | API | No | **FAILED** – got 200 |',
+    ].join('\n');
+    const report = parseReport(md);
+    expect(report.header.map((h) => h.label)).toEqual(['Env', 'API']);
+    expect(report.precondition).toBe('- Create creditor contract\n- RHO 53538585');
+    expect(report.cases[0].steps).toBe('1. POST<br/>2. Open');
+    const again = renderReport(report);
+    expect(again).toContain('| **API** | /api/v1/paramedical/simulate |');
+    expect(again).toContain('| **Results** | 1/2 (1 failed) |');
+    expect(parseReport(again)).toEqual(report);
   });
 
   it('renders Confluence-ready wiki: cell line breaks and attachment images', () => {
