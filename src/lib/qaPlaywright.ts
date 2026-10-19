@@ -28,11 +28,15 @@ export type PlaywrightResult = {
   location: string;
   steps: string[];
   annotations: string[];
+  /** Report cases this test covers, from `qa-case` annotations (e.g. "GP-5, TC-03"). */
+  caseRefs: string[];
   /** A skipped test (e.g. after a failure in a serial block) counts as blocked. */
   verdict: Verdict;
   note: string;
   images: Array<{ name: string; path: string }>;
 };
+
+export const QA_CASE = 'qa-case';
 
 // eslint-disable-next-line no-control-regex
 const ANSI = /\u001b\[[0-9;]*m/g;
@@ -76,7 +80,9 @@ export function playwrightResults(report: PlaywrightReport, grep?: RegExp): Play
           describe: path,
           location: `${spec.file.replace(/\\/g, '/')}:${spec.line}`,
           steps: stepsOf(last),
-          annotations: (test.annotations ?? []).map((a) => a.description ?? '').filter(Boolean),
+          annotations: (test.annotations ?? []).filter((a) => a.type !== QA_CASE).map((a) => a.description ?? '').filter(Boolean),
+          caseRefs: (test.annotations ?? []).filter((a) => a.type === QA_CASE)
+            .flatMap((a) => (a.description ?? '').split(/[\s,;]+/)).filter(Boolean),
           verdict,
           note,
           images: (last?.attachments ?? [])

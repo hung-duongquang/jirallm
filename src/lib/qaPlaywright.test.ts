@@ -13,7 +13,7 @@ const report: PlaywrightReport = {
           title: 'creates a series', file: 'huisartsen\\series.spec.ts', line: 10,
           tests: [{
             status: 'expected',
-            annotations: [{ type: 'test case', description: 'ZOD-1: POST' }],
+            annotations: [{ type: 'test case', description: 'ZOD-1: POST' }, { type: 'qa-case', description: 'GP-1, GP-5' }],
             results: [{
               status: 'passed', duration: 1234,
               steps: [{ title: 'create' }, { title: 'list' }],
@@ -43,7 +43,7 @@ describe('playwrightResults', () => {
     const [pass, fail, skipped] = playwrightResults(report);
     expect(pass).toMatchObject({
       title: 'creates a series', describe: ['Series'], location: 'huisartsen/series.spec.ts:10',
-      steps: ['create', 'list'], annotations: ['ZOD-1: POST'], verdict: 'pass', note: '1.2 s',
+      steps: ['create', 'list'], annotations: ['ZOD-1: POST'], caseRefs: ['GP-1', 'GP-5'], verdict: 'pass', note: '1.2 s',
       images: [{ name: 'api-evidence', path: 'C:\\r\\api-evidence.png' }],
     });
     expect(fail).toMatchObject({ steps: ['POST /series → 404', 'GET /series → 200'], verdict: 'fail', note: 'Error: expect(received).toBe(expected)', images: [] });

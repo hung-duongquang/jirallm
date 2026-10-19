@@ -3,10 +3,10 @@ import path from 'node:path';
 import type { ResolvedProfile } from './config.js';
 import { ConfluenceClient } from './confluence.js';
 import { JiraClient } from './jiraClient.js';
-import { playwrightResults, type PlaywrightReport } from './qaPlaywright.js';
+import { playwrightResults, type PlaywrightReport, type PlaywrightResult } from './qaPlaywright.js';
 import {
   countCases, evidenceCell, fromCell, newReport, NOT_RUN, parseAcceptanceScenarios, parseReport, renderReport, reportToWiki, toCell,
-  type QaReport, type Verdict,
+  type QaCase, type QaReport, type Verdict,
 } from './qaReport.js';
 
 /**
@@ -101,7 +101,14 @@ export function qaRecordResult(
 
 export type ImportSummary = { created: string[]; updated: string[]; counts: ReturnType<typeof countCases>; evidence: number };
 
-const isPlaceholder = (c: QaReport['cases'][number]) => !c.title && !c.steps && !c.expected && c.evidence === NOT_RUN;
+/** A case is named by its id (TC-03) or by the scenario label its title starts with (GP-5 in "GP-5. Claims …"). */
+function matchesRef(c: QaCase, ref: string): boolean {
+  const label = ref.toLowerCase();
+  const title = fromCell(c.title).toLowerCase();
+  return c.id.toLowerCase() === label || title === label || ['.', ' ', ':'].some((sep) => title.startsWith(label + sep));
+}
+
+const isPlaceholder = (c: QaCase) => !c.title && !c.steps && !c.expected && c.evidence === NOT_RUN;
 
 /**
  * Records a Playwright run in the report: each test becomes a case (matched on its title, so a re-run
@@ -128,7 +135,36 @@ export function qaImportPlaywright(
   const summary: ImportSummary = { created: [], updated: [], counts: countCases(report.cases), evidence: 0 };
   let next = report.cases.reduce((max, c) => Math.max(max, Number(/\d+$/.exec(c.id)?.[0] ?? 0)), 0);
 
+  /** Sets the verdict, evidence and automation columns of one case; returns the number of files copied. */
+  const record = (target: QaCase, r: PlaywrightResult): number => {
+    target.automation = opts.layer ?? (target.automation || 'Playwright');
+    target.coverage = toCell(r.location);
+    // A re-run replaces this case's earlier evidence.
+    const prefix = evidenceName(issueKey, target.id, '');
+    for (const old of readdirSync(paths.evidence)) if (old.startsWith(prefix)) rmSync(path.join(paths.evidence, old));
+    const names = r.images.map((img, i) => {
+      const source = path.resolve(base, img.path);
+      const name = evidenceName(issueKey, target.id, `${r.images.length > 1 ? `${i + 1}-` : ''}${img.name}${path.extname(source)}`);
+      copyFileSync(source, path.join(paths.evidence, name));
+      return name;
+    });
+    const note = r.caseRefs.length > 0 ? [r.note, `e2e: ${r.title}`].filter(Boolean).join(' – ') : r.note;
+    target.evidence = evidenceCell(r.verdict, { note, evidence: names });
+    return names.length;
+  };
+
   for (const r of results) {
+    // A test that names its cases (qa-case annotation) reports on them and keeps their written steps.
+    if (r.caseRefs.length > 0) {
+      for (const ref of r.caseRefs) {
+        const target = report.cases.find((c) => matchesRef(c, ref));
+        if (!target) throw new Error(`"${r.title}" covers ${ref}, which is not a case in the report.`);
+        if (!target.steps && r.steps.length > 0) target.steps = toCell(r.steps.map((s, i) => `${i + 1}. ${s}`).join('\n'));
+        summary.updated.push(target.id);
+        summary.evidence += record(target, r);
+      }
+      continue;
+    }
     let target = report.cases.find((c) => fromCell(c.title) === r.title);
     if (!target) {
       target = {
@@ -141,20 +177,7 @@ export function qaImportPlaywright(
       summary.updated.push(target.id);
     }
     if (r.steps.length > 0) target.steps = toCell(r.steps.map((s, i) => `${i + 1}. ${s}`).join('\n'));
-    target.automation = opts.layer ?? (target.automation || 'Playwright');
-    target.coverage = toCell(r.location);
-
-    // A re-run replaces this case's earlier evidence.
-    const prefix = evidenceName(issueKey, target.id, '');
-    for (const old of readdirSync(paths.evidence)) if (old.startsWith(prefix)) rmSync(path.join(paths.evidence, old));
-    const names = r.images.map((img, i) => {
-      const source = path.resolve(base, img.path);
-      const name = evidenceName(issueKey, target.id, `${r.images.length > 1 ? `${i + 1}-` : ''}${img.name}${path.extname(source)}`);
-      copyFileSync(source, path.join(paths.evidence, name));
-      return name;
-    });
-    summary.evidence += names.length;
-    target.evidence = evidenceCell(r.verdict, { note: r.note, evidence: names });
+    summary.evidence += record(target, r);
   }
   saveReport(outputDir, issueKey, report, loaded.page);
   summary.counts = countCases(report.cases);
