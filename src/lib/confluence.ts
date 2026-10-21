@@ -31,6 +31,11 @@ export type ConfluenceAttachment = {
   downloadLink: string;
 };
 
+/** Bare tables shrink to fit their text; stretch them to the page width (legacy and new renderer). */
+export function stretchTables(storage: string): string {
+  return storage.replace(/<table>/g, '<table data-layout="full-width" class="relative-table" style="width: 100.0%;">');
+}
+
 /** Read-only Confluence Cloud REST client (v2 API) for one site. */
 export class ConfluenceClient {
   private readonly wiki: string;
@@ -107,6 +112,21 @@ export class ConfluenceClient {
       });
     }
     return { id: saved.id, url: `${saved._links.base}${saved._links.webui}`, version: saved.version.number };
+  }
+
+  /** Turns on the page's "full width" appearance, so wide tables are not squeezed into the narrow column. */
+  async setFullWidth(pageId: string): Promise<void> {
+    for (const key of ['content-appearance-published', 'content-appearance-draft']) {
+      const current = await this.getJson<{ version: { number: number } }>(`/rest/api/content/${pageId}/property/${key}`)
+        .catch(() => undefined);
+      if (current) {
+        await this.send('PUT', `/rest/api/content/${pageId}/property/${key}`, {
+          key, value: 'full-width', version: { number: current.version.number + 1 },
+        });
+      } else {
+        await this.send('POST', `/rest/api/content/${pageId}/property`, { key, value: 'full-width' });
+      }
+    }
   }
 
   /** Uploads a file; a file with the same name becomes a new version of that attachment. */

@@ -1,7 +1,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ResolvedProfile } from './config.js';
-import { ConfluenceClient } from './confluence.js';
+import { ConfluenceClient, stretchTables } from './confluence.js';
 import { JiraClient } from './jiraClient.js';
 import { playwrightResults, type PlaywrightReport, type PlaywrightResult } from './qaPlaywright.js';
 import {
@@ -227,7 +227,7 @@ export async function qaPublish(
 
   const client = new ConfluenceClient(site, profile.config.userEmail, profile.apiToken);
   const body = renderReport(loaded.report).replace(/^# .+\n+/, '');
-  const storage = await client.wikiToStorage(reportToWiki(body));
+  const storage = stretchTables(await client.wikiToStorage(reportToWiki(body)));
   // Images refer to attachments by filename and resolve on render, so uploading after the save is fine.
   const saved = await client.savePage({
     pageId: loaded.page?.pageId, spaceKey: opts.space ?? '', parentId: opts.parent, title: plan.title, storage,
@@ -238,6 +238,7 @@ export async function qaPublish(
     }
     throw err;
   });
+  await client.setFullWidth(saved.id);
   const paths = qaPaths(opts.outputDir, issueKey);
   for (const file of loaded.evidenceFiles) {
     await client.uploadAttachment(saved.id, file, readFileSync(path.join(paths.evidence, file)));
