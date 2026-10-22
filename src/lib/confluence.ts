@@ -234,6 +234,19 @@ export class ConfluenceClient {
     };
   }
 
+  /** Current version number of each page (no bodies), 250 ids per request. Missing ids are left out. */
+  async pageVersions(ids: readonly string[]): Promise<Map<string, number>> {
+    const versions = new Map<string, number>();
+    for (let i = 0; i < ids.length; i += 250) {
+      const chunk = ids.slice(i, i + 250);
+      const page = await this.getJson<{ results: { id: string; version?: { number?: number } }[] }>(
+        `/api/v2/pages?id=${chunk.map(encodeURIComponent).join(',')}&limit=250`
+      );
+      for (const r of page.results) versions.set(String(r.id), r.version?.number ?? 0);
+    }
+    return versions;
+  }
+
   /** One page of a CQL search (v1 API; v2 has no search). `cursor` comes from the previous page. */
   async search(cql: string, opts: { limit: number; cursor?: string }): Promise<ConfluenceSearchPage> {
     const params = new URLSearchParams({ cql, limit: String(opts.limit), expand: 'content.space' });

@@ -745,6 +745,10 @@ export class JiraExporter {
     const finalContent = readFileSync(taskMdPath, 'utf-8');
     const updated = addFrameLinksToContent(finalContent, taskDir);
     if (updated !== finalContent) writeFileSync(taskMdPath, updated, 'utf-8');
+    // Keep the replaced copy so a reader can diff what changed since the last export.
+    if (previousContent !== null && previousContent !== updated) {
+      writeFileSync(join(taskDir, '.task.previous.md'), previousContent, 'utf-8');
+    }
 
     return {
       taskDir,

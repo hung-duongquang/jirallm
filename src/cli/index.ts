@@ -46,6 +46,7 @@ import { runStart, type StartOptions } from './commands/start.js';
 import { runAgentGuide, type AgentGuideOptions } from './commands/agentGuide.js';
 import { runPage, type PageOptions } from './commands/page.js';
 import { runPageSearch, type PageSearchOptions } from './commands/pageSearch.js';
+import { runWatch, type WatchOptions } from './commands/watch.js';
 import {
   runQaImport, runQaInit, runQaPublish, runQaResult,
   type QaImportOptions, type QaInitOptions, type QaPublishOptions, type QaResultOptions,
@@ -1571,6 +1572,31 @@ Examples:
 `)
   .action(async (query: string, opts: PageSearchOptions) => {
     try { await runPageSearch(query, opts); } catch (err) { exitOnError(err); }
+  });
+
+program
+  .command('watch')
+  .description('Re-export exported tickets/pages that changed in Jira or Confluence, plus my open tickets; logs changes to CHANGES.md')
+  .option('-o, --org <name>', 'Organization whose credentials and sites to use')
+  .option('--output-dir <path>', 'Export directory', './jira-export')
+  .option('--jql <jql>', 'Also export issues matching this JQL that are not exported yet')
+  .option('--no-mine', 'Skip my open issues (assignee = currentUser(), not Done) that are not exported yet')
+  .option('--no-pages', 'Skip checking exported Confluence pages')
+  .option('--every <minutes>', 'Keep running, checking every N minutes')
+  .option('--install [minutes]', 'Run it in the background every N minutes (default 15): Task Scheduler on Windows, a crontab line elsewhere')
+  .option('--uninstall', 'Remove the Task Scheduler entry')
+  .option('--dry-run', 'List what would be re-exported without writing')
+  .addHelpText('after', `
+Change detection compares each local task.md/page.md with Jira's "updated" time and the page
+version, so it needs no state. Changed tickets keep their previous copy as .task.previous.md.
+
+Examples:
+  $ jirallm watch --dry-run
+  $ jirallm watch --jql 'project = ZOD AND sprint in openSprints()'
+  $ jirallm watch --install 15
+`)
+  .action(async (opts: WatchOptions) => {
+    try { await runWatch(opts); } catch (err) { exitOnError(err); }
   });
 
 program

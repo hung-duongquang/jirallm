@@ -60,6 +60,10 @@ Every write command accepts \`--dry-run\`: use it when unsure. \`start\` runs gi
 - A board's "Ready to Dev" (or similar) is a column mapped to statuses, so a JQL on that name returns nothing. Use \`board:issues\`.
 - \`openSprints()\` can cover several boards' sprints; narrow with \`sprint = "<name>"\` or a board query.
 - Exports overwrite \`task.md\` and keep the previous copy as \`.task.previous.md\`, so diff the two to see what changed.
+
+## Staying current
+
+\`jirallm watch\` re-exports exported tickets and Confluence pages that changed since their local copy, plus open tickets assigned to me that are not exported yet, and appends one line per change to \`jira-export/CHANGES.md\` (e.g. \`ZOD-1: status: To Do → In Progress; Comments changed\`). Read the end of \`CHANGES.md\` to see what moved; \`--dry-run\` only lists it. \`--install 15\` runs it every 15 minutes in the background (\`--uninstall\` removes it).
 `;
 
 export type AgentGuideOptions = { install?: string | boolean };
