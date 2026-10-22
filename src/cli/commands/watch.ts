@@ -172,6 +172,50 @@ async function runOnce(profile: ResolvedProfile, opts: WatchOptions, outputDir: 
   return lines;
 }
 
+export type ChangesOptions = { outputDir?: string; unseen?: boolean; max?: string };
+
+/** Splits CHANGES.md into its `## <stamp>` entries, oldest first. */
+export function changeEntries(md: string): { stamp: string; lines: string[] }[] {
+  return md.split(/^## /m).slice(1).map((part) => {
+    const [head, ...rest] = part.split(/\r?\n/);
+    return { stamp: head.trim(), lines: rest.filter((l) => l.startsWith('- ')) };
+  });
+}
+
+/**
+ * Prints the logged changes, newest last, capped at `--max` lines. With `--unseen` only entries
+ * after the last `--unseen` call are printed (nothing at all when there are none), so a
+ * session-start hook adds context only when something moved.
+ */
+export function runChanges(opts: ChangesOptions): void {
+  const outputDir = opts.outputDir ?? './jira-export';
+  const file = path.join(outputDir, CHANGES_FILE);
+  if (!existsSync(file)) return;
+  const max = opts.max === undefined ? 20 : Number(opts.max);
+  if (!Number.isInteger(max) || max < 1) throw new Error('--max must be a positive integer.');
+  const marker = path.join(outputDir, '.changes.seen');
+  const seen = opts.unseen && existsSync(marker) ? readFileSync(marker, 'utf-8').trim() : '';
+  const entries = changeEntries(readFileSync(file, 'utf-8')).filter((e) => e.stamp > seen);
+  if (entries.length === 0) return;
+  if (opts.unseen) writeFileSync(marker, entries[entries.length - 1].stamp);
+
+  // One line per item, latest state wins: a ticket that changed twice is listed once.
+  const latest = new Map<string, string>();
+  for (const e of entries) {
+    for (const l of e.lines) {
+      const item = l.slice(2).split(':')[0];
+      latest.delete(item);
+      latest.set(item, `${l} (${e.stamp})`);
+    }
+  }
+  const lines = [...latest.values()];
+  const shown = lines.slice(-max);
+  const header = opts.unseen ? `Jira/Confluence changes since ${seen || 'the start of the log'}` : 'Jira/Confluence changes';
+  console.log(`${header} (re-exported to ${outputDir}; diff task.md with .task.previous.md for details):`);
+  if (shown.length < lines.length) console.log(`- … ${lines.length - shown.length} older line(s) in ${file}`);
+  console.log(shown.join('\n'));
+}
+
 /** Windows Task Scheduler entry running `jirallm watch` every N minutes from this directory, without a console window. */
 function install(opts: WatchOptions, outputDir: string): void {
   const minutes = typeof opts.install === 'string' ? Number(opts.install) : 15;

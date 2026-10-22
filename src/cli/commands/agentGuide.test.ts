@@ -9,7 +9,7 @@ afterEach(() => vi.restoreAllMocks());
 
 describe('agent-guide', () => {
   it('is a valid skill: frontmatter with name and description', () => {
-    expect(AGENT_GUIDE).toMatch(/^---\nname: jirallm\ndescription: .+\n---\n/);
+    expect(AGENT_GUIDE).toMatch(/^---\nname: jirallm\ndescription: .+\nmodel: sonnet\n---\n/);
   });
 
   it('installs as a Claude Code skill', () => {

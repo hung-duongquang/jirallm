@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeChange, frontmatter } from './watch.js';
+import { changeEntries, describeChange, frontmatter } from './watch.js';
 
 const task = (status: string, comments: string) =>
   `---\nkey: "ZOD-1"\nstatus: "${status}"\nupdatedAt: "2026-10-22T04:35:11.422+0200"\n---\n\n# ZOD-1\n\n## Description\n\nSame.\n\n## Comments\n\n${comments}\n`;
@@ -25,5 +25,14 @@ describe('describeChange', () => {
     expect(describeChange(task('To Do', 'a'), task('To Do', 'a').replace('status: "To Do"\n', 'status: "To Do"\nlabels: ["X"]\n'))).toBe(
       'labels: ∅ → ["X"]'
     );
+  });
+});
+
+describe('changeEntries', () => {
+  it('splits CHANGES.md into stamped entries with their list lines', () => {
+    expect(changeEntries('\n## 2026-10-22 10:00\n\n- ZOD-1: new\n- ZOD-2: status: A → B\n\n## 2026-10-22 10:15\n\n- ZOD-1: Comments changed\n')).toEqual([
+      { stamp: '2026-10-22 10:00', lines: ['- ZOD-1: new', '- ZOD-2: status: A → B'] },
+      { stamp: '2026-10-22 10:15', lines: ['- ZOD-1: Comments changed'] },
+    ]);
   });
 });

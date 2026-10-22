@@ -46,7 +46,7 @@ import { runStart, type StartOptions } from './commands/start.js';
 import { runAgentGuide, type AgentGuideOptions } from './commands/agentGuide.js';
 import { runPage, type PageOptions } from './commands/page.js';
 import { runPageSearch, type PageSearchOptions } from './commands/pageSearch.js';
-import { runWatch, type WatchOptions } from './commands/watch.js';
+import { runChanges, runWatch, type ChangesOptions, type WatchOptions } from './commands/watch.js';
 import {
   runQaImport, runQaInit, runQaPublish, runQaResult,
   type QaImportOptions, type QaInitOptions, type QaPublishOptions, type QaResultOptions,
@@ -1597,6 +1597,16 @@ Examples:
 `)
   .action(async (opts: WatchOptions) => {
     try { await runWatch(opts); } catch (err) { exitOnError(err); }
+  });
+
+program
+  .command('changes')
+  .description('Print the changes `watch` logged in CHANGES.md, one line per ticket/page (latest state)')
+  .option('--output-dir <path>', 'Export directory', './jira-export')
+  .option('--unseen', 'Only entries not printed by an earlier --unseen call (prints nothing when none; for session-start hooks)')
+  .option('--max <n>', 'Line cap (default 20)')
+  .action((opts: ChangesOptions) => {
+    try { runChanges(opts); } catch (err) { exitOnError(err); }
   });
 
 program

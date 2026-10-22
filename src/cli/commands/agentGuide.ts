@@ -7,7 +7,8 @@ import path from 'node:path';
  */
 export const AGENT_GUIDE = `---
 name: jirallm
-description: Read and update Jira (and linked Confluence pages) from the shell with jirallm. Use when a task mentions a Jira key (e.g. ZOD-1234), a sprint, a board column, or asks to assign, transition, comment or log work.
+description: Read and update Jira and Confluence from the shell with jirallm. Use when a task mentions a Jira key (e.g. ZOD-1234), a sprint, a board column, or asks to assign, transition, comment or log work; to find or read a Confluence page (spec, test report); to test a ticket; or to check what changed in tickets or whether the local ticket context is current.
+model: sonnet
 ---
 
 # jirallm for agents
@@ -63,7 +64,7 @@ Every write command accepts \`--dry-run\`: use it when unsure. \`start\` runs gi
 
 ## Staying current
 
-\`jirallm watch\` re-exports exported tickets and Confluence pages that changed since their local copy, plus open tickets assigned to me that are not exported yet, and appends one line per change to \`jira-export/CHANGES.md\` (e.g. \`ZOD-1: status: To Do → In Progress; Comments changed\`). Read the end of \`CHANGES.md\` to see what moved; \`--dry-run\` only lists it. \`--install 15\` runs it every 15 minutes in the background (\`--uninstall\` removes it).
+\`jirallm watch\` re-exports exported tickets and Confluence pages that changed since their local copy, plus open tickets assigned to me that are not exported yet, and appends one line per change to \`jira-export/CHANGES.md\` (e.g. \`ZOD-1: status: To Do → In Progress; Comments changed\`). \`jirallm changes\` prints them compactly (one line per ticket, latest state); \`--dry-run\` on \`watch\` only lists what would be re-exported. A session-start hook running \`jirallm changes --unseen\` puts new changes in context automatically. \`--install 15\` runs it every 15 minutes in the background (\`--uninstall\` removes it).
 `;
 
 export type AgentGuideOptions = { install?: string | boolean };
