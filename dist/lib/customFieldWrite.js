@@ -1,0 +1,101 @@
+import { CUSTOM_FIELD_TYPES } from './exportFields.js';
+/**
+ * Shape a raw string value into the payload Jira expects for a write, per field type.
+ * Inverse of `extractCustomFieldValue` (read side) in jiraClient.ts.
+ */
+export function formatCustomFieldWrite(type, raw) {
+    switch (type) {
+        case 'scalar':
+            return raw;
+        case 'number': {
+            const n = Number(raw);
+            if (Number.isNaN(n))
+                throw new Error(`Expected a number for custom field, got "${raw}".`);
+            return n;
+        }
+        case 'select':
+            return { value: raw };
+        case 'array':
+            return raw
+                .split(',')
+                .map((v) => v.trim())
+                .filter(Boolean)
+                .map((value) => ({ value }));
+        case 'user':
+            return { accountId: raw };
+        case 'sprint': {
+            const n = Number(raw);
+            if (Number.isNaN(n))
+                throw new Error(`Expected a sprint id (number), got "${raw}".`);
+            return n;
+        }
+        default:
+            return raw;
+    }
+}
+const CUSTOM_FIELD_ID_RE = /^customfield_\d+$/;
+function isCustomFieldType(value) {
+    return CUSTOM_FIELD_TYPES.includes(value);
+}
+/** An empty (`name=`) or literal-null (`name=null`) value means "clear this field". */
+function isClearValue(value) {
+    return value === '' || value === 'null';
+}
+/**
+ * Resolve a single `--field key=value` token to a Jira field id and its shaped write value.
+ * Key resolution:
+ *  1. Friendly name configured in customFieldDefs → use its {id, type}.
+ *  2. Raw `customfield_NNNNN[:type]` → inline type, or default to `scalar`.
+ *  3. Anything else → error listing configured friendly names.
+ * A `key=` (empty) or `key=null` value shapes to `null`, clearing the field regardless of type.
+ */
+export function parseFieldFlag(token, customFieldDefs = {}) {
+    const eq = token.indexOf('=');
+    if (eq === -1) {
+        throw new Error(`Invalid --field "${token}". Expected key=value.`);
+    }
+    const key = token.slice(0, eq).trim();
+    const value = token.slice(eq + 1);
+    const clear = isClearValue(value);
+    const def = customFieldDefs[key];
+    if (def) {
+        return { jiraId: def.id, shaped: clear ? null : formatCustomFieldWrite(def.type, value) };
+    }
+    const [rawId, inlineType] = key.split(':');
+    if (CUSTOM_FIELD_ID_RE.test(rawId)) {
+        const type = inlineType ?? 'scalar';
+        if (!isCustomFieldType(type)) {
+            throw new Error(`Unknown custom field type "${type}" in "${token}". Expected one of: ${CUSTOM_FIELD_TYPES.join(', ')}.`);
+        }
+        return { jiraId: rawId, shaped: clear ? null : formatCustomFieldWrite(type, value) };
+    }
+    const known = Object.keys(customFieldDefs);
+    const hint = known.length
+        ? ` Configured custom fields: ${known.join(', ')}.`
+        : ' No custom fields configured; use customfield_NNNNN[:type]=value.';
+    throw new Error(`Unknown custom field "${key}".${hint}`);
+}
+/**
+ * Which of the given custom-field ids are NOT on the create screen.
+ *
+ * Jira's create endpoint silently drops (and applies field defaults to) custom
+ * fields absent from a project + issue-type create screen, whereas the edit
+ * endpoint's screen includes them — so `create --field` needs this guard where
+ * `edit --field` does not. Query only: the caller decides how to react.
+ */
+export function findFieldsOffCreateScreen(jiraIds, createScreenFieldIds) {
+    const onScreen = new Set(createScreenFieldIds);
+    return jiraIds.filter((id) => !onScreen.has(id));
+}
+/** Reduce a list of `--field` tokens to a merge-ready { jiraId: shapedValue } map. */
+export function parseFieldFlags(tokens, customFieldDefs = {}) {
+    if (!tokens || tokens.length === 0)
+        return undefined;
+    const out = {};
+    for (const token of tokens) {
+        const { jiraId, shaped } = parseFieldFlag(token, customFieldDefs);
+        out[jiraId] = shaped;
+    }
+    return out;
+}
+//# sourceMappingURL=customFieldWrite.js.map
