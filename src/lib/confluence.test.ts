@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { stretchTables } from './confluence.js';
+import { stretchTables, toCql } from './confluence.js';
 
 describe('stretchTables', () => {
   it('gives every bare table the full page width', () => {
@@ -11,5 +11,25 @@ describe('stretchTables', () => {
   it('leaves tables that already carry attributes alone', () => {
     const table = '<table class="wrapped"><tbody></tbody></table>';
     expect(stretchTables(table)).toBe(table);
+  });
+});
+
+describe('toCql', () => {
+  it('turns plain words into a full-text search over pages', () => {
+    expect(toCql('test rapport')).toBe('text ~ "test rapport" AND type in (page, blogpost, whiteboard)');
+  });
+
+  it('escapes quotes in plain words', () => {
+    expect(toCql('say "hi"')).toBe('text ~ "say \\"hi\\"" AND type in (page, blogpost, whiteboard)');
+  });
+
+  it('keeps real CQL as is', () => {
+    expect(toCql(' title ~ "ZOD-1" ')).toBe('title ~ "ZOD-1"');
+  });
+
+  it('adds the space filter before ORDER BY', () => {
+    expect(toCql('title ~ "x" ORDER BY lastmodified DESC', 'ZOD')).toBe(
+      '(title ~ "x") AND space = "ZOD" ORDER BY lastmodified DESC'
+    );
   });
 });

@@ -22,6 +22,7 @@ Output switches to JSON when stdout is piped. Prefer the compact forms below: th
 | Ticket plus its parent chain / linked issues | add \`--include-parent\` / \`--include-linked\` |
 | Quick look, no files | \`jirallm fetch PROJ-1\` |
 | One Confluence page by URL (e.g. a test report) | \`jirallm page <url>\` → \`jira-export/confluence/<id>-<slug>/page.md\` |
+| Find Confluence pages (plain words or CQL) | \`jirallm page:search "<words>" [--space KEY] --format tsv\`, then \`jirallm page <url>\` on a hit |
 | List issues (compact) | \`jirallm search --org <org> '<JQL>' --fields key,summary,status,assignee --format tsv --all\` |
 | Active sprint, by status | JQL \`project = PROJ AND sprint in openSprints() AND status = "To Do"\` |
 | A board **column** (columns are not statuses) | \`jirallm boards --org <org>\` → \`jirallm board:issues --help\` |
@@ -30,6 +31,8 @@ Output switches to JSON when stdout is piped. Prefer the compact forms below: th
 | Environment check | \`jirallm doctor\` |
 
 Search tips: \`--fields\` takes friendly names (\`key,summary,status,assignee,sprint,parent\`) or raw ids (\`customfield_10050\`). \`--format tsv\` prints a header line and one line per issue; nested values collapse to their key or name. With \`--all\`, a "more results" note on stderr means the \`--max\` cap was hit.
+
+jirallm or the Atlassian MCP server: use jirallm for ticket context (files on disk with images, attachments and linked pages, cheap to re-read), \`start\` and \`qa\`. If the Atlassian MCP tools are connected, they suit one-off questions, Rovo search across Jira and Confluence, and rarely used fields or link types. Don't fetch the same ticket through both.
 
 ## Write (changes Jira: confirm with the user first unless they asked for it)
 

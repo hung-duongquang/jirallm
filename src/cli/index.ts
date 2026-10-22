@@ -45,6 +45,7 @@ import { runAssign } from './commands/assign.js';
 import { runStart, type StartOptions } from './commands/start.js';
 import { runAgentGuide, type AgentGuideOptions } from './commands/agentGuide.js';
 import { runPage, type PageOptions } from './commands/page.js';
+import { runPageSearch, type PageSearchOptions } from './commands/pageSearch.js';
 import {
   runQaImport, runQaInit, runQaPublish, runQaResult,
   type QaImportOptions, type QaInitOptions, type QaPublishOptions, type QaResultOptions,
@@ -1545,6 +1546,31 @@ program
   .option('--output-dir <path>', 'Export directory', './jira-export')
   .action(async (url: string, opts: PageOptions) => {
     try { await runPage(url, opts); } catch (err) { exitOnError(err); }
+  });
+
+program
+  .command('page:search <query>')
+  .description('Search Confluence by CQL or plain words (Jira site + confluence_urls sites); export a hit with `page <url>`')
+  .option('-o, --org <name>', 'Organization whose credentials and sites to use')
+  .option('--site <url>', 'Search only this site (the Jira site or a confluence_urls entry)')
+  .option('--space <key>', 'Only this space')
+  .option('--limit <n>', 'Page size (default 25)')
+  .option('--cursor <token>', 'Next-page cursor from a prior search (needs --site)')
+  .option('--all', 'Follow the cursor and return every page (up to --max)')
+  .option('--max <n>', 'Row cap for --all (default 200)')
+  .option('--format <format>', 'json | text | tsv (tsv = header + one line per page; compact for LLMs). Default: json when piped, text on a TTY')
+  .option('--json', 'Force JSON output')
+  .addHelpText('after', `
+Plain words become \`text ~ "<words>" AND type in (page, blogpost, whiteboard)\`; input with
+CQL operators (=, ~, AND, ORDER BY, …) is sent as is.
+
+Examples:
+  $ jirallm page:search "testrapport declaratie" --format tsv
+  $ jirallm page:search 'title ~ "ZOD-3804" ORDER BY lastmodified DESC' --space ZOD --format tsv
+  $ jirallm page:search 'label = "release-notes"' --site topicus.atlassian.net --all --format tsv
+`)
+  .action(async (query: string, opts: PageSearchOptions) => {
+    try { await runPageSearch(query, opts); } catch (err) { exitOnError(err); }
   });
 
 program

@@ -36,6 +36,71 @@ export function stretchTables(storage: string): string {
   return storage.replace(/<table>/g, '<table data-layout="full-width" class="relative-table" style="width: 100.0%;">');
 }
 
+export type ConfluenceSearchRow = {
+  id: string;
+  type: string;
+  title: string;
+  space: string;
+  lastModified: string;
+  url: string;
+  excerpt: string;
+};
+
+export type ConfluenceSearchPage = { rows: ConfluenceSearchRow[]; nextCursor?: string };
+
+type RawSearchResult = {
+  content?: { id?: string; type?: string; title?: string; space?: { key?: string }; _links?: { webui?: string } };
+  title?: string;
+  excerpt?: string;
+  url?: string;
+  lastModified?: string;
+  resultGlobalContainer?: { title?: string };
+};
+
+/** CQL characters that mark the input as a query rather than plain search words. */
+const CQL_OPERATOR = /[=~<>]|\b(AND|OR|NOT|IN|ORDER BY)\b/;
+
+/**
+ * Turns the command-line query into CQL: plain words become a full-text search, real CQL is kept
+ * as is, and `space` adds a space filter. Attachments and comments are left out of plain searches
+ * because they crowd out the pages.
+ */
+export function toCql(query: string, space?: string): string {
+  const trimmed = query.trim();
+  let cql = CQL_OPERATOR.test(trimmed)
+    ? trimmed
+    : `text ~ "${trimmed.replace(/(["\\])/g, '\\$1')}" AND type in (page, blogpost, whiteboard)`;
+  if (space) {
+    const [where, order] = cql.split(/\s+ORDER BY\s+/i);
+    cql = `(${where}) AND space = "${space}"${order ? ` ORDER BY ${order}` : ''}`;
+  }
+  return cql;
+}
+
+function toSearchRow(wiki: string, r: RawSearchResult): ConfluenceSearchRow {
+  const webui = r.content?._links?.webui ?? r.url ?? '';
+  return {
+    id: String(r.content?.id ?? ''),
+    type: r.content?.type ?? '',
+    title: stripHighlight(r.content?.title ?? r.title ?? ''),
+    // resultGlobalContainer holds the space *name*; the key is in the page URL.
+    space: r.content?.space?.key ?? /\/spaces\/([^/]+)\//.exec(webui)?.[1] ?? r.resultGlobalContainer?.title ?? '',
+    lastModified: (r.lastModified ?? '').slice(0, 10),
+    url: webui.startsWith('http') ? webui : `${wiki}${webui}`,
+    excerpt: stripHighlight(r.excerpt ?? '').replace(/\s+/g, ' ').trim().slice(0, 200),
+  };
+}
+
+/** Confluence wraps matched words in @@@hl@@@ … @@@endhl@@@. */
+function stripHighlight(text: string): string {
+  return text.replace(/@@@(end)?hl@@@/g, '');
+}
+
+function cursorOf(next: string | undefined): string | undefined {
+  if (!next) return undefined;
+  return new URL(next, 'https://x.invalid').searchParams.get('cursor') ?? undefined;
+}
+
 /** Read-only Confluence Cloud REST client (v2 API) for one site. */
 export class ConfluenceClient {
   private readonly wiki: string;
@@ -166,6 +231,19 @@ export class ConfluenceClient {
       updatedAt: page.version?.createdAt,
       webUrl: `${page._links?.base ?? this.wiki}${page._links?.webui ?? `/pages/viewpage.action?pageId=${id}`}`,
       adf,
+    };
+  }
+
+  /** One page of a CQL search (v1 API; v2 has no search). `cursor` comes from the previous page. */
+  async search(cql: string, opts: { limit: number; cursor?: string }): Promise<ConfluenceSearchPage> {
+    const params = new URLSearchParams({ cql, limit: String(opts.limit), expand: 'content.space' });
+    if (opts.cursor) params.set('cursor', opts.cursor);
+    const page = await this.getJson<{ results?: RawSearchResult[]; _links?: { next?: string } }>(
+      `/rest/api/search?${params}`
+    );
+    return {
+      rows: (page.results ?? []).map((r) => toSearchRow(this.wiki, r)),
+      nextCursor: cursorOf(page._links?.next),
     };
   }
 
