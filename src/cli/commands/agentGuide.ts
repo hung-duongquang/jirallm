@@ -7,7 +7,7 @@ import path from 'node:path';
  */
 export const AGENT_GUIDE = `---
 name: jirallm
-description: Read and update Jira and Confluence from the shell with jirallm. Use when a task mentions a Jira key (e.g. ZOD-1234), a sprint, a board column, or asks to assign, transition, comment or log work; to find or read a Confluence page (spec, test report); to test a ticket; or to check what changed in tickets or whether the local ticket context is current.
+description: Read and update Jira and Confluence from the shell with jirallm. Use when a task mentions a Jira key (e.g. ZOD-1234), a sprint, a board column, or asks to assign, transition, comment or log work; to find or read a Confluence page (spec, test report); to test a ticket; before opening a pull request for a ticket branch; or to check what changed in tickets or whether the local ticket context is current.
 model: sonnet
 ---
 
@@ -44,6 +44,13 @@ jirallm or the Atlassian MCP server: use jirallm for ticket context (files on di
 | Transition | \`jirallm transition PROJ-1 --to "Code Review"\` (positional status is an error) |
 | Comment | \`jirallm comment PROJ-1 --help\` (markdown is converted) |
 | Log work | \`jirallm worklog PROJ-1 "1h 30m"\` |
+
+## Before opening a PR
+
+Run \`jirallm pr-context --repo <worktree>\` (key taken from the branch name) before \`gh pr create\`. It re-exports the ticket and prints what changed in Jira since work started (first branch commit): requirement and description edits as line diffs, new comments, status and assignee changes, plus the branch commits and diffstat. Then:
+- tell the user about requirement changes or comments that the branch does not cover yet, before opening the PR;
+- check the diff against the acceptance criteria in the re-exported \`task.md\`;
+- write the PR description from it (what was built per acceptance criterion, anything left out and why).
 
 ## Testing a ticket (tester workflow)
 

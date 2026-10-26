@@ -47,6 +47,7 @@ import { runAgentGuide, type AgentGuideOptions } from './commands/agentGuide.js'
 import { runPage, type PageOptions } from './commands/page.js';
 import { runPageSearch, type PageSearchOptions } from './commands/pageSearch.js';
 import { runChanges, runWatch, type ChangesOptions, type WatchOptions } from './commands/watch.js';
+import { runPrContext, type PrContextOptions } from './commands/prContext.js';
 import {
   runQaImport, runQaInit, runQaPublish, runQaResult,
   type QaImportOptions, type QaInitOptions, type QaPublishOptions, type QaResultOptions,
@@ -1607,6 +1608,26 @@ program
   .option('--max <n>', 'Line cap (default 20)')
   .action((opts: ChangesOptions) => {
     try { runChanges(opts); } catch (err) { exitOnError(err); }
+  });
+
+program
+  .command('pr-context [issue-key]')
+  .description('Before opening a PR: what changed in Jira since work started (field and requirement edits, comments, status) plus the branch commits and diffstat')
+  .option('-o, --org <name>', 'Organization name override')
+  .option('--repo <path>', 'Git repository / worktree of the branch', '.')
+  .option('--base <ref>', 'Base the branch is compared with', 'origin/main')
+  .option('--since <date>', 'Start of work (default: first branch commit, else the last move to In Progress)')
+  .option('--output-dir <path>', 'Export directory', './jira-export')
+  .option('--no-export', 'Skip re-exporting the ticket')
+  .addHelpText('after', `
+The issue key defaults to the one in the current branch name (feature/ZOD-1234-…).
+
+Examples:
+  $ jirallm pr-context --repo C:/w/3825
+  $ jirallm pr-context ZOD-3825 --since 2026-10-20
+`)
+  .action(async (issueKey: string | undefined, opts: PrContextOptions) => {
+    try { await runPrContext(issueKey, opts); } catch (err) { exitOnError(err); }
   });
 
 program
