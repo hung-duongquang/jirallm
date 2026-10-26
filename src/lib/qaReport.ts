@@ -235,5 +235,8 @@ export function reportToWiki(report: string): string {
     .join('\n')
     .replace(/<br\s*\/?>/g, ' \\\\ ')
     .replace(/!attachments\/([^!|]+)!/g, '!$1!')
-    .replace(/\[([^|\]]+)\|attachments\/([^\]]+)\]/g, '[^$2]');
+    .replace(/\[([^|\]]+)\|attachments\/([^\]]+)\]/g, '[^$2]')
+    // Code blocks show their text literally, so braces there need no escape.
+    .replace(/(\{code(?::[^}\n]*)?\}\n)([\s\S]*?)(\{code\})/g, (_m, open: string, body: string, close: string) =>
+      open + body.replaceAll('\\{', '{').replaceAll('\\}', '}') + close);
 }

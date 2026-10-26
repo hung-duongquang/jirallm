@@ -247,6 +247,26 @@ export class ConfluenceClient {
     return versions;
   }
 
+  /** Direct child pages of a page, in their tree order. */
+  async childPages(id: string): Promise<{ id: string; title: string; url: string }[]> {
+    const out: { id: string; title: string; url: string }[] = [];
+    let next: string | undefined = `/api/v2/pages/${encodeURIComponent(id)}/children?limit=250`;
+    while (next) {
+      const page: { results: { id: string; title: string }[]; _links?: { next?: string } } = await this.getJson(next);
+      out.push(...page.results.map((r) => ({ id: String(r.id), title: r.title, url: `${this.wiki}/pages/viewpage.action?pageId=${r.id}` })));
+      next = page._links?.next;
+    }
+    return out;
+  }
+
+  /** The page with exactly this title in the space (titles are unique per space), if any. */
+  async findPageByTitle(spaceKey: string, title: string): Promise<{ id: string; version: number } | undefined> {
+    const params = new URLSearchParams({ spaceKey, title, type: 'page', expand: 'version' });
+    const res = await this.getJson<{ results: { id: string; version?: { number?: number } }[] }>(`/rest/api/content?${params}`);
+    const hit = res.results[0];
+    return hit ? { id: String(hit.id), version: hit.version?.number ?? 0 } : undefined;
+  }
+
   /** One page of a CQL search (v1 API; v2 has no search). `cursor` comes from the previous page. */
   async search(cql: string, opts: { limit: number; cursor?: string }): Promise<ConfluenceSearchPage> {
     const params = new URLSearchParams({ cql, limit: String(opts.limit), expand: 'content.space' });

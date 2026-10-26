@@ -7,7 +7,7 @@ import path from 'node:path';
  */
 export const AGENT_GUIDE = `---
 name: jirallm
-description: Read and update Jira and Confluence from the shell with jirallm. Use when a task mentions a Jira key (e.g. ZOD-1234), a sprint, a board column, or asks to assign, transition, comment or log work; to find or read a Confluence page (spec, test report); to test a ticket; before opening a pull request for a ticket branch; or to check what changed in tickets or whether the local ticket context is current.
+description: Read and update Jira and Confluence from the shell with jirallm. Use when a task mentions a Jira key (e.g. ZOD-1234), a sprint, a board column, or asks to assign, transition, comment or log work; to find, read or write a Confluence page (spec, test report); to write up a ticket's business or technical context, documentation or a how-to-test for testers or the team; to test a ticket; before opening a pull request for a ticket branch; or to check what changed in tickets or whether the local ticket context is current.
 model: sonnet
 ---
 
@@ -24,6 +24,7 @@ Output switches to JSON when stdout is piped. Prefer the compact forms below: th
 | Quick look, no files | \`jirallm fetch PROJ-1\` |
 | One Confluence page by URL (e.g. a test report) | \`jirallm page <url>\` → \`jira-export/confluence/<id>-<slug>/page.md\` |
 | Find Confluence pages (plain words or CQL) | \`jirallm page:search "<words>" [--space KEY] --format tsv\`, then \`jirallm page <url>\` on a hit |
+| Child pages of a Confluence page (find where a new page goes) | \`jirallm page:children <id or url> --format tsv\` |
 | List issues (compact) | \`jirallm search --org <org> '<JQL>' --fields key,summary,status,assignee --format tsv --all\` |
 | Active sprint, by status | JQL \`project = PROJ AND sprint in openSprints() AND status = "To Do"\` |
 | A board **column** (columns are not statuses) | \`jirallm boards --org <org>\` → \`jirallm board:issues --help\` |
@@ -44,6 +45,14 @@ jirallm or the Atlassian MCP server: use jirallm for ticket context (files on di
 | Transition | \`jirallm transition PROJ-1 --to "Code Review"\` (positional status is an error) |
 | Comment | \`jirallm comment PROJ-1 --help\` (markdown is converted) |
 | Log work | \`jirallm worklog PROJ-1 "1h 30m"\` |
+| Publish a markdown file as a Confluence page (create, then update) | \`jirallm page:publish <file.md> --space KEY --parent <id> --link PROJ-1 --dry-run\` |
+
+## Documents for the team
+
+Write-ups that testers or colleagues read (a ticket's business and technical context, how to test, a design note) belong in Confluence next to the ticket, not in a chat-only or private doc tool, unless the user asks for that tool:
+1. Write the markdown to \`jira-export/<key>/context.md\` (\`# Title\` first; images next to it, linked relatively, become attachments; draw diagrams as images, since Confluence does not render mermaid).
+2. Find the parent page: the user's choice, or \`page:search\` / \`page:children\` under the space's feature or sprint pages. Ask when unsure.
+3. \`jirallm page:publish jira-export/<key>/context.md --space KEY --parent <id> --link <key> --dry-run\`, show the plan, and publish after the user confirms (a **write**). Later runs update the same page (the id is kept in \`.context.md.confluence.json\`); a page with the same title is never overwritten without \`--page\`.
 
 ## Before opening a PR
 

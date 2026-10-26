@@ -48,6 +48,7 @@ import { runPage, type PageOptions } from './commands/page.js';
 import { runPageSearch, type PageSearchOptions } from './commands/pageSearch.js';
 import { runChanges, runWatch, type ChangesOptions, type WatchOptions } from './commands/watch.js';
 import { runPrContext, type PrContextOptions } from './commands/prContext.js';
+import { runPageChildren, runPagePublish, type PageChildrenOptions, type PagePublishOptions } from './commands/pagePublish.js';
 import {
   runQaImport, runQaInit, runQaPublish, runQaResult,
   type QaImportOptions, type QaInitOptions, type QaPublishOptions, type QaResultOptions,
@@ -1548,6 +1549,38 @@ program
   .option('--output-dir <path>', 'Export directory', './jira-export')
   .action(async (url: string, opts: PageOptions) => {
     try { await runPage(url, opts); } catch (err) { exitOnError(err); }
+  });
+
+program
+  .command('page:publish <file>')
+  .description('Publish a markdown file as a Confluence page (creates it, later runs update it); local images/files become attachments')
+  .option('-o, --org <name>', 'Organization whose credentials and sites to use')
+  .option('--space <key>', 'Space of a new page, e.g. ZOD')
+  .option('--parent <id|url>', 'Parent page of a new page (find one with page:children)')
+  .option('--page <id|url>', 'Update this existing page instead')
+  .option('--title <title>', 'Page title (default: the first "# " heading, else the file name)')
+  .option('--site <url>', 'Confluence site (default: the first confluence_urls entry, else the Jira site)')
+  .option('--link <issue-key>', 'Link the page from this issue')
+  .option('--dry-run', 'Print what would be created or updated without writing')
+  .addHelpText('after', `
+The page id is remembered in .<file>.confluence.json next to the file, so publishing again updates
+the same page. An existing page with the same title is never overwritten unless named with --page.
+
+Examples:
+  $ jirallm page:publish jira-export/zod-1234/context.md --space ZOD --parent 1395982430 --link ZOD-1234 --dry-run
+  $ jirallm page:publish jira-export/zod-1234/context.md
+`)
+  .action(async (file: string, opts: PagePublishOptions) => {
+    try { await runPagePublish(file, opts); } catch (err) { exitOnError(err); }
+  });
+
+program
+  .command('page:children <id|url>')
+  .description('List the direct child pages of a Confluence page (to find a parent for page:publish)')
+  .option('-o, --org <name>', 'Organization whose credentials and sites to use')
+  .option('--format <format>', 'text, tsv or json (default: text, json when piped)')
+  .action(async (page: string, opts: PageChildrenOptions) => {
+    try { await runPageChildren(page, opts); } catch (err) { exitOnError(err); }
   });
 
 program
