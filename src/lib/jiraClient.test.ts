@@ -1165,6 +1165,23 @@ describe('JiraClient.fetchIssueRaw', () => {
     const url = (vi.mocked(fetchMock).mock.calls[0][0] as string) ?? '';
     expect(decodeURIComponent(url)).toContain('expand=names,renderedFields');
   });
+
+  it('requests only the given field IDs when a field list is passed', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => ({ key: 'PROJ-1', fields: { issuelinks: [] } }),
+    })) as unknown as typeof fetch;
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new JiraClient(FAKE_CONFIG, 'token');
+    await client.fetchIssueRaw('PROJ-1', ['names'], ['issuelinks', 'customfield_10050']);
+
+    const url = decodeURIComponent((vi.mocked(fetchMock).mock.calls[0][0] as string) ?? '');
+    expect(url).toContain('fields=issuelinks,customfield_10050');
+    expect(url).not.toContain('*all');
+  });
 });
 
 describe('JiraApiError', () => {

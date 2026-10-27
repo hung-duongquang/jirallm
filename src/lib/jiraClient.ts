@@ -917,8 +917,8 @@ export class JiraClient {
     return task;
   }
 
-  async fetchIssueRaw(issueKey: string, expand: string[] = ['names']): Promise<RawIssue> {
-    const params = new URLSearchParams({ fields: '*all', expand: expand.join(',') });
+  async fetchIssueRaw(issueKey: string, expand: string[] = ['names'], fields: string[] = ['*all']): Promise<RawIssue> {
+    const params = new URLSearchParams({ fields: fields.join(','), expand: expand.join(',') });
     return this.makeRequest<RawIssue>(`/issue/${issueKey}?${params.toString()}`);
   }
 

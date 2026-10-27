@@ -340,6 +340,20 @@ describe('runFetch', () => {
     expect(JSON.parse(writes.join(''))).toEqual(rawIssue);
   });
 
+  it('--raw --fields passes raw Jira field IDs through instead of *all', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    fetchIssueRawMock.mockResolvedValue({ key: 'PROJ-1', fields: { issuelinks: [] } });
+    await runFetch({ issueKey: 'PROJ-1', org: 'acme', raw: true, fields: 'issuelinks, customfield_10050' });
+    expect(fetchIssueRawMock).toHaveBeenCalledWith('PROJ-1', ['names'], ['issuelinks', 'customfield_10050']);
+  });
+
+  it('--raw --fields rejects presets and +/- modifiers', async () => {
+    await expect(runFetch({ issueKey: 'PROJ-1', org: 'acme', raw: true, fields: 'default,+priority' })).rejects.toThrow(
+      /raw Jira field IDs only.*default, \+priority/
+    );
+    expect(fetchIssueRawMock).not.toHaveBeenCalled();
+  });
+
   it('--rendered expands renderedFields and dumps the raw object as JSON', async () => {
     Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
     const rawIssue = {

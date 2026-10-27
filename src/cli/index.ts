@@ -1301,7 +1301,7 @@ program
   .option('--full', 'Include everything (comments, history, worklog, subtasks, links, attachments)')
   .option(
     '--fields <list>',
-    'Field set to include: preset (all|default|minimal), +name to add to the current set, -name to remove from it, or a bare comma list. Unrecognised names are an error.'
+    'Field set to include: preset (all|default|minimal), +name to add to the current set, -name to remove from it, or a bare comma list. Unrecognised names are an error. With --raw: a comma list of raw Jira field IDs to return instead of all fields.'
   )
   .option('--raw', 'Output the complete, untransformed Jira field object (all fields; implies JSON)')
   .option('--rendered', 'Include renderedFields (Jira-rendered HTML for description and other fields; implies raw JSON)')
@@ -1332,6 +1332,10 @@ fields, so you can confirm a wiki-markup body rendered correctly. --expand lets
 you pass arbitrary Jira expand params through on the raw object. Both imply raw
 JSON output.
 
+--raw --fields <ids> narrows the raw object to those Jira field IDs (passed
+straight to the API, so any customfield_NNNNN works): raw exactness without
+the token cost of every field.
+
 Examples:
   $ jirallm fetch PROJ-123 --json
   $ jirallm fetch acme/PROJ-123
@@ -1339,6 +1343,7 @@ Examples:
   $ jirallm fetch PROJ-123 --full
   $ jirallm fetch PROJ-123 --fields all --json
   $ jirallm fetch PROJ-123 --raw | jq '.fields.labels'
+  $ jirallm fetch PROJ-123 --raw --fields issuelinks,customfield_10050
   $ jirallm fetch PROJ-123 --rendered | jq -r '.renderedFields.description'
   $ jirallm fetch PROJ-123 --expand changelog,renderedFields
   $ jirallm fetch PROJ-123 --json | jq .status

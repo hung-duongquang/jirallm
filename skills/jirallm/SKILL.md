@@ -15,6 +15,7 @@ Output switches to JSON when stdout is piped. Prefer the compact forms below: th
 | Full ticket as markdown (description, AC, comments, attachments, linked Confluence pages) | `jirallm PROJ-1 --no-status-changes --output-dir ./jira-export` then read `jira-export/proj-1/task.md` |
 | Ticket plus its parent chain / linked issues | add `--include-parent` / `--include-linked` |
 | Quick look, no files | `jirallm fetch PROJ-1` |
+| Exact field values the markdown lacks or renders wrong (custom fields, link metadata, IDs) | `jirallm fetch PROJ-1 --raw --fields <jira field ids>` (e.g. `issuelinks,customfield_10050`); avoid bare `--raw`, it returns every field |
 | One Confluence page by URL (e.g. a test report) | `jirallm page <url>` → `jira-export/confluence/<id>-<slug>/page.md` |
 | Find Confluence pages (plain words or CQL) | `jirallm page:search "<words>" [--space KEY] --format tsv`, then `jirallm page <url>` on a hit |
 | Child pages of a Confluence page (find where a new page goes) | `jirallm page:children <id or url> --format tsv` |

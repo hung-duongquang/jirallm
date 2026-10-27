@@ -77,6 +77,23 @@ function buildAttachmentsSection(data: JiraTaskData): string {
   return ['## Attachments', '', ...lines].join('\n');
 }
 
+/**
+ * With --raw, --fields is a plain comma list of Jira field IDs passed straight
+ * to the API (description, issuelinks, customfield_10050, ...). Presets and
+ * +add/-drop belong to the transformed view, so they are rejected here.
+ */
+export function parseRawFieldIds(list: string): string[] {
+  const ids = list.split(',').map((s) => s.trim()).filter(Boolean);
+  if (ids.length === 0) throw new Error('--fields is empty.');
+  const bad = ids.filter((id) => /^[+-]/.test(id) || ['all', 'default', 'minimal'].includes(id));
+  if (bad.length > 0) {
+    throw new Error(
+      `With --raw, --fields takes raw Jira field IDs only (e.g. description,issuelinks,customfield_10050); not: ${bad.join(', ')}`
+    );
+  }
+  return ids;
+}
+
 export async function runFetch(opts: FetchOptions): Promise<void> {
   const parsed = parseIssueKeyArgs([opts.issueKey]);
   const key = parsed.keys[0];
@@ -94,7 +111,11 @@ export async function runFetch(opts: FetchOptions): Promise<void> {
         if (trimmed) expand.add(trimmed);
       }
     }
-    printJson(await client.fetchIssueRaw(key, [...expand]));
+    if (opts.fields) {
+      printJson(await client.fetchIssueRaw(key, [...expand], parseRawFieldIds(opts.fields)));
+    } else {
+      printJson(await client.fetchIssueRaw(key, [...expand]));
+    }
     return;
   }
 
