@@ -1,7 +1,8 @@
 // Publishes two generated branches to a remote (default: `fork`), without touching the
 // working tree or the current branch:
 //
-//   release   - the built package (dist/, ui/, package.json, README.md, LICENSE), so users can
+//   release   - the built package (dist/, ui/, package.json, README.md, LICENSE) plus the Claude Code
+//               plugin (.claude-plugin/, hooks/, skills/), so users can
 //               `npm install -g github:<owner>/jirallm#release` without building anything.
 //   gh-pages  - ui/index.html as the GitHub Pages site.
 //
@@ -50,7 +51,7 @@ try {
     'README.md': readFileSync('README.md'),
     LICENSE: readFileSync('LICENSE'),
   };
-  for (const file of [...walk('dist'), ...walk('ui')]) {
+  for (const file of [...walk('dist'), ...walk('ui'), ...walk('.claude-plugin'), ...walk('hooks'), ...walk('skills')]) {
     if (/\.test\.(js|d\.ts|js\.map|d\.ts\.map)$/.test(file)) continue;
     release[relative('.', file).split(sep).join('/')] = readFileSync(file);
   }

@@ -269,6 +269,17 @@ jirallm PROJ-123 PROJ-124 --output-dir ./triage-bundle
 cat ./triage-bundle/PROJ-123/index.md | pbcopy
 ```
 
+## Claude Code plugin
+
+The repository is also a Claude Code plugin (and its own marketplace). It adds the `jirallm` skill, which teaches Claude which command answers which question and which commands write to Jira, and a session-start hook that puts the changes logged by `jirallm watch` in context. It needs the CLI installed and configured (see [Installation](#installation)).
+
+```bash
+claude plugin marketplace add hung-duongquang/jirallm   # or the path of a local clone
+claude plugin install jirallm@jirallm
+```
+
+Restart Claude Code afterwards. `claude plugin update jirallm@jirallm` picks up a newer skill. The skill is the text `jirallm agent-guide` prints; `pnpm build` copies it to `skills/jirallm/SKILL.md`.
+
 ## For agents (CLI commands)
 
 Every command supports `--json` (and automatically switches to JSON when stdout is not a TTY), so they're safe to pipe into `jq` or feed back into an agent. Write commands echo what they created, so success can be confirmed from the command itself without a follow-up read. Every write command also supports `--dry-run`.

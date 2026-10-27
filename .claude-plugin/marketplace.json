@@ -1,0 +1,15 @@
+{
+  "name": "jirallm",
+  "description": "jirallm for Claude Code: Jira and Confluence context from the shell.",
+  "owner": {
+    "name": "Hung Duong Quang",
+    "url": "https://github.com/hung-duongquang"
+  },
+  "plugins": [
+    {
+      "name": "jirallm",
+      "source": "./",
+      "description": "jirallm skill (Jira/Confluence from the shell) and a session-start hook that shows new ticket changes."
+    }
+  ]
+}

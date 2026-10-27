@@ -32,10 +32,13 @@
     "dist",
     "ui",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    ".claude-plugin",
+    "hooks",
+    "skills"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/sync-plugin.mjs",
     "dev": "tsc --watch",
     "start": "node dist/cli/index.js",
     "type-check": "tsc --noEmit",

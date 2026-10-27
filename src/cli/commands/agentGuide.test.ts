@@ -18,6 +18,10 @@ describe('agent-guide', () => {
     runAgentGuide({ install: dir });
     expect(readFileSync(path.join(dir, '.claude', 'skills', 'jirallm', 'SKILL.md'), 'utf8')).toBe(AGENT_GUIDE);
   });
+
+  it('matches the plugin skill (run `pnpm build` to refresh skills/jirallm/SKILL.md)', () => {
+    expect(readFileSync('skills/jirallm/SKILL.md', 'utf8').replace(/\r\n/g, '\n')).toBe(AGENT_GUIDE);
+  });
 });
 
 describe('search --format tsv', () => {
