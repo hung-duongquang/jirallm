@@ -4,7 +4,7 @@ import path from 'node:path';
 import { listOrgs, loadProfile, type ResolvedProfile } from '../../lib/config.js';
 import { ConfluenceClient, exportConfluencePage } from '../../lib/confluence.js';
 import { JiraExporter } from '../../lib/exporter.js';
-import { JiraClient, type JqlIssue } from '../../lib/jiraClient.js';
+import { JiraClient, jiraMillis, latestCommentUpdate, type JqlIssue } from '../../lib/jiraClient.js';
 
 export type WatchOptions = {
   org?: string;
@@ -22,7 +22,7 @@ const MINE_JQL = 'assignee = currentUser() AND statusCategory != Done';
 const CHANGES_FILE = 'CHANGES.md';
 const TASK_NAME = 'jirallm watch';
 
-type LocalIssue = { key: string; updatedAt?: string };
+type LocalIssue = { key: string; updatedAt?: string; commentsUpdatedAt?: string };
 type LocalPage = { id: string; origin: string; version: number; dir: string };
 
 /** Reads `key: "value"` lines from a markdown file's frontmatter (top-level and one nested level). */
@@ -36,8 +36,7 @@ export function frontmatter(md: string): Record<string, string> {
   return out;
 }
 
-/** Jira timestamps end in `+0200`; Date.parse wants `+02:00`. */
-const toMillis = (ts: string | undefined) => (ts ? Date.parse(ts.replace(/([+-]\d\d)(\d\d)$/, '$1:$2')) : NaN);
+const toMillis = jiraMillis;
 
 function localIssues(outputDir: string): LocalIssue[] {
   if (!existsSync(outputDir)) return [];
@@ -45,7 +44,7 @@ function localIssues(outputDir: string): LocalIssue[] {
     const file = path.join(outputDir, d.name, 'task.md');
     if (!d.isDirectory() || !existsSync(file)) return [];
     const fm = frontmatter(readFileSync(file, 'utf-8'));
-    return fm.key ? [{ key: fm.key, updatedAt: fm.updatedAt }] : [];
+    return fm.key ? [{ key: fm.key, updatedAt: fm.updatedAt, commentsUpdatedAt: fm.commentsUpdatedAt }] : [];
   });
 }
 
@@ -70,7 +69,7 @@ async function searchKeys(client: JiraClient, keys: string[]): Promise<JqlIssue[
   for (;;) {
     if (remaining.length === 0) return [];
     try {
-      return await client.searchByJql(`key in (${remaining.join(',')})`, ['updated']);
+      return await client.searchByJql(`key in (${remaining.join(',')})`, ['updated', 'comment']);
     } catch (err) {
       const bad = [...(err as Error).message.matchAll(/'([A-Z][A-Z0-9_]*-\d+)'/g)].map((m) => m[1].toUpperCase());
       const next = remaining.filter((k) => !bad.includes(k.toUpperCase()));
@@ -86,7 +85,7 @@ export function describeChange(previous: string | null, current: string): string
   const before = frontmatter(previous);
   const after = frontmatter(current);
   const fields = [...new Set([...Object.keys(before), ...Object.keys(after)])]
-    .filter((k) => k !== 'updatedAt' && before[k] !== after[k])
+    .filter((k) => k !== 'updatedAt' && k !== 'commentsUpdatedAt' && before[k] !== after[k])
     .map((k) => `${k}: ${before[k] ?? '∅'} → ${after[k] ?? '∅'}`);
   const sections = (md: string) => {
     const map = new Map<string, string>();
@@ -102,6 +101,17 @@ export function describeChange(previous: string | null, current: string): string
   return [...fields, ...changed].join('; ') || 'no visible change';
 }
 
+/**
+ * Jira does not move the issue's `updated` when a comment is edited, so compare the newest comment
+ * timestamp with what the export saw (exports without `commentsUpdatedAt` fall back to `updatedAt`).
+ */
+export function commentEditedSince(known: LocalIssue, issue: JqlIssue): boolean {
+  const comments = (issue.fields.comment as { comments?: Array<{ created: string; updated?: string }> } | undefined)
+    ?.comments;
+  const seen = Math.max(toMillis(known.commentsUpdatedAt) || 0, toMillis(known.updatedAt) || 0);
+  return toMillis(latestCommentUpdate(comments ?? [])) > seen;
+}
+
 async function runOnce(profile: ResolvedProfile, opts: WatchOptions, outputDir: string): Promise<string[]> {
   const client = new JiraClient(profile.config, profile.apiToken);
   const local = localIssues(outputDir);
@@ -112,6 +122,7 @@ async function runOnce(profile: ResolvedProfile, opts: WatchOptions, outputDir: 
     for (const issue of await searchKeys(client, local.slice(i, i + 100).map((l) => l.key))) {
       const known = localByKey.get(issue.key.toUpperCase());
       if (!known || toMillis(known.updatedAt) !== toMillis(issue.fields.updated as string)) stale.add(issue.key);
+      else if (commentEditedSince(known, issue)) stale.add(issue.key);
     }
   }
   const scopes = [opts.mine !== false ? MINE_JQL : undefined, opts.jql].filter((q): q is string => Boolean(q));

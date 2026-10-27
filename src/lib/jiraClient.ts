@@ -52,6 +52,7 @@ export type JiraComment = {
   id: string;
   author: { displayName: string; accountId?: string };
   created: string;
+  updated?: string;
   body: string | JiraADFDocument;
   renderedBody?: string;
 };
@@ -106,6 +107,20 @@ export type JiraTransition = {
   name: string;
   to: { id: string; name: string };
 };
+
+/** Jira timestamps end in `+0200`; Date.parse wants `+02:00`. */
+export const jiraMillis = (ts: string | undefined) =>
+  ts ? Date.parse(ts.replace(/([+-]dd)(dd)$/, '$1:$2')) : NaN;
+
+/** Newest `updated` (or `created`) among the comments, as Jira returned it; undefined without comments. */
+export function latestCommentUpdate(comments: Array<{ created: string; updated?: string }>): string | undefined {
+  let latest: string | undefined;
+  for (const c of comments) {
+    const ts = c.updated ?? c.created;
+    if (!latest || jiraMillis(ts) > jiraMillis(latest)) latest = ts;
+  }
+  return latest;
+}
 
 export type JqlIssue = { key: string; fields: Record<string, unknown> };
 
@@ -256,6 +271,8 @@ export type JiraTaskData = {
   creator?: string;
   createdAt?: string;
   updatedAt?: string;
+  /** Latest comment create/edit time. Editing a comment does not move `updatedAt`, so `watch` checks this too. */
+  commentsUpdatedAt?: string;
   dueDate?: string;
   resolutionDate?: string;
   components?: string[];
@@ -883,6 +900,7 @@ export class JiraClient {
     });
 
     if (includeComments) {
+      task.commentsUpdatedAt = latestCommentUpdate(comments);
       task.comments = comments.map((comment) => ({
         id: comment.id,
         author: comment.author.displayName,
