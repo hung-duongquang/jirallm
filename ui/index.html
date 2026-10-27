@@ -179,6 +179,7 @@
 <header>
   <h1>jirallm</h1>
   <span class="conn" id="conn">Connecting…</span>
+  <button id="openSetup" title="How to install jirallm and the Claude Code plugin">Setup</button>
   <div class="outdir">
     <label for="outdir">Output folder</label>
     <input type="text" id="outdir" spellcheck="false">
@@ -284,6 +285,8 @@ const FORK = HOSTED && location.hostname.endsWith('.github.io')
   ? `${location.hostname.split('.')[0]}/${location.pathname.split('/')[1] || 'jirallm'}`
   : 'hung-duongquang/jirallm';
 const INSTALL_CMD = `npm install -g github:${FORK}#release`;
+const PLUGIN_MARKETPLACE_CMD = `claude plugin marketplace add ${FORK}#release`;
+const PLUGIN_INSTALL_CMD = 'claude plugin install jirallm@jirallm';
 
 class OfflineError extends Error {}
 async function request(path, init = {}) {
@@ -845,7 +848,7 @@ function renderSetup(problem, offline) {
   $('previewBody').innerHTML = `
     <div class="setup">
       <h2>Connect your computer</h2>
-      <p class="problem">${esc(problem)}</p>
+      ${problem ? `<p class="problem">${esc(problem)}</p>` : ''}
       <p>This page runs exports through a small helper on your own machine. Your Jira token is stored
         in your OS keychain by the helper and is never sent to this website.</p>
       <ol>
@@ -865,6 +868,21 @@ function renderSetup(problem, offline) {
       </ol>
       <p class="hint">Optional, for PR stacks: install the <a href="https://cli.github.com" target="_blank" rel="noopener">GitHub CLI</a> and run <code>gh auth login</code>.
         Safari blocks pages from reaching your own computer; use Chrome, Edge or Firefox.</p>
+
+      <h2>Use it with Claude Code</h2>
+      <p>The jirallm plugin teaches Claude which jirallm command answers which question (ticket context,
+        Confluence pages, starting work, test reports) and asks before anything that writes to Jira.
+        It needs the helper from step 1 and the token from step 2.</p>
+      <ol>
+        <li><b>Add the plugin</b> (once):${code(PLUGIN_MARKETPLACE_CMD)}${code(PLUGIN_INSTALL_CMD)}
+          <span class="hint">Restart Claude Code afterwards. Update later with <code>claude plugin marketplace update jirallm</code>
+            and <code>claude plugin update jirallm@jirallm</code>.</span></li>
+        <li><b>Optional: keep tickets current.</b> In your project folder, export a ticket once
+          (<code>jirallm ZOD-1234 --output-dir ./jira-export</code>), then let jirallm re-export changed tickets
+          every 15 minutes:${code('jirallm watch --install 15')}
+          <span class="hint">Each new Claude session then starts with the Jira and Confluence changes since the last one.
+            On macOS and Linux the command prints a crontab line to add instead.</span></li>
+      </ol>
     </div>`;
   $('connect').onclick = () => {
     localPort = Number($('port').value) || 4321; store.set('port', localPort); connect();
@@ -897,11 +915,15 @@ async function connect() {
   await loadLibrary();
 }
 
+$('openSetup').onclick = () => { current = null; renderSetup('', !info); };
+
 (async () => {
   selectTab(store.get('tab', 'keys') === 'stack');
   syncOpts(); updateKeyCount();
   if (params.get('repo')) $('repo').value = params.get('repo');
   await connect();
+  // ?setup opens the guide even when the helper is running: the link to share with colleagues.
+  if (params.has('setup') && info) renderSetup('', false);
 })();
 </script>
 </body>
