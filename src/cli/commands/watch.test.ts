@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { changeEntries, commentEditedSince, describeChange, frontmatter } from './watch.js';
+import { changeEntries, commentsChangedSince, describeChange, frontmatter } from './watch.js';
 
 const task = (status: string, comments: string) =>
   `---\nkey: "ZOD-1"\nstatus: "${status}"\nupdatedAt: "2026-10-22T04:35:11.422+0200"\n---\n\n# ZOD-1\n\n## Description\n\nSame.\n\n## Comments\n\n${comments}\n`;
@@ -37,7 +37,7 @@ describe('changeEntries', () => {
   });
 });
 
-describe('commentEditedSince', () => {
+describe('commentsChangedSince', () => {
   const issue = (...updated: string[]) => ({
     key: 'ZOD-1',
     fields: { comment: { comments: updated.map((u) => ({ created: '2026-10-26T09:00:00.000+0100', updated: u })) } },
@@ -45,7 +45,7 @@ describe('commentEditedSince', () => {
 
   it('flags a comment edited after the export, although the issue updated did not move', () => {
     const known = { key: 'ZOD-1', updatedAt: '2026-10-27T04:58:01.948+0100' };
-    expect(commentEditedSince(known, issue('2026-10-27T05:06:14.152+0100'))).toBe(true);
+    expect(commentsChangedSince(known, issue('2026-10-27T05:06:14.152+0100'))).toBe(true);
   });
 
   it('compares with commentsUpdatedAt when the export has it', () => {
@@ -54,11 +54,37 @@ describe('commentEditedSince', () => {
       updatedAt: '2026-10-27T04:00:00.000+0100',
       commentsUpdatedAt: '2026-10-27T05:29:40.860+0100',
     };
-    expect(commentEditedSince(known, issue('2026-10-27T05:29:40.860+0100', '2026-10-26T10:00:00.000+0100'))).toBe(false);
-    expect(commentEditedSince(known, issue('2026-10-27T06:29:40.860+0200'))).toBe(false);
+    expect(commentsChangedSince(known, issue('2026-10-27T05:29:40.860+0100', '2026-10-26T10:00:00.000+0100'))).toBe(false);
+    expect(commentsChangedSince(known, issue('2026-10-27T06:29:40.860+0200'))).toBe(false);
   });
 
   it('ignores issues without comments', () => {
-    expect(commentEditedSince({ key: 'ZOD-1', updatedAt: '2026-10-27T04:00:00.000+0100' }, { key: 'ZOD-1', fields: {} })).toBe(false);
+    expect(commentsChangedSince({ key: 'ZOD-1', updatedAt: '2026-10-27T04:00:00.000+0100' }, { key: 'ZOD-1', fields: {} })).toBe(false);
+  });
+});
+
+describe('commentsChangedSince: deletions', () => {
+  const comments = (n: number) => ({
+    key: 'ZOD-1',
+    fields: {
+      comment: {
+        total: n,
+        comments: Array.from({ length: n }, () => ({ created: '2026-10-26T09:00:00.000+0100', updated: '2026-10-26T09:00:00.000+0100' })),
+      },
+    },
+  });
+  const known = { key: 'ZOD-1', updatedAt: '2026-10-27T05:00:00.000+0100', commentCount: 4 };
+
+  it('flags a deleted comment by the lower count', () => {
+    expect(commentsChangedSince(known, comments(3))).toBe(true);
+  });
+
+  it('flags the last comment being deleted', () => {
+    expect(commentsChangedSince({ ...known, commentCount: 1 }, comments(0))).toBe(true);
+  });
+
+  it('does not flag an unchanged count, nor exports without commentCount', () => {
+    expect(commentsChangedSince(known, comments(4))).toBe(false);
+    expect(commentsChangedSince({ key: 'ZOD-1', updatedAt: known.updatedAt }, comments(3))).toBe(false);
   });
 });

@@ -22,7 +22,7 @@ const MINE_JQL = 'assignee = currentUser() AND statusCategory != Done';
 const CHANGES_FILE = 'CHANGES.md';
 const TASK_NAME = 'jirallm watch';
 
-type LocalIssue = { key: string; updatedAt?: string; commentsUpdatedAt?: string };
+type LocalIssue = { key: string; updatedAt?: string; commentsUpdatedAt?: string; commentCount?: number };
 type LocalPage = { id: string; origin: string; version: number; dir: string };
 
 /** Reads `key: "value"` lines from a markdown file's frontmatter (top-level and one nested level). */
@@ -44,7 +44,9 @@ function localIssues(outputDir: string): LocalIssue[] {
     const file = path.join(outputDir, d.name, 'task.md');
     if (!d.isDirectory() || !existsSync(file)) return [];
     const fm = frontmatter(readFileSync(file, 'utf-8'));
-    return fm.key ? [{ key: fm.key, updatedAt: fm.updatedAt, commentsUpdatedAt: fm.commentsUpdatedAt }] : [];
+    if (!fm.key) return [];
+    const commentCount = fm.commentCount === undefined ? undefined : Number(fm.commentCount);
+    return [{ key: fm.key, updatedAt: fm.updatedAt, commentsUpdatedAt: fm.commentsUpdatedAt, commentCount }];
   });
 }
 
@@ -85,7 +87,7 @@ export function describeChange(previous: string | null, current: string): string
   const before = frontmatter(previous);
   const after = frontmatter(current);
   const fields = [...new Set([...Object.keys(before), ...Object.keys(after)])]
-    .filter((k) => k !== 'updatedAt' && k !== 'commentsUpdatedAt' && before[k] !== after[k])
+    .filter((k) => !['updatedAt', 'commentsUpdatedAt', 'commentCount'].includes(k) && before[k] !== after[k])
     .map((k) => `${k}: ${before[k] ?? '∅'} → ${after[k] ?? '∅'}`);
   const sections = (md: string) => {
     const map = new Map<string, string>();
@@ -102,14 +104,18 @@ export function describeChange(previous: string | null, current: string): string
 }
 
 /**
- * Jira does not move the issue's `updated` when a comment is edited, so compare the newest comment
- * timestamp with what the export saw (exports without `commentsUpdatedAt` fall back to `updatedAt`).
+ * Jira does not move the issue's `updated` when a comment is edited or deleted, so compare the newest
+ * comment timestamp (exports without `commentsUpdatedAt` fall back to `updatedAt`) and the comment count
+ * (skipped for exports without `commentCount`) with what the export saw.
  */
-export function commentEditedSince(known: LocalIssue, issue: JqlIssue): boolean {
-  const comments = (issue.fields.comment as { comments?: Array<{ created: string; updated?: string }> } | undefined)
-    ?.comments;
+export function commentsChangedSince(known: LocalIssue, issue: JqlIssue): boolean {
+  const field = issue.fields.comment as
+    | { total?: number; comments?: Array<{ created: string; updated?: string }> }
+    | undefined;
+  const comments = field?.comments ?? [];
+  if (known.commentCount !== undefined && (field?.total ?? comments.length) !== known.commentCount) return true;
   const seen = Math.max(toMillis(known.commentsUpdatedAt) || 0, toMillis(known.updatedAt) || 0);
-  return toMillis(latestCommentUpdate(comments ?? [])) > seen;
+  return toMillis(latestCommentUpdate(comments)) > seen;
 }
 
 async function runOnce(profile: ResolvedProfile, opts: WatchOptions, outputDir: string): Promise<string[]> {
@@ -122,7 +128,7 @@ async function runOnce(profile: ResolvedProfile, opts: WatchOptions, outputDir: 
     for (const issue of await searchKeys(client, local.slice(i, i + 100).map((l) => l.key))) {
       const known = localByKey.get(issue.key.toUpperCase());
       if (!known || toMillis(known.updatedAt) !== toMillis(issue.fields.updated as string)) stale.add(issue.key);
-      else if (commentEditedSince(known, issue)) stale.add(issue.key);
+      else if (commentsChangedSince(known, issue)) stale.add(issue.key);
     }
   }
   const scopes = [opts.mine !== false ? MINE_JQL : undefined, opts.jql].filter((q): q is string => Boolean(q));

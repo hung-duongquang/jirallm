@@ -486,6 +486,7 @@ function buildFrontmatterBlock(task: JiraTaskData, selectedKeys: Set<string>): s
   const updatedAt = pickIfSelected('updatedAt', task.updatedAt);
   if (updatedAt) jira.updatedAt = updatedAt;
   if (updatedAt && task.commentsUpdatedAt) jira.commentsUpdatedAt = task.commentsUpdatedAt;
+  if (updatedAt && task.commentCount !== undefined) jira.commentCount = task.commentCount;
   const dueDate = pickIfSelected('dueDate', task.dueDate);
   if (dueDate) jira.dueDate = dueDate;
   const resolutionDate = pickIfSelected('resolutionDate', task.resolutionDate);

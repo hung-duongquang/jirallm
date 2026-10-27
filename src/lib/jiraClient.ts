@@ -273,6 +273,8 @@ export type JiraTaskData = {
   updatedAt?: string;
   /** Latest comment create/edit time. Editing a comment does not move `updatedAt`, so `watch` checks this too. */
   commentsUpdatedAt?: string;
+  /** Number of comments; a deleted comment moves neither `updatedAt` nor `commentsUpdatedAt`. */
+  commentCount?: number;
   dueDate?: string;
   resolutionDate?: string;
   components?: string[];
@@ -901,6 +903,7 @@ export class JiraClient {
 
     if (includeComments) {
       task.commentsUpdatedAt = latestCommentUpdate(comments);
+      task.commentCount = comments.length;
       task.comments = comments.map((comment) => ({
         id: comment.id,
         author: comment.author.displayName,
