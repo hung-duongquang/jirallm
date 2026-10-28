@@ -404,7 +404,11 @@ async function handle(req, res) {
         taskDirFor(outputDir, key);
         const loaded = lib.loadReport(outputDir, key.toUpperCase());
         sendJson(res, 200, loaded
-          ? { exists: true, ...loaded, counts: lib.countCases(loaded.report.cases) }
+          ? {
+            exists: true, ...loaded, counts: lib.countCases(loaded.report.cases),
+            // Field per case-table column (null = free column kept in case.extra), so the editor follows the layout.
+            columns: (loaded.report.columns ?? lib.REPORT_COLUMNS).map((label) => ({ label, field: lib.columnField(label) ?? null })),
+          }
           : { exists: false, exported: existsSync(lib.qaPaths(outputDir, key).taskMd) });
         return;
       }
@@ -414,6 +418,7 @@ async function handle(req, res) {
         taskDirFor(outputDir, body.key);
         const result = await lib.qaInit(await profile(), String(body.key).toUpperCase(), {
           outputDir, env: body.env ? String(body.env) : undefined, force: body.force === true,
+          template: body.template ? String(body.template) : undefined, api: body.api ? String(body.api) : undefined,
         }).catch((err) => { throw new HttpError(400, err.message); });
         sendJson(res, 200, result);
         return;

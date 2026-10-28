@@ -5,8 +5,8 @@ import { ConfluenceClient, stretchTables } from './confluence.js';
 import { JiraClient } from './jiraClient.js';
 import { playwrightResults, type PlaywrightReport, type PlaywrightResult } from './qaPlaywright.js';
 import {
-  countCases, evidenceCell, fromCell, newReport, NOT_RUN, parseAcceptanceScenarios, parseReport, renderReport, reportToWiki, toCell,
-  type QaCase, type QaReport, type Verdict,
+  countCases, evidenceCell, fromCell, newReport, NOT_RUN, parseAcceptanceScenarios, parseReport, renderReport, reportToWiki, TEMPLATES, toCell,
+  type QaCase, type QaReport, type Template, type Verdict,
 } from './qaReport.js';
 
 /**
@@ -53,8 +53,10 @@ export function saveReport(outputDir: string, issueKey: string, report: QaReport
 export async function qaInit(
   profile: ResolvedProfile,
   issueKey: string,
-  opts: { outputDir: string; env?: string; force?: boolean }
+  opts: { outputDir: string; env?: string; api?: string; template?: string; force?: boolean }
 ): Promise<{ path: string; caseCount: number }> {
+  const template = (opts.template || 'default') as Template;
+  if (!TEMPLATES.includes(template)) throw new Error(`Unknown template "${opts.template}"; use one of ${TEMPLATES.join(', ')}.`);
   const paths = qaPaths(opts.outputDir, issueKey);
   if (existsSync(paths.report) && !opts.force) throw new Error(`${paths.report} exists; start over with force.`);
   if (!existsSync(paths.taskMd)) throw new Error(`${issueKey} is not exported yet (no ${paths.taskMd}).`);
@@ -62,8 +64,9 @@ export async function qaInit(
   const issue = await new JiraClient(profile.config, profile.apiToken).fetchIssueRaw(issueKey, []);
   const title = String((issue.fields as { summary?: unknown } | undefined)?.summary ?? issueKey);
   const report = newReport(
-    { issueKey, issueUrl: `${profile.config.baseUrl}/browse/${issueKey}`, title, env: opts.env },
-    scenarios.length > 0 ? scenarios : [{ title: '', given: '', when: '', then: '' }]
+    { issueKey, issueUrl: `${profile.config.baseUrl}/browse/${issueKey}`, title, env: opts.env, api: opts.api },
+    scenarios.length > 0 ? scenarios : [{ title: '', given: '', when: '', then: '' }],
+    template
   );
   return { path: saveReport(opts.outputDir, issueKey, report), caseCount: scenarios.length };
 }

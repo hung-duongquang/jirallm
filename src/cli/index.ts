@@ -1510,6 +1510,8 @@ qa.command('init <issue-key>')
   .option('-o, --org <name>', 'Organization name override')
   .option('--output-dir <path>', 'Export directory', './jira-export')
   .option('--env <url>', 'Environment the tests run against (shown in the header)')
+  .option('--template <name>', 'Layout: default | api (shared base message, read-back section, Test Data column) | matrix (situation × action rows, side effects, Also-check list)', 'default')
+  .option('--api <endpoint>', 'Endpoint under test (API header row)')
   .option('--force', 'Overwrite an existing report')
   .action(async (issueKey: string, opts: QaInitOptions) => {
     try { await runQaInit(issueKey, opts); } catch (err) { exitOnError(err); }

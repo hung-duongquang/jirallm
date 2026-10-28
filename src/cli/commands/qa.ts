@@ -12,11 +12,13 @@ async function profileFor(issueKeyArg: string, org?: string) {
   return { key: parsed.key, profile: await loadProfile({ org: resolved, project: parsed.projectKey }) };
 }
 
-export type QaInitOptions = { org?: string; outputDir?: string; env?: string; force?: boolean };
+export type QaInitOptions = { org?: string; outputDir?: string; env?: string; api?: string; template?: string; force?: boolean };
 
 export async function runQaInit(issueKeyArg: string, opts: QaInitOptions): Promise<void> {
   const { key, profile } = await profileFor(issueKeyArg, opts.org);
-  const { path: file, caseCount } = await qaInit(profile, key, { outputDir: opts.outputDir ?? './jira-export', env: opts.env, force: opts.force });
+  const { path: file, caseCount } = await qaInit(profile, key, {
+    outputDir: opts.outputDir ?? './jira-export', env: opts.env, api: opts.api, template: opts.template, force: opts.force,
+  });
   console.log(caseCount > 0
     ? `✓ ${file}: ${caseCount} test case(s) from the acceptance criteria. Fill in steps, then record results with \`jirallm qa result\`.`
     : `✓ ${file}: no Scenario/Given/When/Then table in the acceptance criteria. Add cases by hand, or run the e2e tests and \`jirallm qa import\` their JSON report.`);

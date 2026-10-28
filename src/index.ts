@@ -65,7 +65,7 @@ export type {
 export { getToken, setToken, removeToken, hasStoredToken } from './lib/credentials.js';
 export { qaPaths, loadReport, saveReport, qaInit, qaRecordResult, qaPublish, qaImportPlaywright } from './lib/qa.js';
 export type { LoadedReport, PublishPlan, PublishResult, ImportSummary } from './lib/qa.js';
-export { countCases, toCell, fromCell } from './lib/qaReport.js';
+export { countCases, toCell, fromCell, columnField, REPORT_COLUMNS, TEMPLATES } from './lib/qaReport.js';
 export { playwrightResults } from './lib/qaPlaywright.js';
 export type { PlaywrightReport, PlaywrightResult } from './lib/qaPlaywright.js';
-export type { QaReport, QaCase, Verdict } from './lib/qaReport.js';
+export type { QaReport, QaCase, Verdict, Template } from './lib/qaReport.js';

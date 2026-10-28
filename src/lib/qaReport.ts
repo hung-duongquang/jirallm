@@ -21,16 +21,88 @@ export type QaCase = {
   automation: string;
   coverage: string;
   evidence: string;
+  /** Cells of columns that are not one of the fields above (e.g. Test Data, Side effects), keyed by column label. */
+  extra?: Record<string, string>;
 };
-const CASE_FIELDS = [
-  'id', 'title', 'precondition', 'steps', 'expected', 'priority', 'type', 'automation', 'coverage', 'evidence',
-] as const satisfies ReadonlyArray<keyof QaCase>;
+export type CaseField = Exclude<keyof QaCase, 'extra'>;
+
+/** Column labels testers use for each field; any other column is kept in `extra`. */
+const FIELD_ALIASES: Record<CaseField, readonly string[]> = {
+  id: ['id'],
+  title: ['title', 'scenario'],
+  precondition: ['precondition', 'situation', 'given'],
+  steps: ['steps', 'test step', 'action', 'when'],
+  expected: ['expected result', 'expected', 'expected results'],
+  priority: ['priority'],
+  type: ['type'],
+  automation: ['automation layer', 'automation'],
+  coverage: ['dev test coverage'],
+  evidence: ['evidence', 'result', 'results'],
+};
+
+/** The case field a column label maps to, or undefined for a free column kept in `extra`. */
+export function columnField(label: string): CaseField | undefined {
+  const norm = label.replace(/\*\*/g, '').trim().toLowerCase();
+  return (Object.keys(FIELD_ALIASES) as CaseField[]).find((f) => FIELD_ALIASES[f].includes(norm));
+}
+
+/**
+ * Report layouts the testers use, picked with `qa init --template`:
+ * - default: the case table above.
+ * - api: backend tickets driven by API calls or messages. A shared base message and a read-back section,
+ *   and a Test Data column so each case lists only what it changes.
+ * - matrix: one row per situation × action combination with its expected outcome and side effects,
+ *   plus an Also-check list for invariants (idempotency, mixed selections, …).
+ */
+export const TEMPLATES = ['default', 'api', 'matrix'] as const;
+export type Template = (typeof TEMPLATES)[number];
+
+const TEMPLATE_COLUMNS: Record<Template, readonly string[]> = {
+  default: REPORT_COLUMNS,
+  api: [
+    'ID', 'Title', 'Precondition', 'Test Data', 'Steps', 'Expected Result', 'Priority', 'Type',
+    'Automation Layer', 'Dev test coverage', '**Evidence**',
+  ],
+  matrix: ['ID', 'Title', 'Situation', 'Action', 'Expected Result', 'Side effects', 'Priority', '**Evidence**'],
+};
+
+const TEMPLATE_SECTIONS: Record<Template, string> = {
+  default: '',
+  api: [
+    '## Base message',
+    '',
+    '`POST <endpoint>`. Every case sends this message; its Test Data column lists only the values it changes.',
+    '',
+    '```json',
+    '{',
+    '}',
+    '```',
+    '',
+    '## Read the result',
+    '',
+    '- `GET <endpoint>`: the fields to check',
+  ].join('\n'),
+  matrix: [
+    '## Dimensions',
+    '',
+    '- Situation: …',
+    '- Action: …',
+    '',
+    'One row per combination that changes the outcome.',
+  ].join('\n'),
+};
+
+const TEMPLATE_TRAILER: Record<Template, string> = { default: '', api: '', matrix: '## Also check\n\n- …' };
 
 export type QaReport = {
   title: string;
   /** Header rows other than Results (which is computed), e.g. Ticket, Env, API. */
   header: Array<{ label: string; value: string }>;
   precondition: string;
+  /** Sections between the precondition and the case table (base message, lookup tables, …), kept as written. */
+  sections?: string;
+  /** Case table column labels as written; REPORT_COLUMNS when absent. */
+  columns?: string[];
   cases: QaCase[];
   /** Anything after the case table, kept as written. */
   trailer: string;
@@ -58,6 +130,11 @@ const joinRow = (cells: readonly string[]) => `| ${cells.join(' | ')} |`;
 const isSeparator = (line: string) => /^\|?\s*:?-{3,}/.test(line.trim());
 const isTableLine = (line: string) => line.trim().startsWith('|');
 const stripBold = (s: string) => s.replace(/\*\*/g, '').trim();
+
+function cellFor(c: QaCase, label: string): string {
+  const field = columnField(label);
+  return field ? c[field] : c.extra?.[stripBold(label)] ?? '';
+}
 
 /** Text a user typed (newlines, pipes) as a single table cell. */
 export const toCell = (text: string) => text.replace(/\r?\n/g, '<br/>').replace(/(?<!\\)\|/g, '\\|').trim();
@@ -103,6 +180,7 @@ function resultsText(cases: readonly QaCase[]): string {
 
 export function renderReport(report: QaReport): string {
   const header = report.header.filter((h) => stripBold(h.label).toLowerCase() !== 'results');
+  const columns = report.columns?.length ? report.columns : REPORT_COLUMNS;
   return [
     `# ${report.title}`,
     '',
@@ -115,9 +193,10 @@ export function renderReport(report: QaReport): string {
     '',
     report.precondition.trim() || '- …',
     '',
-    joinRow(REPORT_COLUMNS),
-    joinRow(REPORT_COLUMNS.map(() => '---')),
-    ...report.cases.map((c) => joinRow(CASE_FIELDS.map((f) => c[f]))),
+    ...(report.sections?.trim() ? [report.sections.trim(), ''] : []),
+    joinRow(columns),
+    joinRow(columns.map(() => '---')),
+    ...report.cases.map((c) => joinRow(columns.map((label) => cellFor(c, label)))),
     '',
     ...(report.trailer.trim() ? [report.trailer.trim(), ''] : []),
   ].join('\n');
@@ -147,30 +226,45 @@ export function parseReport(markdown: string): QaReport {
     }
   }
   if (caseTable) {
+    const columns = splitRow(lines[caseTable.start]);
+    if (columns.join('|') !== REPORT_COLUMNS.join('|')) report.columns = columns;
     for (const line of lines.slice(caseTable.start + 2, caseTable.end)) {
       const cells = splitRow(line);
-      report.cases.push(Object.fromEntries(CASE_FIELDS.map((f, i) => [f, cells[i] ?? ''])) as QaCase);
+      const c: QaCase = {
+        id: '', title: '', precondition: '', steps: '', expected: '', priority: '', type: '', automation: '', coverage: '', evidence: '',
+      };
+      columns.forEach((label, i) => {
+        const field = columnField(label);
+        if (field) c[field] = cells[i] ?? '';
+        else (c.extra ??= {})[stripBold(label)] = cells[i] ?? '';
+      });
+      report.cases.push(c);
     }
     report.trailer = lines.slice(caseTable.end).join('\n').trim();
   }
   const pre = lines.findIndex((l) => /^##\s+Precondition/i.test(l));
   if (pre >= 0) {
     const stop = caseTable ? caseTable.start : lines.length;
-    report.precondition = lines.slice(pre + 1, stop).join('\n').trim();
+    // The precondition runs to the next section heading; later sections are kept as written.
+    const next = lines.findIndex((l, i) => i > pre && i < stop && /^#{1,2}\s/.test(l));
+    report.precondition = lines.slice(pre + 1, next >= 0 ? next : stop).join('\n').trim();
+    if (next >= 0) report.sections = lines.slice(next, stop).join('\n').trim();
   }
   return report;
 }
 
-export type ReportHeader = { issueKey: string; issueUrl: string; title: string; env?: string };
+export type ReportHeader = { issueKey: string; issueUrl: string; title: string; env?: string; api?: string };
 
-export function newReport(header: ReportHeader, scenarios: readonly AcScenario[]): QaReport {
+export function newReport(header: ReportHeader, scenarios: readonly AcScenario[], template: Template = 'default'): QaReport {
   return {
     title: header.title,
     header: [
       { label: 'Ticket', value: `[${header.issueKey}](${header.issueUrl})` },
       { label: 'Env', value: header.env ?? '' },
+      ...(template === 'api' || header.api ? [{ label: 'API', value: header.api ?? '' }] : []),
     ],
     precondition: '',
+    ...(template === 'default' ? {} : { sections: TEMPLATE_SECTIONS[template], columns: [...TEMPLATE_COLUMNS[template]] }),
     cases: scenarios.map((sc, idx) => ({
       id: `TC-${String(idx + 1).padStart(2, '0')}`,
       title: sc.title,
@@ -183,12 +277,12 @@ export function newReport(header: ReportHeader, scenarios: readonly AcScenario[]
       coverage: '',
       evidence: NOT_RUN,
     })),
-    trailer: '',
+    trailer: TEMPLATE_TRAILER[template],
   };
 }
 
-export const buildReport = (header: ReportHeader, scenarios: readonly AcScenario[]): string =>
-  renderReport(newReport(header, scenarios));
+export const buildReport = (header: ReportHeader, scenarios: readonly AcScenario[], template: Template = 'default'): string =>
+  renderReport(newReport(header, scenarios, template));
 
 export function countResults(markdown: string): { passed: number; failed: number; total: number } {
   const { passed, failed, total } = countCases(parseReport(markdown).cases);

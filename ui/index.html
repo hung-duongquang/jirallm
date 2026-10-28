@@ -658,8 +658,13 @@ let qa = null; // { key, report, page, counts, dirty }
 const qaQuery = (extra = '') => `key=${encodeURIComponent(current)}&dir=${encodeURIComponent(outDir())}${extra}`;
 const fromCell = (c) => String(c ?? '').replace(/<br\s*\/?>/g, '\n').replace(/\\\|/g, '|');
 const toCell = (t) => String(t ?? '').replace(/\r?\n/g, '<br/>').replace(/(?<!\\)\|/g, '\\|').trim();
-const CASE_FIELDS = [['title', 'Title'], ['precondition', 'Precondition'], ['steps', 'Steps'], ['expected', 'Expected result']];
-const META_FIELDS = [['priority', 'Priority'], ['type', 'Type'], ['automation', 'Automation layer'], ['coverage', 'Dev test coverage']];
+const META = new Set(['priority', 'type', 'automation', 'coverage']);
+/** [key, label] per editable column of this report; free columns (Test Data, Side effects…) use key "x:<label>". */
+function caseFields(columns, meta) {
+  return (columns || []).filter((c) => c.field !== 'id' && c.field !== 'evidence' && META.has(c.field) === meta)
+    .map((c) => [c.field ?? `x:${c.label.replace(/\*\*/g, '').trim()}`, c.label.replace(/\*\*/g, '').trim()]);
+}
+const caseValue = (c, key) => key.startsWith('x:') ? c.extra?.[key.slice(2)] ?? '' : c[key];
 function caseStatus(c) {
   if (/\bPASSED\b/.test(c.evidence)) return ['pass', 'Passed'];
   if (/\bFAILED\b/.test(c.evidence)) return ['fail', 'Failed'];
@@ -682,7 +687,7 @@ async function renderQa() {
     body.innerHTML = '<div class="empty">Loading test report…</div>';
     try {
       const data = await api(`/api/qa?${qaQuery()}`);
-      qa = data.exists ? { key: current, report: data.report, page: data.page, dirty: false } : { key: current, missing: data };
+      qa = data.exists ? { key: current, report: data.report, page: data.page, columns: data.columns, dirty: false } : { key: current, missing: data };
     } catch (err) { body.innerHTML = `<div class="empty">${esc(err.message)}</div>`; return; }
   }
   if (view !== 'qa') return;
@@ -692,12 +697,17 @@ async function renderQa() {
       <p class="hint">One test case is drafted per acceptance-criteria scenario of the ticket. You can edit everything afterwards.</p>
       <div class="row" style="max-width:520px;margin:12px auto;gap:6px">
         <input type="text" id="qaEnv" placeholder="Environment, e.g. https://feature8.zorgdeclaraties.viplive.nl" value="${esc(store.get('qaEnv', ''))}">
+        <select id="qaTemplate" title="Report layout">
+          <option value="default">Standard cases</option>
+          <option value="api">API / message (base message + Test Data)</option>
+          <option value="matrix">Decision matrix (situation × action)</option>
+        </select>
         <button class="primary" id="qaInit">Create test report</button>
       </div></div>`;
     $('qaInit').onclick = async () => {
       store.set('qaEnv', $('qaEnv').value.trim());
       try {
-        const r = await api('/api/qa/init', { key: current, dir: outDir(), env: $('qaEnv').value.trim() });
+        const r = await api('/api/qa/init', { key: current, dir: outDir(), env: $('qaEnv').value.trim(), template: $('qaTemplate').value });
         toast(`${r.caseCount} test case(s) drafted`); qa = null; renderQa();
       } catch (err) { toast(err.message); }
     };
@@ -714,8 +724,8 @@ async function renderQa() {
       <summary><span class="cid">${esc(c.id)}</span><span class="ctitle">${esc(fromCell(c.title)) || '<span class="hint">Untitled</span>'}</span>
         <span class="pill ${cls}">${label}</span></summary>
       <div class="body">
-        <div class="qa-grid">${CASE_FIELDS.map(([f, l]) => `<label>${l}</label><textarea data-f="${f}">${esc(fromCell(c[f]))}</textarea>`).join('')}</div>
-        <div class="meta">${META_FIELDS.map(([f, l]) => `<input type="text" data-f="${f}" placeholder="${l}" title="${l}" value="${esc(fromCell(c[f]))}">`).join('')}</div>
+        <div class="qa-grid">${caseFields(qa.columns, false).map(([f, l]) => `<label>${esc(l)}</label><textarea data-f="${esc(f)}">${esc(fromCell(caseValue(c, f)))}</textarea>`).join('')}</div>
+        <div class="meta">${caseFields(qa.columns, true).map(([f, l]) => `<input type="text" data-f="${esc(f)}" placeholder="${esc(l)}" title="${esc(l)}" value="${esc(fromCell(caseValue(c, f)))}">`).join('')}</div>
         <div class="evidence">${c.evidence && c.evidence !== 'NOT RUN' ? `<div class="verdict-text">${evidenceHtml(c.evidence)}</div>` : ''}</div>
         <div class="verdict">
           <input type="text" class="note" placeholder="What did you observe?">
@@ -735,7 +745,8 @@ async function renderQa() {
       <button id="qaAdd">Add case</button>
       <button class="primary" id="qaSave" ${qa.dirty ? '' : 'disabled'}>Save</button>
     </div>
-    <div class="qa-grid">${header}<label>Precondition</label><textarea id="qaPre">${esc(report.precondition)}</textarea></div>
+    <div class="qa-grid">${header}<label>Precondition</label><textarea id="qaPre">${esc(report.precondition)}</textarea>
+      ${report.sections ? `<label title="Base message, lookup tables… (markdown)">Sections</label><textarea id="qaSections" rows="8">${esc(report.sections)}</textarea>` : ''}</div>
     ${cases}
     <div class="qa-publish">
       <h3 style="margin:0 0 8px">Publish to Confluence</h3>
@@ -756,9 +767,14 @@ function collectQa() {
   const body = $('previewBody');
   for (const input of body.querySelectorAll('[data-h]')) qa.report.header[input.dataset.h].value = toCell(input.value);
   const pre = $('qaPre'); if (pre) qa.report.precondition = pre.value;
+  const sections = $('qaSections'); if (sections) qa.report.sections = sections.value;
   for (const card of body.querySelectorAll('.qa-case')) {
     const c = qa.report.cases[card.dataset.i];
-    for (const el of card.querySelectorAll('[data-f]')) c[el.dataset.f] = toCell(el.value);
+    for (const el of card.querySelectorAll('[data-f]')) {
+      const f = el.dataset.f;
+      if (f.startsWith('x:')) (c.extra ??= {})[f.slice(2)] = toCell(el.value);
+      else c[f] = toCell(el.value);
+    }
   }
 }
 async function saveQa({ quiet = false } = {}) {
