@@ -1,6 +1,6 @@
 {
   "name": "jirallm",
-  "version": "0.13.2",
+  "version": "0.13.3",
   "description": "Teaches Claude Code to read and update Jira and Confluence with the jirallm CLI, and puts new Jira/Confluence changes in context at session start.",
   "author": { "name": "Hung Duong Quang", "url": "https://github.com/hung-duongquang" },
   "homepage": "https://github.com/hung-duongquang/jirallm",

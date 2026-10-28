@@ -249,6 +249,7 @@
         <button data-view="rendered" aria-pressed="true">Rendered</button>
         <button data-view="source" aria-pressed="false">Markdown</button>
         <button data-view="diff" aria-pressed="false" id="viewDiff" hidden>Diff</button>
+        <span id="docViews" style="display:contents"></span>
         <button data-view="qa" aria-pressed="false" title="Test cases, pass/fail with evidence, publish to Confluence">Test report</button>
       </div>
       <button id="copy">Copy</button>
@@ -517,7 +518,7 @@ function renderLibrary() {
   const items = libraryItems.filter((it) => !q || it.key.toLowerCase().includes(q) || it.title.toLowerCase().includes(q));
   $('library').innerHTML = items.length ? items.map((it) => `
     <li><button data-key="${esc(it.key)}" aria-current="${it.key === current}">
-      <span class="key">${esc(it.key)}</span><span class="meta">${it.changedAt ? `<span class="changed" title="Changed in an update; open it and choose Diff">changed ${ago(it.changedAt)}</span> · ` : ''}${esc(it.status)} · ${ago(it.modified)}</span>
+      <span class="key">${esc(it.key)}</span><span class="meta">${it.changedAt ? `<span class="changed" title="Changed in an update; open it and choose Diff">changed ${ago(it.changedAt)}</span> · ` : ''}${esc(it.status)} · ${ago(it.modified)}${it.docs?.length ? ` · <span title="Local notes: ${esc(it.docs.join(', '))}">${esc(it.docs.map(docLabel).join(', ').toLowerCase())}</span>` : ''}</span>
       <span class="title">${esc(it.title)}</span>
     </button></li>`).join('') : `<li class="hint" style="padding:8px">${libraryItems.length ? 'No match.' : 'Nothing exported in this folder yet.'}</li>`;
   if (!exporting) {
@@ -565,6 +566,9 @@ function renderFmValue(v) {
   }).join(v.every((x) => typeof x !== 'object') ? ', ' : '');
 }
 let currentMarkdown = '', currentDiff = null;
+// Local notes next to task.md (context.md, …): view `doc:<name>`, loaded on first open.
+let currentDocs = [], docText = {};
+const docLabel = (name) => name.replace(/\.md$/, '').replace(/[-_]+/g, ' ').replace(/^./, (c) => c.toUpperCase());
 // Tickets reported "changed" during this page's runs. The Exported list only learns about a
 // change when it reloads after the whole run, so a diff clicked mid-run must not depend on it.
 const changedThisSession = new Set();
@@ -573,12 +577,14 @@ const hasDiff = (key) =>
 async function openTask(key, { fromLink = false, as } = {}) {
   try {
     const q = `key=${encodeURIComponent(key)}&dir=${encodeURIComponent(outDir())}`;
-    const [{ markdown }, diff] = await Promise.all([
+    const [{ markdown, docs = [] }, diff] = await Promise.all([
       api(`/api/task?${q}`),
       as === 'diff' || hasDiff(key) ? api(`/api/diff?${q}`).catch(() => null) : null,
     ]);
     current = key; currentMarkdown = markdown; currentDiff = diff;
+    currentDocs = docs; docText = {};
     if (as) view = as;
+    if (view.startsWith('doc:') && !docs.includes(view.slice(4))) view = 'rendered';
     if (view === 'diff' && !currentDiff) {
       view = 'rendered';
       if (as === 'diff') toast(`No earlier version of ${key} to compare with`);
@@ -619,16 +625,71 @@ function renderPreview() {
   $('pTitle').textContent = (body.match(/^# (.+)$/m) || [])[1] || '';
   $('viewDiff').hidden = !currentDiff;
   if (currentDiff) $('viewDiff').innerHTML = `Diff <span class="plus">+${currentDiff.added}</span> <span class="minus">−${currentDiff.removed}</span>`;
+  $('docViews').innerHTML = currentDocs.map((n) =>
+    `<button data-view="doc:${esc(n)}" aria-pressed="false" title="Local ${esc(n)} — not published">${esc(docLabel(n))}</button>`).join('');
   for (const b of document.querySelectorAll('.seg button')) b.setAttribute('aria-pressed', String(b.dataset.view === view));
   $('previewBody').scrollTop = 0;
   if (view === 'qa') { renderQa(); return; }
   if (view === 'diff') { $('previewBody').innerHTML = renderDiff(currentDiff); return; }
   if (view === 'source') { $('previewBody').innerHTML = `<pre class="source">${esc(currentMarkdown)}</pre>`; return; }
-  const meta = fm.length ? `<dl class="fm">${fm.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${renderFmValue(v)}</dd>`).join('')}</dl>` : '';
-  const html = DOMPurify.sanitize(marked.parse(body.replace(/^\s*# .+\n+/, ''), { gfm: true }));
-  $('previewBody').innerHTML = meta + `<div class="md">${html}</div>`;
+  if (view.startsWith('doc:')) { renderDoc(view.slice(4)); return; }
+  $('previewBody').innerHTML = renderMarkdown(fm, body.replace(/^\s*# .+\n+/, ''));
+  renderMermaid($('previewBody'));
 }
-for (const b of document.querySelectorAll('.seg button')) b.onclick = () => { view = b.dataset.view; renderPreview(); };
+// ```mermaid blocks become diagrams; the library is only fetched when a page has one.
+let mermaidReady = null;
+async function renderMermaid(root) {
+  const blocks = [...root.querySelectorAll('pre > code.language-mermaid')];
+  if (!blocks.length) return;
+  mermaidReady ??= new Promise((ok, fail) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js';
+    s.onload = () => {
+      const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+      mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: dark ? 'dark' : 'default' });
+      ok();
+    };
+    s.onerror = () => { mermaidReady = null; fail(new Error('Could not load mermaid')); };
+    document.head.append(s);
+  });
+  try { await mermaidReady; } catch { return; }
+  const nodes = blocks.filter((c) => c.isConnected).map((c) => {
+    const div = document.createElement('div');
+    div.className = 'mermaid';
+    div.textContent = c.textContent;
+    c.parentElement.replaceWith(div);
+    return div;
+  });
+  // A broken diagram shows mermaid's own error box; the rest of the page stays.
+  await mermaid.run({ nodes, suppressErrors: true }).catch(() => {});
+}
+function renderMarkdown(fm, body) {
+  const meta = fm.length ? `<dl class="fm">${fm.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${renderFmValue(v)}</dd>`).join('')}</dl>` : '';
+  return meta + `<div class="md">${DOMPurify.sanitize(marked.parse(body, { gfm: true }))}</div>`;
+}
+async function renderDoc(name) {
+  const key = current;
+  try {
+    if (docText[name] === undefined) {
+      $('previewBody').innerHTML = '<div class="empty">Loading…</div>';
+      const q = `key=${encodeURIComponent(key)}&dir=${encodeURIComponent(outDir())}&name=${encodeURIComponent(name)}`;
+      const { markdown } = await api(`/api/doc?${q}`);
+      if (current !== key) return;
+      docText[name] = markdown;
+    }
+    if (view !== `doc:${name}`) return;
+    const { fm, body } = splitFrontmatter(docText[name]);
+    $('previewBody').innerHTML = renderMarkdown(fm, body);
+    renderMermaid($('previewBody'));
+  } catch (err) {
+    $('previewBody').innerHTML = `<div class="empty">${esc(err.message)}</div>`;
+  }
+}
+// Delegated: the doc buttons are rebuilt per ticket.
+document.querySelector('.seg').onclick = (e) => {
+  const b = e.target.closest('button[data-view]');
+  if (b) { view = b.dataset.view; renderPreview(); }
+};
 
 // git-style unified diff of the last change: hunk headers, old/new line numbers, and the
 // changed words highlighted inside a changed line.
@@ -649,7 +710,10 @@ function renderDiff(diff) {
       <span class="hint">compared with the version before that update</span></div>` +
     (diff.hunks.length ? `<table class="diff">${rows}</table>` : '<div class="empty">No differences.</div>');
 }
-$('copy').onclick = async () => { try { await navigator.clipboard.writeText(currentMarkdown); toast('Markdown copied'); } catch { toast('Copy failed'); } };
+$('copy').onclick = async () => {
+  const text = view.startsWith('doc:') ? docText[view.slice(4)] ?? '' : currentMarkdown;
+  try { await navigator.clipboard.writeText(text); toast('Markdown copied'); } catch { toast('Copy failed'); }
+};
 $('openTask').onclick = () => api('/api/open', { dir: outDir(), key: current }).catch((e) => toast(e.message));
 $('openRoot').onclick = () => api('/api/open', { dir: outDir() }).catch((e) => toast(e.message));
 

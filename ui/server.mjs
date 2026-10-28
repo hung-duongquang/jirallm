@@ -247,6 +247,17 @@ async function exportIssues(body, res) {
 
 // ---------- library (already exported issues) ----------
 
+/**
+ * Local notes next to task.md (context.md, how-to-test.md, …) — written by hand or by an agent,
+ * shown in the preview without publishing them. task.md and the test report have their own views.
+ */
+async function listDocs(dir) {
+  const names = await readdir(dir).catch(() => []);
+  return names
+    .filter((n) => n.endsWith('.md') && !n.startsWith('.') && n !== 'task.md' && n !== 'test-report.md')
+    .sort();
+}
+
 async function listLibrary(outputDir) {
   if (!existsSync(outputDir)) return [];
   const entries = await readdir(outputDir, { withFileTypes: true });
@@ -257,10 +268,11 @@ async function listLibrary(outputDir) {
         const file = join(outputDir, e.name, 'task.md');
         if (!existsSync(file)) return null;
         const previous = join(outputDir, e.name, PREVIOUS_FILE);
-        const [text, info, previousInfo] = await Promise.all([
+        const [text, info, previousInfo, docs] = await Promise.all([
           readFile(file, 'utf8'),
           stat(file),
           stat(previous).catch(() => null),
+          listDocs(join(outputDir, e.name)),
         ]);
         return {
           key: e.name.toUpperCase(),
@@ -270,6 +282,7 @@ async function listLibrary(outputDir) {
           size: info.size,
           // When the last real change was exported (the earlier version was saved then).
           changedAt: previousInfo ? previousInfo.mtime.toISOString() : null,
+          docs,
         };
       })
   );
@@ -386,6 +399,15 @@ async function handle(req, res) {
         const dir = taskDirFor(resolveOutputDir(url.searchParams.get('dir')), url.searchParams.get('key'));
         const file = join(dir, 'task.md');
         if (!existsSync(file)) throw new HttpError(404, 'Not exported yet');
+        sendJson(res, 200, { markdown: await readFile(file, 'utf8'), path: file, docs: await listDocs(dir) });
+        return;
+      }
+      case 'GET /api/doc': {
+        const dir = taskDirFor(resolveOutputDir(url.searchParams.get('dir')), url.searchParams.get('key'));
+        const name = url.searchParams.get('name');
+        // Only a listed file name — never a path the caller made up.
+        if (!(await listDocs(dir)).includes(name)) throw new HttpError(404, `No ${name} for this ticket`);
+        const file = join(dir, name);
         sendJson(res, 200, { markdown: await readFile(file, 'utf8'), path: file });
         return;
       }
