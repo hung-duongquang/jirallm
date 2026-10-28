@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>jirallm</title>
 <link rel="icon" href="data:,">
+<!-- Before first paint, so a forced theme never flashes the other one. -->
+<script>try { const t = JSON.parse(localStorage.getItem('jirallm-ui:theme')); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch {}</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
 <style>
@@ -15,14 +17,25 @@
     --add-bg: #e6ffec; --add-word: #abf2bc; --del-bg: #ffebe9; --del-word: #ffc1c0; --hunk-bg: #ddf4ff;
     --radius: 8px; --shadow: 0 1px 2px rgb(16 24 40 / 6%);
   }
+  :root { color-scheme: light; }
+  /* Dark: follows the OS unless the header switch picked Light or Dark (data-theme on <html>). */
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
+      color-scheme: dark;
       --bg: #12151b; --surface: #1a1e26; --surface-2: #222833; --border: #2e3542;
       --text: #e6e9ef; --muted: #98a2b3; --accent: #7aa2ff; --accent-text: #0d1220;
       --ok: #4cc38a; --warn: #f0b545; --err: #ff7b72; --code-bg: #232a35;
       --add-bg: #12261e; --add-word: #1f6f43; --del-bg: #2d1517; --del-word: #8b2c2e; --hunk-bg: #121d2f;
       --shadow: none;
     }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #12151b; --surface: #1a1e26; --surface-2: #222833; --border: #2e3542;
+    --text: #e6e9ef; --muted: #98a2b3; --accent: #7aa2ff; --accent-text: #0d1220;
+    --ok: #4cc38a; --warn: #f0b545; --err: #ff7b72; --code-bg: #232a35;
+    --add-bg: #12261e; --add-word: #1f6f43; --del-bg: #2d1517; --del-word: #8b2c2e; --hunk-bg: #121d2f;
+    --shadow: none;
   }
   /* ---- test report ---- */
   .qa-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; position: sticky; top: 0; z-index: 1;
@@ -180,6 +193,7 @@
   <h1>jirallm</h1>
   <span class="conn" id="conn">Connecting…</span>
   <button id="openSetup" title="How to install jirallm and the Claude Code plugin">Setup</button>
+  <button id="theme" title="Theme: follow the system, light or dark">Theme: Auto</button>
   <div class="outdir">
     <label for="outdir">Output folder</label>
     <input type="text" id="outdir" spellcheck="false">
@@ -268,6 +282,25 @@ const store = {
   get(k, fallback) { try { const v = localStorage.getItem('jirallm-ui:' + k); return v === null ? fallback : JSON.parse(v); } catch { return fallback; } },
   set(k, v) { try { localStorage.setItem('jirallm-ui:' + k, JSON.stringify(v)); } catch {} },
 };
+// ---- theme: auto (OS) → light → dark ----
+const THEMES = ['auto', 'light', 'dark'];
+const isDark = () => document.documentElement.dataset.theme === 'dark' ||
+  (!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches);
+function applyTheme(theme) {
+  if (theme === 'auto') delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = theme;
+  $('theme').textContent = `Theme: ${theme[0].toUpperCase()}${theme.slice(1)}`;
+}
+$('theme').onclick = () => {
+  const next = THEMES[(THEMES.indexOf(store.get('theme', 'auto')) + 1) % THEMES.length];
+  store.set('theme', next); applyTheme(next);
+  if ($('previewBody').querySelector('.mermaid')) renderPreview(); // redraw diagrams in the new colors
+};
+applyTheme(THEMES.includes(store.get('theme', 'auto')) ? store.get('theme', 'auto') : 'auto');
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+  if (store.get('theme', 'auto') === 'auto' && $('previewBody').querySelector('.mermaid')) renderPreview();
+});
+
 const KEY_RE = /\b[A-Z][A-Z0-9]+-\d+\b/g;
 let info = null, current = null, view = 'rendered', libraryItems = [];
 
@@ -644,15 +677,12 @@ async function renderMermaid(root) {
   mermaidReady ??= new Promise((ok, fail) => {
     const s = document.createElement('script');
     s.src = 'https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js';
-    s.onload = () => {
-      const dark = matchMedia('(prefers-color-scheme: dark)').matches;
-      mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: dark ? 'dark' : 'default' });
-      ok();
-    };
+    s.onload = ok;
     s.onerror = () => { mermaidReady = null; fail(new Error('Could not load mermaid')); };
     document.head.append(s);
   });
   try { await mermaidReady; } catch { return; }
+  mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: isDark() ? 'dark' : 'default' });
   const nodes = blocks.filter((c) => c.isConnected).map((c) => {
     const div = document.createElement('div');
     div.className = 'mermaid';
