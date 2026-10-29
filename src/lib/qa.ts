@@ -5,7 +5,7 @@ import { ConfluenceClient, stretchTables } from './confluence.js';
 import { JiraClient } from './jiraClient.js';
 import { playwrightResults, type PlaywrightReport, type PlaywrightResult } from './qaPlaywright.js';
 import {
-  countCases, evidenceBelowTable, evidenceCell, fromCell, newReport, NOT_RUN, parseAcceptanceScenarios, parseReport, renderReport, reportToWiki, TEMPLATES, toCell,
+  countCases, evidenceCell, fromCell, newReport, NOT_RUN, parseAcceptanceScenarios, parseReport, renderReport, reportToWiki, TEMPLATES, toCell,
   type QaCase, type QaReport, type Template, type Verdict,
 } from './qaReport.js';
 
@@ -198,15 +198,7 @@ export type PublishPlan = {
   link: boolean;
 };
 
-/** Width and height from a PNG's header; undefined for other files. */
-export function pngSize(file: string): { width: number; height: number } | undefined {
-  if (!/\.png$/i.test(file) || !existsSync(file)) return undefined;
-  const head = readFileSync(file).subarray(0, 24);
-  if (head.length < 24 || head.toString('latin1', 12, 16) !== 'IHDR') return undefined;
-  return { width: head.readUInt32BE(16), height: head.readUInt32BE(20) };
-}
-
-export type PublishResult =PublishPlan & { url: string; version: number; pageId: string };
+export type PublishResult = PublishPlan & { url: string; version: number; pageId: string };
 
 function allowedSites(profile: ResolvedProfile): string[] {
   return [profile.config.baseUrl, ...(profile.org.confluenceUrls ?? [])].map((u) => new URL(u).origin);
@@ -237,12 +229,7 @@ export async function qaPublish(
   if (opts.dryRun) return plan;
 
   const client = new ConfluenceClient(site, profile.config.userEmail, profile.apiToken);
-  const paths = qaPaths(opts.outputDir, issueKey);
-  const tall = (file: string) => {
-    const size = pngSize(path.join(paths.evidence, file));
-    return !!size && size.height > size.width;
-  };
-  const body = renderReport(evidenceBelowTable(loaded.report, tall)).replace(/^# .+\n+/, '');
+  const body = renderReport(loaded.report).replace(/^# .+\n+/, '');
   const storage = stretchTables(await client.wikiToStorage(reportToWiki(body)));
   // Images refer to attachments by filename and resolve on render, so uploading after the save is fine.
   const saved = await client.savePage({
@@ -255,6 +242,7 @@ export async function qaPublish(
     throw err;
   });
   await client.setFullWidth(saved.id);
+  const paths = qaPaths(opts.outputDir, issueKey);
   for (const file of loaded.evidenceFiles) {
     await client.uploadAttachment(saved.id, file, readFileSync(path.join(paths.evidence, file)));
   }

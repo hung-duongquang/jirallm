@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildReport, countResults, evidenceBelowTable, evidenceCell, parseAcceptanceScenarios, parseReport, renderReport, reportToWiki, setResult, splitRow,
+  buildReport, countResults, parseAcceptanceScenarios, parseReport, renderReport, reportToWiki, setResult, splitRow,
 } from './qaReport.js';
 
 const TASK_MD = `# Ticket
@@ -119,17 +119,5 @@ describe('qa report', () => {
     const wiki = reportToWiki('| ID | Expected |\n| --- | --- |\n| TC-01 | PUT series/{id} and `GET /{x}` |');
     expect(wiki).toContain('PUT series/\\{id\\}');
     expect(wiki).toContain('{{GET /\\{x\\}}}');
-  });
-});
-
-describe('evidenceBelowTable', () => {
-  it('moves the picked images under an Evidence heading per case and leaves the others in the cell', () => {
-    const report = parseReport(buildReport(header, parseAcceptanceScenarios(TASK_MD)));
-    report.cases[0].evidence = evidenceCell('pass', { evidence: ['ZOD-1_TC-01_api-evidence.png', 'ZOD-1_TC-01_ui.png'], note: '3 s' });
-    const moved = evidenceBelowTable(report, (f) => f.includes('api-evidence'));
-    expect(moved.cases[0].evidence).toBe('![ZOD-1_TC-01_ui.png](attachments/ZOD-1_TC-01_ui.png)<br/>**PASSED** – 3 s<br/>Screenshot: see Evidence TC-01 below');
-    expect(moved.trailer).toContain('## Evidence\n\n### TC-01 – Save fixed debtor number\n\n![ZOD-1_TC-01_api-evidence.png](attachments/ZOD-1_TC-01_api-evidence.png)');
-    expect(report.cases[0].evidence).toContain('api-evidence');
-    expect(evidenceBelowTable(report, () => false)).toBe(report);
   });
 });

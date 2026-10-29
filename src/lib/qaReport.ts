@@ -298,28 +298,6 @@ export function evidenceCell(verdict: Verdict, opts: { note?: string; evidence?:
   return [...media, `**${VERDICT_LABEL[verdict]}**${note}`].join('<br/>');
 }
 
-/**
- * A copy of the report with the images `moveOut` picks taken out of the case table into an Evidence section below it.
- * Confluence shrinks a cell image to the column width, so a tall one (e.g. a log of API calls) can't be read in an 11-column table.
- */
-export function evidenceBelowTable(report: QaReport, moveOut: (file: string) => boolean): QaReport {
-  const sections: string[] = [];
-  const cases = report.cases.map((c) => {
-    const moved: string[] = [];
-    const evidence = c.evidence.replace(/!\[[^\]]*\]\(attachments\/([^)]+)\)(<br\/>)?/g, (m, file: string) => {
-      if (!moveOut(file)) return m;
-      moved.push(`![${file}](attachments/${file})`);
-      return '';
-    });
-    if (!moved.length) return c;
-    sections.push(`### ${c.id}${c.title ? ` – ${c.title}` : ''}`, '', ...moved.flatMap((m) => [m, '']));
-    return { ...c, evidence: `${evidence.replace(/(<br\/>)+$/, '')}<br/>Screenshot: see Evidence ${c.id} below` };
-  });
-  if (!sections.length) return report;
-  const trailer = [...(report.trailer.trim() ? [report.trailer.trim(), ''] : []), '## Evidence', '', ...sections].join('\n').trim();
-  return { ...report, cases, trailer };
-}
-
 /** Sets the evidence cell of one case and recomputes the Results line. */
 export function setResult(
   markdown: string,
