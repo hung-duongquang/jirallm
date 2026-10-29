@@ -1,0 +1,1 @@
+{"version":3,"file":"assign.d.ts","sourceRoot":"","sources":["../../../src/cli/commands/assign.ts"],"names":[],"mappings":"AAOA,MAAM,MAAM,aAAa,GAAG;IAC1B,QAAQ,EAAE,MAAM,CAAC;IACjB,QAAQ,EAAE,MAAM,CAAC;IACjB,GAAG,CAAC,EAAE,MAAM,CAAC;IACb,MAAM,CAAC,EAAE,OAAO,CAAC;IACjB,IAAI,CAAC,EAAE,OAAO,CAAC;CAChB,CAAC;AAEF,wBAAsB,SAAS,CAAC,IAAI,EAAE,aAAa,GAAG,OAAO,CAAC,IAAI,CAAC,CAmClE"}

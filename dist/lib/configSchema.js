@@ -1,0 +1,62 @@
+import { z } from 'zod';
+const videoFramesRawSchema = z
+    .object({
+    enabled: z.boolean().optional(),
+    fps: z.number().optional(),
+    quality: z.number().optional(),
+    max_frames: z.number().optional(),
+})
+    .strict();
+const projectRawSchema = z
+    .object({
+    output_dir: z.string().optional(),
+})
+    .strict();
+const exportFieldsRawSchema = z
+    .object({
+    preset: z.enum(['all', 'minimal', 'default']).optional(),
+    include: z.array(z.string()).optional(),
+    exclude: z.array(z.string()).optional(),
+})
+    .strict();
+const customFieldRawSchema = z
+    .object({
+    id: z.string(),
+    type: z.enum(['scalar', 'select', 'user', 'sprint', 'number', 'array']),
+})
+    .strict();
+const exportRawSchema = z
+    .object({
+    fields: exportFieldsRawSchema.optional(),
+    custom_fields: z.record(z.string(), customFieldRawSchema).optional(),
+})
+    .strict();
+const orgRawSchema = z
+    .object({
+    base_url: z.url(),
+    user_email: z.email(),
+    include_subtasks: z.boolean().optional(),
+    /** Confluence sites whose pages linked from issues are exported (default: the Jira site). */
+    confluence_urls: z.array(z.url()).optional(),
+    video_frames: videoFramesRawSchema.optional(),
+    export: exportRawSchema.optional(),
+    projects: z.record(z.string(), projectRawSchema).optional(),
+})
+    .strict();
+const configRawSchema = z
+    .object({
+    orgs: z.record(z.string(), orgRawSchema).optional(),
+})
+    .strict();
+export function parseConfig(input, sourcePath) {
+    const result = configRawSchema.safeParse(input);
+    if (result.success)
+        return result.data;
+    const lines = result.error.issues.map((issue) => {
+        const path = issue.path.length > 0 ? issue.path.join('.') : '(root)';
+        return `  ${path}: ${issue.message}`;
+    });
+    const where = sourcePath ? ` at ${sourcePath}` : '';
+    throw new Error(`Invalid jirallm config${where}:\n${lines.join('\n')}`);
+}
+//# sourceMappingURL=configSchema.js.map

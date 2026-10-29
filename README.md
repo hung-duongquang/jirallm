@@ -1,0 +1,468 @@
+# jirallm
+
+[![CI](https://github.com/doryski/jirallm/actions/workflows/ci.yml/badge.svg)](https://github.com/doryski/jirallm/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/jirallm)](https://www.npmjs.com/package/jirallm)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org/)
+
+Export Jira Cloud issues as LLM-ready context bundles — markdown, attachments, and deduplicated video frames.
+
+## Why it exists
+
+Pasting Jira tickets into an LLM is painful: descriptions are ADF (Atlassian Document Format), comments live in a separate API, attachments are URLs behind auth, and video recordings are useless to a text model. `jirallm` turns a Jira issue into a self-contained folder of clean markdown plus extracted media — ready to drop into Claude, ChatGPT, Cursor, or any RAG pipeline.
+
+It exists because every team that uses Jira + LLMs ends up writing the same brittle scraping script. This is the version you wish you had.
+
+## Features
+
+- Export one or more issues by key into a structured folder
+- Renders Jira ADF descriptions and comments to clean Markdown
+- Downloads all attachments with original filenames (auth handled)
+- Extracts frames from attached videos via `ffmpeg` and deduplicates near-identical frames using `pixelmatch`
+- Exports the Confluence pages an issue links to (with the images and files they show) next to the issues, and points the links at the local copies
+- Produces an `index.md` summary per issue, ready to paste into an LLM context window
+- Works as a CLI (`jirallm`) and as a programmatic library
+- TypeScript-first, ESM, zero hidden globals
+
+## Requirements
+
+- Node.js >= 20
+- [`ffmpeg`](https://ffmpeg.org/download.html) on your `PATH` — only required if you export issues with video attachments. You can also run `jirallm setup` to install it for you (and `jirallm init` will offer to do this automatically when you opt into video frames).
+- A Jira Cloud API token
+
+## Installation
+
+```bash
+# Global CLI
+npm install -g jirallm
+# or
+pnpm add -g jirallm
+
+# As a library inside a project
+pnpm add jirallm
+```
+
+### Updating
+
+`jirallm` checks for new versions once a day in the background and prints a notice on the next invocation. To upgrade:
+
+```bash
+jirallm upgrade           # auto-detects npm / pnpm / yarn / Homebrew
+jirallm upgrade --check   # just report whether an update is available
+```
+
+## Configuration
+
+The recommended way to configure `jirallm` is the interactive wizard:
+
+```bash
+jirallm init
+```
+
+It prompts for everything, writes an org + project entry to `~/.config/jirallm/config.toml`, and stores the API token in your OS keychain (macOS Keychain / libsecret / Windows Credential Manager) — never on disk.
+
+Run `jirallm init` again any time you want to **add another organization** or **add a new project to an existing organization** — the wizard detects existing config and lets you pick "Create a new organization" or "Add a project to *<org>*".
+
+If you enable video frame extraction during `init` and `ffmpeg` isn't on your `PATH`, `init` will offer to run `jirallm setup` for you. You can also run it manually any time, or use `jirallm setup --bundled` to install a self-contained `ffmpeg` via npm without touching your system.
+
+### Organizations and projects
+
+Configuration is two levels: an **organization** owns the connection (Jira instance, account email, API token); each org has one or more **projects** that share those credentials and only differ by project key (and optionally output directory).
+
+```toml
+# ~/.config/jirallm/config.toml
+
+[orgs.widgets]
+base_url         = "https://widgets.atlassian.net"
+user_email       = "user@widgets.example"
+include_subtasks = true
+
+[orgs.widgets.video_frames]
+enabled    = true
+fps        = 5
+max_frames = 10
+
+[orgs.widgets.projects.WID]
+output_dir = "~/jira/widgets"
+
+[orgs.acme]
+base_url   = "https://acme.atlassian.net"
+user_email = "user@acme.example"
+# Confluence sites whose pages linked from issues are exported (default: the Jira site).
+# The Jira API token is sent to these sites, so list only your own.
+confluence_urls = ["https://acme-wiki.atlassian.net"]
+
+# Three projects share the same Jira instance + token
+[orgs.acme.projects.PROJ]
+output_dir = "~/jira/acme/proj"
+
+[orgs.acme.projects.DOCS]
+output_dir = "~/jira/acme/docs"
+
+[orgs.acme.projects.LIB]
+```
+
+Most invocations are just the issue key — `jirallm` looks up the org by the project prefix:
+
+```bash
+jirallm PROJ-7              # auto-resolves to the org that owns PROJ
+jirallm acme/PROJ-7         # disambiguate if multiple orgs have a PROJ project
+jirallm --org acme PROJ-7   # explicit override
+```
+
+If a project key exists in more than one org and you didn't qualify it, you'll get an interactive picker (TTY) or an error suggesting `--org` / `org/KEY` (non-TTY).
+
+Useful subcommands:
+
+```bash
+jirallm orgs list                   # show orgs, projects, and token status
+jirallm auth set --org acme         # replace stored token (per organization)
+jirallm auth rm  --org acme         # remove stored token
+```
+
+### Selection precedence
+
+1. `--org` flag
+2. `org/` prefix on the issue key (e.g. `acme/PROJ-7`)
+3. Auto-resolved from the project prefix when only one configured org owns it
+
+CLI flags (`--base-url`, `--output-dir`, `--fps`, …) override whatever the resolved config produces.
+
+### Export field selection
+
+The frontmatter fields written by `jirallm <key>` / `jirallm export` default to the `default` preset. An org can pin its own base set, and declare the custom fields it cares about:
+
+```toml
+[orgs.acme.export.fields]
+preset  = "minimal"          # "all" | "default" | "minimal" — optional
+include = ["labels"]         # extra fields on top of the preset
+exclude = ["subtasks"]       # fields to drop
+
+[orgs.acme.export.custom_fields.team]
+id   = "customfield_10050"
+type = "select"
+```
+
+`--fields` then composes with that configured base:
+
+```bash
+jirallm PROJ-7 --fields "+labels"          # adds labels to the configured base
+jirallm PROJ-7 --fields "-parent"          # removes parent from the configured base
+jirallm PROJ-7 --fields all                # explicit preset replaces the configured base
+jirallm PROJ-7 --fields "key,status"       # bare list replaces the configured base
+```
+
+Only `+name` / `-name` adjustments compose; a bare comma list or an explicit preset in the flag replaces the config base outright. Valid names are the friendly field names, their raw-ID aliases (`duedate`, `issuelinks`), and any configured custom-field key — anything else is rejected with an error. Friendly names and raw-ID aliases are matched case-insensitively on both the add and the drop side, so `--fields "+Epic"`, `--fields "+STORYPOINTS"` and `--fields "minimal,-Subtasks"` all resolve. Configured custom-field keys are the exception: they are matched exactly as configured, so `--fields Team` against a configured `team` key is still reported as unknown. An unknown name coming from the config block is reported as a warning and skipped, so a stale config never blocks an export. `description` is not one of those names here — `fetch` and `export` always carry it, rendered to Markdown — but it is an opt-in `--fields` name on `search`; see the table below.
+
+#### What each command can project
+
+`--fields` uses the same vocabulary everywhere, but a few keys behave differently on `search`, which reads a whole page of issues in one request:
+
+| Field | `fetch` / `export` | `search` |
+| --- | --- | --- |
+| `epic` | Yes — always requested, via the common epic custom-field IDs | Yes — the instance's Epic Link field ID is resolved at runtime: the org's `[orgs.X.export.custom_fields] epic` override first, else auto-detected from the field catalog, else the common epic IDs. Either shape Jira returns is read — an epic object or a bare epic key (the title is omitted when Jira supplies none) |
+| `subtasks` | Yes — but supplied by `fetch --with-subtasks` / `export --include-subtasks` (one extra request per issue), not by `--fields` alone | No — Jira returns no subtasks in a search page. Naming it (`--fields subtasks`, `--fields default,+subtasks`) is an error; when it only arrives implicitly — from a preset (`minimal`, `default` and `all` all list it) or the configured base — it is dropped with a warning and the search runs. The name is matched case-insensitively either way. Use `jirallm fetch <KEY> --with-subtasks` |
+| `sprint` | Yes — custom-field ID from the org override, else auto-detected | Yes — same resolution |
+| `storyPoints` | Yes — custom-field ID from the org override, else auto-detected | Yes — same resolution |
+| `parent` | Yes — always requested | Yes — in the default set; drop it with `--fields -parent` |
+| `description` | Yes — always present in `fetch --json` as Markdown; not a `--fields` name here (`fetch --raw` returns the untouched ADF in the same request) | Opt-in — no preset carries it, not even `all`; name it explicitly (`--fields +description`). Rendered to Markdown through the same converter `fetch` uses, so it is always a string, never ADF, and byte-identical to `fetch --json`'s, media included. `--description-format adf` / `both` adds the lossless ADF under a separate `descriptionAdf` key, from the same request. Specifics below the table |
+
+`sprint`, `storyPoints` and `epic` each need the instance's field catalog when the org config does not pin an ID. The catalog read is memoised per client — its outcome included — so a single invocation makes at most one `GET /rest/api/3/field`, shared by the three detections and `search`'s raw-ID check, whether that read succeeds or fails (5xx, 403). A long-lived `JiraClient` can drop the cached outcome with [`clearFieldCaches()`](#library-usage).
+
+Four specifics apply to `description` on `search`:
+
+- **Attachments travel with it.** Selecting `description` also requests Jira's `attachment` field, so a `media` node renders as `![image](attachments/screenshot.png)` and an attachment link as `[screenshot.png](attachments/screenshot.png)` — identical to `fetch`. A search that does not select it requests no extra field.
+- **`adf` has one carve-out.** A plain-string (wiki markup) description has no ADF document to emit and still comes back under `description`. `both` emits both keys whenever a description is present — `description: ""` for an empty ADF doc — so they never disagree about whether one exists.
+- **A custom field named `description` shadows the built-in**, exactly as with `subtasks`: naming `description` or passing `--description-format` is then an error asking you to rename that key, while one arriving implicitly from the config base warns and runs without a rendered description.
+- **Naming it triggers no `GET /rest/api/3/field`** (a mis-cased `+Description` does, reported as `"Description" → "description"`). Any other unknown token, any preset, or `sprint` / `storyPoints` / `epic` still triggers one — so the saving only lands with e.g. `--fields +description` or `--fields "key,status,description"`.
+
+## Quick start
+
+### CLI
+
+```bash
+# First-time setup (config + credentials, offers to install ffmpeg)
+jirallm init
+
+# Install ffmpeg later, or independently of init
+jirallm setup
+jirallm setup --bundled   # self-contained ffmpeg-static, no system changes
+
+# Export a single issue (output defaults to ./jira-export)
+jirallm PROJ-123
+
+# Export several issues to a custom directory
+jirallm PROJ-123 PROJ-124 --output-dir ./context
+
+# Skip video frame extraction (faster, no ffmpeg required)
+jirallm PROJ-123 --no-video-frames
+
+# Tune frame extraction
+jirallm PROJ-123 --fps 2 --max-frames 6
+
+# Include subtask metadata in the export
+jirallm PROJ-123 --include-subtasks
+
+# Also export the parent (and its own parent, up the chain) as full bundles
+jirallm PROJ-123 --include-parent
+
+# Leave linked Confluence pages out (they are exported by default)
+jirallm PROJ-123 --no-confluence
+
+# Show all options
+jirallm --help
+```
+
+Each issue lands in its own folder:
+
+```
+jira-export/
+  PROJ-123/
+    index.md            # summary + description + comments
+    attachments/
+      design.pdf
+      screen-recording.mp4
+    frames/
+      screen-recording/
+        frame-0001.jpg
+        frame-0042.jpg   # only meaningfully different frames are kept
+  confluence/
+    2297398151-payable-claim/
+      page.md           # a page an issue links to (shared by every issue that links it)
+      attachments/      # only the images and files the page shows
+```
+
+Confluence pages are exported one level deep: the pages an issue links to (page URLs, short
+`/wiki/x/…` links, and their inline links), not the pages those link to. task.md lists them in a
+`## Confluence` section and its links point at the local `page.md`. Whiteboards are listed with
+their title only, since Confluence has no API for whiteboard content. An unchanged page is not
+downloaded again.
+
+### Programmatic
+
+```ts
+import { JiraExporter, loadProfile } from 'jirallm';
+
+// Resolve an org/project (config file + keychain), with the same precedence as the CLI
+const { config, apiToken, org, project } = await loadProfile({ org: 'acme', project: 'DOCS' });
+
+const exporter = new JiraExporter(config, apiToken);
+
+const result = await exporter.exportIssues(['DOCS-123'], {
+  outputDir: project.outputDir ?? './jira-export',
+  includeSubtasks: org.includeSubtasks ?? false,
+  includeParent: true,
+  videoFrames: { enabled: true, fps: 5, maxFrames: 10 },
+});
+```
+
+The constructor also accepts a hand-rolled `JiraConfig` + token if you don't want to use the config file.
+
+A lower-level `JiraClient` is also exported for callers that want to drive the Jira API directly.
+
+## Example
+
+Bundle a few issues and pipe the resulting summary into your LLM of choice:
+
+```bash
+jirallm PROJ-123 PROJ-124 --output-dir ./triage-bundle
+cat ./triage-bundle/PROJ-123/index.md | pbcopy
+```
+
+## Claude Code plugin
+
+The repository is also a Claude Code plugin (and its own marketplace). It adds the `jirallm` skill, which teaches Claude which command answers which question and which commands write to Jira, and a session-start hook that puts the changes logged by `jirallm watch` in context. It needs the CLI installed and configured (see [Installation](#installation)).
+
+```bash
+claude plugin marketplace add hung-duongquang/jirallm   # or the path of a local clone
+claude plugin install jirallm@jirallm
+```
+
+Restart Claude Code afterwards. `claude plugin update jirallm@jirallm` picks up a newer skill. The skill is the text `jirallm agent-guide` prints; `pnpm build` copies it to `skills/jirallm/SKILL.md`.
+
+## For agents (CLI commands)
+
+Every command supports `--json` (and automatically switches to JSON when stdout is not a TTY), so they're safe to pipe into `jq` or feed back into an agent. Write commands echo what they created, so success can be confirmed from the command itself without a follow-up read. Every write command also supports `--dry-run`.
+
+Discovery & search:
+
+```bash
+jirallm me --org acme --json
+jirallm users someone@example.com --org acme --json | jq -r '.[0].accountId'
+jirallm users "Jane Doe" --org acme --json
+jirallm users Jane --issue PROJ-123 --json   # only users assignable on that issue
+jirallm projects --org acme --json
+jirallm boards --org acme --project PROJ --json
+jirallm sprints 123 --org acme --state active --json
+jirallm issuetypes --org acme --project PROJ --json
+jirallm linktypes --org acme --json
+jirallm search 'assignee = currentUser() AND statusCategory != Done' --org acme --limit 25 --json
+jirallm search 'project = PROJ' --org acme --fields default,+labels --json  # --fields shapes the JSON rows too (same vocabulary as `fetch`; `search` alone also accepts unmapped raw Jira field **IDs** such as customfield_10050 or environment — not display names like "Team")
+jirallm search 'project = PROJ' --org acme --fields customfield_10050 --json  # an ID outside jirallm's vocabulary is checked against /rest/api/3/field once and rejected if this instance has no such field (typos fail loudly instead of returning an empty column); run `jirallm fields` for custom-field IDs
+jirallm search 'parent in (PROJ-100, PROJ-200)' --org acme --json  # rows carry `parent` ({key, title, status, issueType, priority} — the last two omitted when Jira has none) by default; drop it with `--fields -parent`
+jirallm search 'project = PROJ' --org acme --fields default,+epic --json  # `epic` works on search: the Epic Link field ID is resolved per instance (org override, else auto-detected, else the common epic IDs), sharing a single `GET /rest/api/3/field` with the other detections
+jirallm search 'project = PROJ' --org acme --fields +description --json  # `description` is opt-in on search (no preset carries it, not even `all`); comes back as Markdown under the same key `fetch --json` uses, and this selector costs no catalog read
+jirallm search 'project = PROJ' --org acme --fields "summary,description" --json  # also works, but `summary` is not a jirallm field name, so it costs one catalog read that `--fields +description` avoids
+jirallm search 'project = PROJ' --org acme --fields +description --description-format both --json  # also emit the lossless ADF under a separate `descriptionAdf` key; ADF is ~2.1x the Markdown on every row, so `markdown` is the default
+jirallm search 'project = PROJ' --org acme --fields minimal --json  # `subtasks` is not projectable by search: it is dropped with a warning here, and is an error when named explicitly — use `jirallm fetch <KEY> --with-subtasks`
+jirallm fetch PROJ-123 --json
+jirallm fetch PROJ-123 --fields all --json      # widen the field set (components, labels, custom fields, ...)
+jirallm fetch PROJ-123 --fields +priority --json  # +name adds to the current set, -name removes; fetch/export accept friendly names, their raw-ID aliases (duedate, issuelinks) and configured custom-field keys — anything else is an error
+jirallm fetch PROJ-123 --raw | jq '.fields.labels'  # complete, untransformed Jira field object
+jirallm fetch PROJ-123 --rendered | jq -r '.renderedFields.description'  # Jira-rendered HTML
+jirallm fetch PROJ-123 --expand changelog,renderedFields  # pass arbitrary Jira expand params
+jirallm transition PROJ-123 --list --json
+```
+
+Mutations (all accept `--dry-run`):
+
+```bash
+jirallm comment PROJ-123 --file ./summary.md
+jirallm comment:ls PROJ-123 --json
+jirallm comment:ls PROJ-123 --rendered | jq -r '.comments[].renderedBody'  # Jira-rendered HTML per comment
+jirallm comment:edit PROJ-123 26215 --file ./fixed.md --attach after-proof.png
+jirallm comment PROJ-123 --file ./summary.md --attach-images shot.png:"New config field"
+jirallm comment:rm PROJ-123 26215 --yes
+jirallm transition PROJ-123 --to "In Review"
+jirallm worklog -f ./worklogs.json
+jirallm create --org acme --project PROJ --type Task --summary "Spike" --description-file ./spike.md
+jirallm edit PROJ-123 --summary "New title" --labels a,b --priority High --parent PROJ-1 --due 2026-08-01
+jirallm edit PROJ-123 --sprint 42            # add to a sprint by id
+jirallm edit PROJ-123 --sprint active        # add to the board's active sprint (--board <name> if several)
+jirallm edit PROJ-123 --sprint none          # remove from its sprint
+jirallm edit PROJ-123 --field customfield_10020=   # clear any nullable field (empty or =null)
+jirallm assign PROJ-123 me
+jirallm link PROJ-1 "blocks" PROJ-2 --comment "blocked by infra work"
+jirallm link:rm 10042 --org acme
+jirallm attach PROJ-123 ./screenshot.png ./recording.mp4
+jirallm attach PROJ-123 ./screenshot.png --json | jq -r '.attachments[] | "\(.id) \(.filename)"'
+jirallm attach:rm 99021 --org acme
+jirallm watchers PROJ-123 --add me
+```
+
+### Sized media in comments and descriptions
+
+`--attach` embeds images as wiki thumbnails (`!file.png|thumbnail!`) — small, centered, and not
+resizable, because Jira's wiki markup has no way to set an image size. `--attach-images` (alias:
+`--attach-media`) uploads the same files but embeds them as ADF nodes instead, which do support
+layout and width:
+
+```bash
+jirallm comment PROJ-123 --file ./summary.md \
+  --attach-images shot.png:"New config field" flow.png \
+  --image-layout align-start --image-width 50
+
+jirallm comment PROJ-123 --file ./repro.md --attach-media demo.webm:"Repro" trace.har
+jirallm comment:edit PROJ-123 26215 --file ./qa.md --attach-images after.png:"After the fix"
+jirallm create -o acme -t Bug -s "Crash" --description-file ./repro.md --attach-images repro.png
+jirallm edit PROJ-123 --description-file ./updated.md --attach-images after.png:"After the fix"
+```
+
+- Spec format: `file.png` or `file.png:"caption"` (captions may contain spaces and colons).
+- `--image-layout`: `center`, `align-start` (default), `align-end`, `wrap-left`, `wrap-right`,
+  `wide`, `full-width`.
+- `--image-width`: percent of the container width, `1`–`100` (default `50`).
+- **Images** — pixel dimensions are read from the file header (PNG/JPEG/GIF/WEBP/BMP) and embedded as
+  a sized `mediaSingle`.
+- **Videos** (`.mp4`, `.mov`, `.webm`, `.mkv`, …) — dimensions come from `ffprobe` (falling back to
+  parsing `ffmpeg -i`), so they render as a sized inline player instead of an attachment card. Without
+  ffmpeg/ffprobe on `PATH` the video still embeds, just without pixel dimensions.
+- **Any other file** (`.txt`, `.log`, `.har`, …) — embedded as a compact ADF `mediaGroup` tile;
+  consecutive files without captions share one tile row.
+- `--attach` is unchanged, so existing scripts keep working.
+- On `jirallm edit`, files are uploaded but the description is only rewritten when
+  `--description`/`--description-file` is also given.
+
+#### Positional embedding
+
+By default media is appended to the end of the body. Write `@@media:<file>@@` on a line of its own to
+place a file exactly where you want it:
+
+```markdown
+## Steps to reproduce
+
+@@media:before.png@@
+
+Click **Save** — the dialog freezes:
+
+@@media:demo.webm@@
+
+Console output:
+
+@@media:trace.har@@
+```
+
+- The name matches the file's basename or the exact path passed on the command line.
+- Placeholders only count when they occupy their whole line; one inside a sentence is left as text.
+- Each file is consumed once; files without a placeholder are still appended at the end.
+- Unmatched placeholders warn and stay as literal text.
+- Works identically with `--no-wiki`, since the placeholder is plain text either way.
+
+How it works: the comment/description is posted through REST v2 (wiki markup) exactly as before, so
+Jira does the markdown→ADF conversion — tables, code blocks and attachment cards come out right.
+`jirallm` then reads the generated ADF over REST v3, swaps each marked file for a sized `mediaSingle`
+(images/videos) or a compact `mediaGroup` tile (everything else), and writes it back.
+
+> **Do not "fix" captions into ADF `caption` nodes.** ADF has a `caption` node inside `mediaSingle`
+> and Jira happily stores it (the API returns 200 and a GET shows it), but Jira **never renders it in
+> comments** — it is a Confluence-only feature. That is why captions are emitted as a separate
+> italic (`em`) paragraph right after the image.
+
+## Library usage
+
+The package re-exports `JiraClient` plus all the domain types so you can drive Jira directly from your own TypeScript:
+
+```ts
+import { JiraClient, loadProfile } from 'jirallm';
+
+const { config, apiToken } = await loadProfile({ org: 'acme' });
+const client = new JiraClient(config, apiToken);
+
+// Search (single page; pass nextPageToken for the next one)
+const page = await client.searchIssues('project = PROJ AND statusCategory != Done', {
+  fields: ['summary', 'status'],
+  limit: 50,
+});
+
+// Create + comment
+const created = await client.createIssue({
+  projectKey: 'PROJ',
+  issueType: 'Task',
+  summary: 'Investigate flaky test',
+  descriptionMarkdown: '**Repro**\n\n1. step\n2. step',
+});
+await client.addComment(created.key, 'Auto-filed from triage script.');
+```
+
+Each client memoises `GET /rest/api/3/field` and the sprint / story-points / epic-link field IDs derived from it, including a failed read — so a transient 5xx would otherwise stick for the lifetime of a long-lived client. Call `client.clearFieldCaches()` to reset the field catalog together with all three detector caches and let the next call re-read it.
+
+See `examples/` for runnable scripts:
+
+- `examples/search-my-issues.ts` — paginated JQL
+- `examples/create-bug.ts` — create + comment
+- `examples/board-snapshot.ts` — boards → sprints → issues
+
+## Platform support
+
+Native binaries (via [`@napi-rs/keyring`](https://www.npmjs.com/package/@napi-rs/keyring)) ship prebuilt — no compile step on install.
+
+- **macOS** (arm64, x64) — fully supported. Tokens stored in macOS Keychain.
+- **Linux** (x64, arm64, arm, riscv64; glibc and musl) — fully supported. Tokens stored via Secret Service (`libsecret`); requires a running keyring daemon (e.g. `gnome-keyring` or KWallet). Headless servers without a keyring backend will fail the keychain step in `jirallm doctor`.
+- **Windows** (x64, arm64, ia32) — fully supported. Tokens stored in Windows Credential Manager. `ffmpeg` must be on `PATH` for video frame extraction.
+- **FreeBSD** (x64) — keychain works; other features untested.
+
+## Contributing
+
+Issues and pull requests are welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md) for development setup and guidelines, and please follow our [Code of Conduct](./CODE_OF_CONDUCT.md).
+
+## Security
+
+Found a vulnerability? Please follow the disclosure process in [SECURITY.md](./SECURITY.md).
+
+## License
+
+MIT — see [LICENSE](./LICENSE). Authored by [Dominik Rycharski](https://github.com/doryski).
+
+### Third-party tools
+
+`jirallm` invokes [`ffmpeg`](https://ffmpeg.org/) as an external process to extract video frames. **`jirallm` does not distribute or bundle `ffmpeg` or any codec binaries.** Users install `ffmpeg` themselves (via system package manager, or via `jirallm setup --bundled`, which installs the [`ffmpeg-static`](https://www.npmjs.com/package/ffmpeg-static) npm package globally on the user's machine). `ffmpeg` and its codecs are governed by their own licenses (LGPL/GPL) and may carry codec patent obligations (H.264, HEVC, AAC, etc.) depending on jurisdiction and usage. The end user is responsible for compliance with those licenses and any applicable patent licensing.

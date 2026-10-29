@@ -1,0 +1,87 @@
+{
+  "name": "jirallm",
+  "version": "0.15.0",
+  "description": "Export Jira issues as LLM-ready context bundles — markdown, attachments, video frames",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./client": {
+      "types": "./dist/lib/jiraClient.d.ts",
+      "import": "./dist/lib/jiraClient.js",
+      "default": "./dist/lib/jiraClient.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "typesVersions": {
+    "*": {
+      "client": [
+        "dist/lib/jiraClient.d.ts"
+      ]
+    }
+  },
+  "bin": {
+    "jirallm": "dist/cli/index.js"
+  },
+  "files": [
+    "dist",
+    "ui",
+    "README.md",
+    "LICENSE",
+    ".claude-plugin",
+    "hooks",
+    "skills"
+  ],
+  "keywords": [
+    "jira",
+    "llm",
+    "ai",
+    "claude",
+    "context",
+    "export",
+    "markdown",
+    "adf",
+    "video-frames",
+    "ffmpeg"
+  ],
+  "author": "Dominik Rycharski (https://github.com/Doryski)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Doryski/jirallm.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Doryski/jirallm/issues"
+  },
+  "homepage": "https://github.com/Doryski/jirallm#readme",
+  "engines": {
+    "node": ">=20"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32",
+    "freebsd"
+  ],
+  "cpu": [
+    "x64",
+    "arm64",
+    "arm",
+    "ia32",
+    "riscv64"
+  ],
+  "dependencies": {
+    "@clack/prompts": "^1.3.0",
+    "@iarna/toml": "^2.2.5",
+    "@napi-rs/keyring": "^1.3.0",
+    "commander": "^14.0.3",
+    "framewise": "^0.1.0",
+    "update-notifier": "^7.3.1",
+    "zod": "^4.4.2"
+  }
+}
