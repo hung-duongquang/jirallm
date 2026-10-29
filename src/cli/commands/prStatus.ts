@@ -23,6 +23,7 @@ type RollupItem = {
   state?: string;
   detailsUrl?: string;
   targetUrl?: string;
+  startedAt?: string;
 };
 type Review = { author: { login: string }; state: string; submittedAt: string };
 type Comment = { author: { login: string }; body: string; createdAt: string; url?: string };
@@ -74,6 +75,17 @@ export function toCheck(item: RollupItem): Check {
   if (['PENDING', 'EXPECTED', 'QUEUED', 'IN_PROGRESS', 'WAITING', 'REQUESTED', ''].includes(raw)) return { name: full, bucket: 'pending', url };
   if (['SKIPPED', 'NEUTRAL', 'STALE'].includes(raw)) return { name: full, bucket: 'skip', url };
   return { name: full, bucket: 'pass', url };
+}
+
+/** The rollup lists every run of a re-run check; keep the latest per workflow and name. */
+export function latestRuns(items: RollupItem[]): RollupItem[] {
+  const byName = new Map<string, RollupItem>();
+  for (const item of items) {
+    const id = `${item.workflowName ?? ''}/${item.name ?? item.context ?? '?'}`;
+    const seen = byName.get(id);
+    if (!seen || (item.startedAt ?? '') >= (seen.startedAt ?? '')) byName.set(id, item);
+  }
+  return [...byName.values()];
 }
 
 /** The Actions job id in a check's details URL (…/actions/runs/1/job/2). */
@@ -134,7 +146,7 @@ export function fetchPrState(gh: Gh, cwd: string, pr?: string): PrState {
     headRefOid: raw.headRefOid,
     lastPush: raw.commits[raw.commits.length - 1]?.committedDate,
     me: gql.data.viewer.login,
-    checks: (raw.statusCheckRollup ?? []).map(toCheck),
+    checks: latestRuns(raw.statusCheckRollup ?? []).map(toCheck),
     reviews: raw.latestReviews ?? [],
     threads: gql.data.repository.pullRequest.reviewThreads.nodes.map((t) => ({
       isResolved: t.isResolved, isOutdated: t.isOutdated, path: t.path, line: t.line,

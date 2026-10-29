@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describePrChange, digestLog, jobIdFromUrl, renderPrStatus, snapshotOf, toCheck, type PrSnapshot, type PrState } from './prStatus.js';
+import { describePrChange, digestLog, jobIdFromUrl, latestRuns, renderPrStatus, snapshotOf, toCheck, type PrSnapshot, type PrState } from './prStatus.js';
 
 const comment = (login: string, createdAt: string, body = 'b') => ({ author: { login }, createdAt, body, url: 'u' });
 
@@ -34,6 +34,17 @@ describe('toCheck', () => {
     expect(toCheck({ __typename: 'CheckRun', name: 'Unit', status: 'COMPLETED', conclusion: 'SKIPPED' }).bucket).toBe('skip');
     expect(toCheck({ __typename: 'StatusContext', context: 'sonar', state: 'SUCCESS' }).bucket).toBe('pass');
     expect(toCheck({ __typename: 'StatusContext', context: 'sonar', state: 'PENDING' }).bucket).toBe('pending');
+  });
+});
+
+describe('latestRuns', () => {
+  it('keeps the latest run of a re-run check', () => {
+    const runs = latestRuns([
+      { name: 'Flag', workflowName: 'W', conclusion: 'FAILURE', startedAt: '2026-10-29T10:00:00Z' },
+      { name: 'Flag', workflowName: 'W', conclusion: 'SUCCESS', startedAt: '2026-10-29T11:00:00Z' },
+      { name: 'Unit', workflowName: 'W', conclusion: 'SUCCESS', startedAt: '2026-10-29T09:00:00Z' },
+    ]);
+    expect(runs.map((r) => `${r.name}:${r.conclusion}`)).toEqual(['Flag:SUCCESS', 'Unit:SUCCESS']);
   });
 });
 
