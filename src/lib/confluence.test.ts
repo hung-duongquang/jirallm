@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { stretchTables, toCql } from './confluence.js';
+import { stretchTables, toCql, widenColumn } from './confluence.js';
 
 describe('stretchTables', () => {
   it('gives every bare table the full page width', () => {
@@ -30,6 +30,16 @@ describe('toCql', () => {
   it('adds the space filter before ORDER BY', () => {
     expect(toCql('title ~ "x" ORDER BY lastmodified DESC', 'ZOD')).toBe(
       '(title ~ "x") AND space = "ZOD" ORDER BY lastmodified DESC'
+    );
+  });
+});
+
+describe('widenColumn', () => {
+  it('gives the labelled column its share and splits the rest over the others', () => {
+    const table = '<table><tbody><tr><th>ID</th><th>Title</th><th><strong>Evidence</strong></th></tr><tr><td>1</td><td>t</td><td>e</td></tr></tbody></table>';
+    expect(widenColumn(`${table}<table><tbody><tr><th>Jira</th></tr></tbody></table>`, 'Evidence', 40)).toBe(
+      '<table><colgroup><col style="width: 30.0%;" /><col style="width: 30.0%;" /><col style="width: 40.0%;" /></colgroup>'
+        + table.slice('<table>'.length) + '<table><tbody><tr><th>Jira</th></tr></tbody></table>'
     );
   });
 });

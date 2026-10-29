@@ -1,7 +1,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ResolvedProfile } from './config.js';
-import { ConfluenceClient, stretchTables } from './confluence.js';
+import { ConfluenceClient, stretchTables, widenColumn } from './confluence.js';
 import { JiraClient } from './jiraClient.js';
 import { playwrightResults, type PlaywrightReport, type PlaywrightResult } from './qaPlaywright.js';
 import {
@@ -230,7 +230,8 @@ export async function qaPublish(
 
   const client = new ConfluenceClient(site, profile.config.userEmail, profile.apiToken);
   const body = renderReport(loaded.report).replace(/^# .+\n+/, '');
-  const storage = stretchTables(await client.wikiToStorage(reportToWiki(body)));
+  // Evidence screenshots need room to stay legible; the other columns are mostly short text.
+  const storage = stretchTables(widenColumn(await client.wikiToStorage(reportToWiki(body)), 'Evidence', 40));
   // Images refer to attachments by filename and resolve on render, so uploading after the save is fine.
   const saved = await client.savePage({
     pageId: loaded.page?.pageId, spaceKey: opts.space ?? '', parentId: opts.parent, title: plan.title, storage,

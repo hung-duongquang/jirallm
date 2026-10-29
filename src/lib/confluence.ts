@@ -36,6 +36,22 @@ export function stretchTables(storage: string): string {
   return storage.replace(/<table>/g, '<table data-layout="full-width" class="relative-table" style="width: 100.0%;">');
 }
 
+/**
+ * Gives the column headed `label` `percent` of the width in every table that has it, the rest share what is left.
+ * Run before stretchTables. An evidence screenshot in a 1/11 column shrinks until its text can't be read.
+ */
+export function widenColumn(storage: string, label: string, percent: number): string {
+  return storage.replace(/<table>([\s\S]*?)<\/table>/g, (table, inner: string) => {
+    const firstRow = /<tr>([\s\S]*?)<\/tr>/.exec(inner)?.[1] ?? '';
+    const headers = [...firstRow.matchAll(/<th[^>]*>([\s\S]*?)<\/th>/g)].map((m) => m[1].replace(/<[^>]+>/g, '').trim());
+    const at = headers.indexOf(label);
+    if (at < 0 || headers.length < 2 || inner.includes('<colgroup>')) return table;
+    const rest = ((100 - percent) / (headers.length - 1)).toFixed(1);
+    const cols = headers.map((_, i) => `<col style="width: ${i === at ? percent.toFixed(1) : rest}%;" />`).join('');
+    return `<table><colgroup>${cols}</colgroup>${inner}</table>`;
+  });
+}
+
 export type ConfluenceSearchRow = {
   id: string;
   type: string;
