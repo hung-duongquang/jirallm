@@ -5,7 +5,7 @@ import { listOrgs, loadProfile, type ResolvedProfile } from '../../lib/config.js
 import { ConfluenceClient, exportConfluencePage } from '../../lib/confluence.js';
 import { JiraExporter } from '../../lib/exporter.js';
 import { JiraClient, jiraMillis, latestCommentUpdate, type JqlIssue } from '../../lib/jiraClient.js';
-import { defaultGh, describePrChange, fetchPrState, myOpenPrs, snapshotOf, type Gh, type PrSnapshot } from './prStatus.js';
+import { defaultGh, describePrChange, fetchPrState, myOpenPrs, notifiedPrs, repoSlug, snapshotOf, toast, type Gh, type PrSnapshot } from './prStatus.js';
 
 export type WatchOptions = {
   org?: string;
@@ -18,12 +18,16 @@ export type WatchOptions = {
   uninstall?: boolean;
   dryRun?: boolean;
   prs?: string;
+  jiraEvery?: string;
+  notify?: boolean;
+  quiet?: boolean;
 };
 
 const MINE_JQL = 'assignee = currentUser() AND statusCategory != Done';
 const CHANGES_FILE = 'CHANGES.md';
 const TASK_NAME = 'jirallm watch';
 const PRS_FILE = '.prs.json';
+const JIRA_MARKER = '.watch.jira-at';
 
 type LocalIssue = { key: string; updatedAt?: string; commentsUpdatedAt?: string; commentCount?: number };
 type LocalPage = { id: string; origin: string; version: number; dir: string };
@@ -192,43 +196,63 @@ async function runOnce(profile: ResolvedProfile, opts: WatchOptions, outputDir: 
   return lines;
 }
 
+/** A change line for CHANGES.md, with the page a notification should open; `error` lines are only printed. */
+export type PrChange = { line: string; url?: string; error?: boolean };
+type PrsState = { meta?: { lastModified?: string; checkedAt?: string; repo?: string }; prs: Record<string, PrSnapshot> };
+
 /**
  * CI and review changes on my open PRs in the repo at `repo` since the last run (state in .prs.json):
  * new check failures, CI back to green, new reviews, review threads awaiting me, comments, merged/closed.
+ * Cheap enough to run every minute: one `gh pr list` (checks of all my PRs) plus a notifications poll
+ * that is a free 304 when nothing happened; a PR is only read in full when its checks changed or it
+ * got a notification.
  */
-export function prChanges(repo: string, outputDir: string, dryRun: boolean | undefined, gh: Gh = defaultGh): string[] {
+export function prChanges(repo: string, outputDir: string, dryRun: boolean | undefined, gh: Gh = defaultGh): PrChange[] {
   const file = path.join(outputDir, PRS_FILE);
-  const prev: Record<string, PrSnapshot> = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
+  const stored = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) as PrsState | Record<string, PrSnapshot> : undefined;
+  const state: PrsState = stored && 'prs' in stored ? stored as PrsState : { prs: (stored ?? {}) as Record<string, PrSnapshot> };
+  const prev = state.prs;
   const cwd = path.resolve(repo);
   const firstLine = (err: unknown) => String(err instanceof Error ? err.message : err).split('\n')[0];
-  const lines: string[] = [];
+  const changes: PrChange[] = [];
   const next: Record<string, PrSnapshot> = {};
+  const startedAt = new Date().toISOString();
+  let meta = state.meta ?? {};
   try {
-    for (const n of myOpenPrs(gh, cwd)) {
+    const slug = meta.repo ?? repoSlug(gh, cwd);
+    const since = meta.checkedAt ? new Date(Date.parse(meta.checkedAt) - 120_000).toISOString() : undefined;
+    const notified = notifiedPrs(gh, cwd, slug, meta.lastModified, since);
+    for (const { number: n, sig } of myOpenPrs(gh, cwd)) {
+      const old = prev[n];
+      if (old && old.sig === sig && notified.prs && !notified.prs.includes(n)) {
+        next[n] = old;
+        continue;
+      }
       try {
-        const snap = snapshotOf(fetchPrState(gh, cwd, String(n)));
+        const snap = { ...snapshotOf(fetchPrState(gh, cwd, String(n))), sig };
         next[n] = snap;
-        const line = describePrChange(prev[n], snap);
-        if (line) lines.push(line);
+        const line = describePrChange(old, snap);
+        if (line) changes.push({ line, url: snap.url });
       } catch (err) {
-        if (prev[n]) next[n] = prev[n]!;
-        lines.push(`PR #${n}: status check failed (${firstLine(err)})`);
+        if (old) next[n] = old;
+        changes.push({ line: `PR #${n}: status check failed (${firstLine(err)})`, error: true });
       }
     }
     for (const [n, old] of Object.entries(prev)) {
       if (next[n]) continue;
-      let state = 'closed';
-      try { state = (JSON.parse(gh(cwd, ['pr', 'view', n, '--json', 'state'])) as { state: string }).state.toLowerCase(); } catch { /* keep "closed" */ }
-      lines.push(`PR #${n}${old.key ? ` (${old.key})` : ''}: ${state}`);
+      let pr = 'closed';
+      try { pr = (JSON.parse(gh(cwd, ['pr', 'view', n, '--json', 'state'])) as { state: string }).state.toLowerCase(); } catch { /* keep "closed" */ }
+      changes.push({ line: `PR #${n}${old.key ? ` (${old.key})` : ''}: ${pr}`, url: old.url });
     }
+    meta = { repo: slug, lastModified: notified.lastModified, checkedAt: startedAt };
   } catch (err) {
-    return [`PRs: gh failed (${firstLine(err)})`];
+    return [{ line: `PRs: gh failed (${firstLine(err)})`, error: true }];
   }
   if (!dryRun) {
     mkdirSync(outputDir, { recursive: true });
-    writeFileSync(file, JSON.stringify(next, null, 1));
+    writeFileSync(file, JSON.stringify({ meta, prs: next } satisfies PrsState, null, 1));
   }
-  return lines;
+  return changes;
 }
 
 export type ChangesOptions = { outputDir?: string; unseen?: boolean; max?: string };
@@ -269,7 +293,7 @@ export function runChanges(opts: ChangesOptions): void {
   }
   const lines = [...latest.values()];
   const shown = lines.slice(-max);
-  const header = opts.unseen ? `Jira/Confluence changes since ${seen || 'the start of the log'}` : 'Jira/Confluence changes';
+  const header = opts.unseen ? `Jira/Confluence/PR changes since ${seen || 'the start of the log'}` : 'Jira/Confluence/PR changes';
   console.log(`${header} (re-exported to ${outputDir}; diff task.md with .task.previous.md for details):`);
   if (shown.length < lines.length) console.log(`- … ${lines.length - shown.length} older line(s) in ${file}`);
   console.log(shown.join('\n'));
@@ -285,6 +309,9 @@ function install(opts: WatchOptions, outputDir: string): void {
   if (opts.mine === false) args.push('--no-mine');
   if (opts.pages === false) args.push('--no-pages');
   if (opts.prs) args.push('--prs', path.resolve(opts.prs));
+  if (opts.jiraEvery) args.push('--jira-every', opts.jiraEvery);
+  if (opts.notify) args.push('--notify');
+  args.push('--quiet');
   const quote = (s: string) => `"${s.replace(/"/g, '""')}"`;
   const script = path.resolve(outputDir, '.jirallm-watch.cmd');
   const log = path.resolve(outputDir, '.watch.log');
@@ -323,17 +350,38 @@ export async function runWatch(opts: WatchOptions): Promise<void> {
 
   const every = opts.every === undefined ? undefined : Number(opts.every);
   if (every !== undefined && !(every > 0)) throw new Error('--every takes a number of minutes.');
+  const jiraEvery = opts.jiraEvery === undefined ? undefined : Number(opts.jiraEvery);
+  if (jiraEvery !== undefined && !(jiraEvery > 0)) throw new Error('--jira-every takes a number of minutes.');
+  const jiraMarker = path.join(outputDir, JIRA_MARKER);
   for (;;) {
     const stamp = new Date().toLocaleString('sv-SE').slice(0, 16);
-    const lines = await runOnce(profile, opts, outputDir);
-    if (opts.prs) lines.push(...prChanges(opts.prs, outputDir, opts.dryRun));
-    if (lines.length === 0) {
-      console.log(`${stamp} no changes`);
+    const lastJira = existsSync(jiraMarker) ? Date.parse(readFileSync(jiraMarker, 'utf8').trim()) : NaN;
+    const jiraDue = jiraEvery === undefined || !(Date.now() - lastJira < jiraEvery * 60_000 - 30_000);
+    const changes: PrChange[] = [];
+    if (jiraDue) {
+      const base = profile.config.baseUrl.replace(/\/$/, '');
+      changes.push(...(await runOnce(profile, opts, outputDir)).map((line) => {
+        const key = /^([A-Z][A-Z0-9]+-\d+):/.exec(line)?.[1];
+        return { line, url: key ? `${base}/browse/${key}` : undefined };
+      }));
+      if (jiraEvery !== undefined && !opts.dryRun) {
+        mkdirSync(outputDir, { recursive: true });
+        writeFileSync(jiraMarker, new Date().toISOString());
+      }
+    }
+    if (opts.prs) changes.push(...prChanges(opts.prs, outputDir, opts.dryRun));
+    const errors = changes.filter((c) => c.error);
+    const real = changes.filter((c) => !c.error);
+    if (errors.length) console.log(`${stamp} ${errors.map((c) => c.line).join('; ')}`);
+    if (real.length === 0) {
+      if (!opts.quiet) console.log(`${stamp} no changes`);
     } else {
+      const lines = real.map((c) => c.line);
       console.log(`${stamp} ${lines.length} change(s):\n${lines.map((l) => `  ${l}`).join('\n')}`);
       if (!opts.dryRun) {
         mkdirSync(outputDir, { recursive: true });
         appendFileSync(path.join(outputDir, CHANGES_FILE), `\n## ${stamp}\n\n${lines.map((l) => `- ${l}`).join('\n')}\n`);
+        if (opts.notify) toast(lines.length === 1 ? 'jirallm' : `jirallm: ${lines.length} changes`, lines, real.find((c) => c.url)?.url);
       }
     }
     if (every === undefined) return;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describePrChange, digestLog, jobIdFromUrl, latestRuns, renderPrStatus, snapshotOf, toCheck, type PrSnapshot, type PrState } from './prStatus.js';
+import { checksSignature, describePrChange, digestLog, jobIdFromUrl, latestRuns, notifiedPrs, parseHttp, renderPrStatus, snapshotOf, toCheck, type PrSnapshot, type PrState } from './prStatus.js';
 
 const comment = (login: string, createdAt: string, body = 'b') => ({ author: { login }, createdAt, body, url: 'u' });
 
@@ -104,6 +104,43 @@ describe('renderPrStatus', () => {
     expect(out).toContain('- 1 more where I replied last');
     expect(out).toContain('please also X');
     expect(out).not.toContain('old');
+  });
+});
+
+describe('parseHttp', () => {
+  it('splits gh api -i output', () => {
+    const res = parseHttp('HTTP/2.0 200 OK\r\nLast-Modified: Thu, 29 Oct 2026 07:07:41 GMT\r\nX-Poll-Interval: 60\r\n\r\n[{"a":1}]');
+    expect(res).toEqual({ status: 200, headers: { 'last-modified': 'Thu, 29 Oct 2026 07:07:41 GMT', 'x-poll-interval': '60' }, body: '[{"a":1}]' });
+  });
+});
+
+describe('notifiedPrs', () => {
+  const pr = (repo: string, n: number, type = 'PullRequest') => ({ repository: { full_name: repo }, subject: { type, url: `https://api.github.com/repos/${repo}/pulls/${n}` } });
+
+  it('returns PRs of the repo from a 200 and the new Last-Modified', () => {
+    const body = JSON.stringify([pr('o/r', 7), pr('o/r', 7), pr('o/other', 8), pr('o/r', 9, 'Issue')]);
+    const gh = (_cwd: string, args: string[]) => {
+      expect(args).toContain('If-Modified-Since: old');
+      return `HTTP/2.0 200 OK\nLast-Modified: new\n\n${body}`;
+    };
+    expect(notifiedPrs(gh, '.', 'O/R', 'old', '2026-10-29T10:00:00Z')).toEqual({ prs: [7], lastModified: 'new' });
+  });
+
+  it('treats a 304 (gh exits 1) as nothing new and a failure as unknown', () => {
+    const notModified = () => { throw Object.assign(new Error('exit 1'), { stdout: 'HTTP/2.0 304 Not Modified\n\n' }); };
+    expect(notifiedPrs(notModified, '.', 'o/r', 'old', undefined)).toEqual({ prs: [], lastModified: 'old' });
+    const broken = () => { throw new Error('network'); };
+    expect(notifiedPrs(broken, '.', 'o/r', 'old', undefined)).toEqual({ lastModified: 'old' });
+  });
+});
+
+describe('checksSignature', () => {
+  it('changes with the head and with check buckets, not with order', () => {
+    const a = { name: 'A', status: 'COMPLETED', conclusion: 'SUCCESS', __typename: 'CheckRun' };
+    const b = { name: 'B', status: 'IN_PROGRESS', __typename: 'CheckRun' };
+    expect(checksSignature('h', [a, b])).toBe(checksSignature('h', [b, a]));
+    expect(checksSignature('h', [a, b])).not.toBe(checksSignature('h2', [a, b]));
+    expect(checksSignature('h', [a, b])).not.toBe(checksSignature('h', [a, { ...b, status: 'COMPLETED', conclusion: 'FAILURE' }]));
   });
 });
 

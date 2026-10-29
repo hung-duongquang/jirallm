@@ -231,12 +231,13 @@ export async function runPrStatus(pr: string | undefined, opts: PrStatusOptions,
 }
 
 /** One line per open PR of mine, for `watch`: compact state compared between runs. */
-export type PrSnapshot = { number: number; title: string; key?: string; head: string; failed: string[]; pending: number; reviews: Record<string, string>; awaiting: number; comments: number };
+export type PrSnapshot = { number: number; title: string; url?: string; sig?: string; key?: string; head: string; failed: string[]; pending: number; reviews: Record<string, string>; awaiting: number; comments: number };
 
 export function snapshotOf(s: PrState): PrSnapshot {
   return {
     number: s.number,
     title: s.title,
+    url: s.url,
     key: keyFromBranch(s.headRefName),
     head: s.headRefOid,
     failed: s.checks.filter((c) => c.bucket === 'fail').map((c) => c.name).sort(),
@@ -266,9 +267,69 @@ export function describePrChange(prev: PrSnapshot | undefined, cur: PrSnapshot):
   return parts.length ? `${label}: ${parts.join('; ')} — jirallm pr-status ${cur.number}` : undefined;
 }
 
-/** My open PRs in the repo at `cwd`. */
-export function myOpenPrs(gh: Gh, cwd: string): number[] {
-  return (JSON.parse(gh(cwd, ['pr', 'list', '--author', '@me', '--state', 'open', '--json', 'number', '--limit', '50'])) as Array<{ number: number }>).map((p) => p.number);
+/** Head commit plus each check's bucket: changes on a push and whenever a check starts or finishes. */
+export function checksSignature(head: string, rollup: RollupItem[]): string {
+  return [head, ...latestRuns(rollup).map(toCheck).map((c) => `${c.name}:${c.bucket}`).sort()].join('|');
+}
+
+/** My open PRs in the repo at `cwd` with their checks signature, in one call. */
+export function myOpenPrs(gh: Gh, cwd: string): Array<{ number: number; sig: string }> {
+  const prs = JSON.parse(gh(cwd, ['pr', 'list', '--author', '@me', '--state', 'open', '--json', 'number,headRefOid,statusCheckRollup', '--limit', '50'])) as Array<{ number: number; headRefOid: string; statusCheckRollup: RollupItem[] | null }>;
+  return prs.map((p) => ({ number: p.number, sig: checksSignature(p.headRefOid, p.statusCheckRollup ?? []) }));
+}
+
+/** Splits `gh api -i` output into status, headers and body. */
+export function parseHttp(raw: string): { status: number; headers: Record<string, string>; body: string } {
+  const [head = '', ...rest] = raw.split(/\r?\n\r?\n/);
+  const [statusLine = '', ...headerLines] = head.split(/\r?\n/);
+  const headers = Object.fromEntries(headerLines.map((l) => [l.slice(0, l.indexOf(':')).toLowerCase(), l.slice(l.indexOf(':') + 1).trim()]));
+  return { status: Number(/HTTP\/\S+ (\d+)/.exec(statusLine)?.[1] ?? 0), headers, body: rest.join('\n\n') };
+}
+
+/**
+ * PRs in the repo of `cwd` with a GitHub notification (review, comment, CI activity, …) since the
+ * previous call. Sends If-Modified-Since, so a quiet poll is a 304 that costs no rate limit.
+ * `prs` is undefined when the call failed and the caller should refresh everything.
+ */
+export function notifiedPrs(gh: Gh, cwd: string, repo: string, lastModified: string | undefined, since: string | undefined): { prs?: number[]; lastModified?: string } {
+  const args = ['api', '-i', `/notifications?all=true&per_page=50${since ? `&since=${encodeURIComponent(since)}` : ''}`];
+  if (lastModified) args.push('-H', `If-Modified-Since: ${lastModified}`);
+  let raw: string;
+  try { raw = gh(cwd, args); } catch (err) { raw = String((err as { stdout?: unknown }).stdout ?? ''); }
+  const res = parseHttp(raw);
+  if (res.status === 304) return { prs: [], lastModified };
+  if (res.status !== 200) return { lastModified };
+  const items = JSON.parse(res.body) as Array<{ repository: { full_name: string }; subject: { type: string; url: string | null } }>;
+  const prs = items
+    .filter((n) => n.repository.full_name.toLowerCase() === repo.toLowerCase() && n.subject.type === 'PullRequest')
+    .map((n) => Number(/\/pulls\/(\d+)$/.exec(n.subject.url ?? '')?.[1]))
+    .filter((n) => n > 0);
+  return { prs: [...new Set(prs)], lastModified: res.headers['last-modified'] ?? lastModified };
+}
+
+/** `owner/name` of the repo at `cwd`. */
+export const repoSlug = (gh: Gh, cwd: string) => gh(cwd, ['repo', 'view', '--json', 'nameWithOwner', '-q', '.nameWithOwner']).trim();
+
+/**
+ * Shows a Windows toast (no-op elsewhere); clicking it opens `url`. Uses Windows PowerShell, which
+ * still has the WinRT notification API, under PowerShell's own app id.
+ */
+export function toast(title: string, lines: string[], url?: string): void {
+  if (process.platform !== 'win32') return;
+  const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const body = lines.slice(0, 3).map((l) => `<text>${esc(l.length > 120 ? `${l.slice(0, 120)}…` : l)}</text>`).join('');
+  const launch = url ? ` activationType="protocol" launch="${esc(url)}"` : '';
+  const xml = `<toast${launch}><visual><binding template="ToastGeneric"><text>${esc(title)}</text>${body}</binding></visual></toast>`;
+  const script = [
+    '[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null',
+    '[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] > $null',
+    '$x = New-Object Windows.Data.Xml.Dom.XmlDocument',
+    `$x.LoadXml('${xml.replace(/'/g, "''")}')`,
+    "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe').Show([Windows.UI.Notifications.ToastNotification]::new($x))",
+  ].join('\n');
+  try {
+    execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { stdio: 'ignore', timeout: 20_000 });
+  } catch { /* a missed toast must not fail the watch run */ }
 }
 
 export { defaultGh };

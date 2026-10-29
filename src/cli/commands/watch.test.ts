@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { changeEntries, commentsChangedSince, describeChange, frontmatter } from './watch.js';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { changeEntries, commentsChangedSince, describeChange, frontmatter, prChanges } from './watch.js';
 
 const task = (status: string, comments: string) =>
   `---\nkey: "ZOD-1"\nstatus: "${status}"\nupdatedAt: "2026-10-22T04:35:11.422+0200"\n---\n\n# ZOD-1\n\n## Description\n\nSame.\n\n## Comments\n\n${comments}\n`;
@@ -86,5 +89,42 @@ describe('commentsChangedSince: deletions', () => {
   it('does not flag an unchanged count, nor exports without commentCount', () => {
     expect(commentsChangedSince(known, comments(4))).toBe(false);
     expect(commentsChangedSince({ key: 'ZOD-1', updatedAt: known.updatedAt }, comments(3))).toBe(false);
+  });
+});
+
+describe('prChanges', () => {
+  const view = (failed: boolean) => JSON.stringify({
+    number: 7, title: 'ZOD-1: x', url: 'https://github.com/o/r/pull/7', state: 'OPEN', isDraft: false, mergeable: 'MERGEABLE', reviewDecision: '',
+    headRefName: 'feature/ZOD-1-x', baseRefName: 'main', headRefOid: 'h1', latestReviews: [], comments: [], commits: [{ committedDate: '2026-10-29T10:00:00Z' }],
+    statusCheckRollup: [{ __typename: 'CheckRun', name: 'Unit', status: 'COMPLETED', conclusion: failed ? 'FAILURE' : 'SUCCESS' }],
+  });
+  const fakeGh = (opts: { failed: boolean; notifications: string }) => {
+    const calls: string[] = [];
+    const gh = (_cwd: string, args: string[]) => {
+      calls.push(args.slice(0, 2).join(' '));
+      if (args[0] === 'repo') return 'o/r';
+      if (args[0] === 'api' && args[1] === '-i') return opts.notifications;
+      if (args[0] === 'api') return JSON.stringify({ data: { viewer: { login: 'me' }, repository: { pullRequest: { reviewThreads: { nodes: [] } } } } });
+      if (args[1] === 'list') return JSON.stringify([{ number: 7, headRefOid: 'h1', statusCheckRollup: JSON.parse(view(opts.failed)).statusCheckRollup }]);
+      return view(opts.failed);
+    };
+    return { gh, calls };
+  };
+
+  it('reads a PR in full only when its checks changed or it got a notification', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'prs-'));
+    const first = fakeGh({ failed: true, notifications: 'HTTP/2.0 200 OK\nLast-Modified: t1\n\n[]' });
+    expect(prChanges('.', dir, false, first.gh).map((c) => c.line)).toEqual(['PR #7 (ZOD-1): CI failed: Unit — jirallm pr-status 7']);
+
+    const quiet = fakeGh({ failed: true, notifications: 'HTTP/2.0 304 Not Modified\n\n' });
+    expect(prChanges('.', dir, false, quiet.gh)).toEqual([]);
+    expect(quiet.calls).toEqual(['api -i', 'pr list']);
+
+    const green = fakeGh({ failed: false, notifications: 'HTTP/2.0 304 Not Modified\n\n' });
+    expect(prChanges('.', dir, false, green.gh)).toEqual([{ line: 'PR #7 (ZOD-1): CI green — jirallm pr-status 7', url: 'https://github.com/o/r/pull/7' }]);
+
+    const review = fakeGh({ failed: false, notifications: 'HTTP/2.0 200 OK\nLast-Modified: t2\n\n[{"repository":{"full_name":"o/r"},"subject":{"type":"PullRequest","url":"https://api.github.com/repos/o/r/pulls/7"}}]' });
+    prChanges('.', dir, false, review.gh);
+    expect(review.calls).toContain('pr view');
   });
 });

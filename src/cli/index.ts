@@ -1629,6 +1629,9 @@ program
   .option('--uninstall', 'Remove the Task Scheduler entry')
   .option('--dry-run', 'List what would be re-exported without writing')
   .option('--prs <repo>', 'Also track my open GitHub PRs in this repo (gh): CI failures, reviews, review threads awaiting me')
+  .option('--jira-every <minutes>', 'Check Jira/Confluence at most every N minutes (run every minute for PRs, every 5 for Jira)')
+  .option('--notify', 'Show a Windows toast when there are changes (click opens the PR or ticket)')
+  .option('--quiet', 'Print nothing when nothing changed (the scheduled task uses this)')
   .addHelpText('after', `
 Change detection compares each local task.md/page.md with Jira's "updated" time and the page
 version, so it needs no state. Changed tickets keep their previous copy as .task.previous.md.
@@ -1637,6 +1640,7 @@ Examples:
   $ jirallm watch --dry-run
   $ jirallm watch --jql 'project = ZOD AND sprint in openSprints()'
   $ jirallm watch --install 15
+  $ jirallm watch --install 1 --jira-every 5 --prs ./repo --notify
 `)
   .action(async (opts: WatchOptions) => {
     try { await runWatch(opts); } catch (err) { exitOnError(err); }
