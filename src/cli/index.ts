@@ -48,6 +48,7 @@ import { runPage, type PageOptions } from './commands/page.js';
 import { runPageSearch, type PageSearchOptions } from './commands/pageSearch.js';
 import { runChanges, runWatch, type ChangesOptions, type WatchOptions } from './commands/watch.js';
 import { runPrContext, type PrContextOptions } from './commands/prContext.js';
+import { runPrStatus, type PrStatusOptions } from './commands/prStatus.js';
 import { runPageChildren, runPagePublish, type PageChildrenOptions, type PagePublishOptions } from './commands/pagePublish.js';
 import {
   runQaImport, runQaInit, runQaPublish, runQaResult,
@@ -1627,6 +1628,7 @@ program
   .option('--install [minutes]', 'Run it in the background every N minutes (default 15): Task Scheduler on Windows, a crontab line elsewhere')
   .option('--uninstall', 'Remove the Task Scheduler entry')
   .option('--dry-run', 'List what would be re-exported without writing')
+  .option('--prs <repo>', 'Also track my open GitHub PRs in this repo (gh): CI failures, reviews, review threads awaiting me')
   .addHelpText('after', `
 Change detection compares each local task.md/page.md with Jira's "updated" time and the page
 version, so it needs no state. Changed tickets keep their previous copy as .task.previous.md.
@@ -1668,6 +1670,23 @@ Examples:
 `)
   .action(async (issueKey: string | undefined, opts: PrContextOptions) => {
     try { await runPrContext(issueKey, opts); } catch (err) { exitOnError(err); }
+  });
+
+program
+  .command('pr-status [pr]')
+  .description('After opening a PR: CI checks (failed jobs with their relevant log lines), reviews, unresolved review threads awaiting me, new comments (uses gh)')
+  .option('--repo <path>', 'Git repository / worktree (the PR defaults to its current branch)', '.')
+  .option('--wait', 'Poll until no check is pending, then print; exit code 1 when a check failed')
+  .option('--interval <seconds>', 'Poll interval for --wait', '60')
+  .option('--timeout <minutes>', 'Give up waiting after this long', '90')
+  .option('--log-lines <n>', 'Max log lines per failed job', '25')
+  .addHelpText('after', `
+Examples:
+  $ jirallm pr-status --repo C:/w/3825
+  $ jirallm pr-status 2961 --wait
+`)
+  .action(async (pr: string | undefined, opts: PrStatusOptions) => {
+    try { await runPrStatus(pr, opts); } catch (err) { exitOnError(err); }
   });
 
 program

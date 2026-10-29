@@ -5,6 +5,7 @@ import { listOrgs, loadProfile, type ResolvedProfile } from '../../lib/config.js
 import { ConfluenceClient, exportConfluencePage } from '../../lib/confluence.js';
 import { JiraExporter } from '../../lib/exporter.js';
 import { JiraClient, jiraMillis, latestCommentUpdate, type JqlIssue } from '../../lib/jiraClient.js';
+import { defaultGh, describePrChange, fetchPrState, myOpenPrs, snapshotOf, type Gh, type PrSnapshot } from './prStatus.js';
 
 export type WatchOptions = {
   org?: string;
@@ -16,11 +17,13 @@ export type WatchOptions = {
   install?: string | boolean;
   uninstall?: boolean;
   dryRun?: boolean;
+  prs?: string;
 };
 
 const MINE_JQL = 'assignee = currentUser() AND statusCategory != Done';
 const CHANGES_FILE = 'CHANGES.md';
 const TASK_NAME = 'jirallm watch';
+const PRS_FILE = '.prs.json';
 
 type LocalIssue = { key: string; updatedAt?: string; commentsUpdatedAt?: string; commentCount?: number };
 type LocalPage = { id: string; origin: string; version: number; dir: string };
@@ -189,6 +192,45 @@ async function runOnce(profile: ResolvedProfile, opts: WatchOptions, outputDir: 
   return lines;
 }
 
+/**
+ * CI and review changes on my open PRs in the repo at `repo` since the last run (state in .prs.json):
+ * new check failures, CI back to green, new reviews, review threads awaiting me, comments, merged/closed.
+ */
+export function prChanges(repo: string, outputDir: string, dryRun: boolean | undefined, gh: Gh = defaultGh): string[] {
+  const file = path.join(outputDir, PRS_FILE);
+  const prev: Record<string, PrSnapshot> = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
+  const cwd = path.resolve(repo);
+  const firstLine = (err: unknown) => String(err instanceof Error ? err.message : err).split('\n')[0];
+  const lines: string[] = [];
+  const next: Record<string, PrSnapshot> = {};
+  try {
+    for (const n of myOpenPrs(gh, cwd)) {
+      try {
+        const snap = snapshotOf(fetchPrState(gh, cwd, String(n)));
+        next[n] = snap;
+        const line = describePrChange(prev[n], snap);
+        if (line) lines.push(line);
+      } catch (err) {
+        if (prev[n]) next[n] = prev[n]!;
+        lines.push(`PR #${n}: status check failed (${firstLine(err)})`);
+      }
+    }
+    for (const [n, old] of Object.entries(prev)) {
+      if (next[n]) continue;
+      let state = 'closed';
+      try { state = (JSON.parse(gh(cwd, ['pr', 'view', n, '--json', 'state'])) as { state: string }).state.toLowerCase(); } catch { /* keep "closed" */ }
+      lines.push(`PR #${n}${old.key ? ` (${old.key})` : ''}: ${state}`);
+    }
+  } catch (err) {
+    return [`PRs: gh failed (${firstLine(err)})`];
+  }
+  if (!dryRun) {
+    mkdirSync(outputDir, { recursive: true });
+    writeFileSync(file, JSON.stringify(next, null, 1));
+  }
+  return lines;
+}
+
 export type ChangesOptions = { outputDir?: string; unseen?: boolean; max?: string };
 
 /** Splits CHANGES.md into its `## <stamp>` entries, oldest first. */
@@ -242,6 +284,7 @@ function install(opts: WatchOptions, outputDir: string): void {
   if (opts.jql) args.push('--jql', opts.jql);
   if (opts.mine === false) args.push('--no-mine');
   if (opts.pages === false) args.push('--no-pages');
+  if (opts.prs) args.push('--prs', path.resolve(opts.prs));
   const quote = (s: string) => `"${s.replace(/"/g, '""')}"`;
   const script = path.resolve(outputDir, '.jirallm-watch.cmd');
   const log = path.resolve(outputDir, '.watch.log');
@@ -283,6 +326,7 @@ export async function runWatch(opts: WatchOptions): Promise<void> {
   for (;;) {
     const stamp = new Date().toLocaleString('sv-SE').slice(0, 16);
     const lines = await runOnce(profile, opts, outputDir);
+    if (opts.prs) lines.push(...prChanges(opts.prs, outputDir, opts.dryRun));
     if (lines.length === 0) {
       console.log(`${stamp} no changes`);
     } else {

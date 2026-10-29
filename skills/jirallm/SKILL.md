@@ -1,6 +1,6 @@
 ---
 name: jirallm
-description: Read and update Jira and Confluence from the shell with jirallm. Use when a task mentions a Jira key (e.g. ZOD-1234), a sprint, a board column, or asks to assign, transition, comment or log work; to find, read or write a Confluence page (spec, test report); to write up a ticket's business or technical context, documentation or a how-to-test for testers or the team; to test a ticket; before opening a pull request for a ticket branch; or to check what changed in tickets or whether the local ticket context is current.
+description: Read and update Jira and Confluence from the shell with jirallm. Use when a task mentions a Jira key (e.g. ZOD-1234), a sprint, a board column, or asks to assign, transition, comment or log work; to find, read or write a Confluence page (spec, test report); to write up a ticket's business or technical context, documentation or a how-to-test for testers or the team; to test a ticket; before opening a pull request for a ticket branch; after a PR is raised, to follow its CI pipeline (failed checks and their logs) and code reviews (review threads, comments) until it is green and approved; or to check what changed in tickets or whether the local ticket context is current.
 model: sonnet
 ---
 
@@ -54,6 +54,14 @@ Run `jirallm pr-context --repo <worktree>` (key taken from the branch name) befo
 - tell the user about requirement changes or comments that the branch does not cover yet, before opening the PR;
 - check the diff against the acceptance criteria in the re-exported `task.md`;
 - write the PR description from it (what was built per acceptance criterion, anything left out and why).
+
+## After opening a PR (CI and code review)
+
+`jirallm pr-status [<pr>] --repo <worktree>` (needs `gh`; the PR defaults to the worktree's branch) prints one compact view: checks (failed, pending, passed), and for each failed GitHub Actions job the relevant log lines (errors and failed tests, ANSI and echoed script lines stripped), the latest review per reviewer, unresolved review threads whose last comment is not mine (path:line, first and last comment, link), and conversation comments since the last commit. Use it instead of `gh pr checks` plus raw `gh run view --log-failed`, which costs far more tokens.
+- Right after `gh pr create` or a push, run `jirallm pr-status --repo <worktree> --wait` in the background (Claude Code: `run_in_background`). It polls every 60 s until no check is pending (`--timeout 90` min), prints the result and exits 1 when a check failed, so you are notified when CI settles.
+- A failed check: read the digest, reproduce locally, fix and push (ask before pushing unless the user asked for it); only open the full log (`gh run view --job <id> --log-failed`) when the digest is not enough. Report infra failures (missing secrets, cache, runner) to the user instead of changing code for them.
+- Review threads awaiting me: fix or answer each one, then tell the user what you changed. Replying on GitHub and resolving threads are **writes**: confirm first.
+- `jirallm watch --prs <repo>` (also on `--install`) tracks all my open PRs between sessions: new CI failures, CI back to green, new reviews, threads awaiting me, new comments and merged/closed PRs are added to `CHANGES.md` (state in `jira-export/.prs.json`), so they show up at session start with `jirallm changes --unseen`.
 
 ## Testing a ticket (tester workflow)
 
