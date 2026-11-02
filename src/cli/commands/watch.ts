@@ -5,6 +5,7 @@ import { listOrgs, loadProfile, type ResolvedProfile } from '../../lib/config.js
 import { ConfluenceClient, exportConfluencePage } from '../../lib/confluence.js';
 import { JiraExporter } from '../../lib/exporter.js';
 import { JiraClient, jiraMillis, latestCommentUpdate, type JqlIssue } from '../../lib/jiraClient.js';
+import { exportSlackThread, hasSlackToken, loadSlackAuth, parseSlackUrl, SlackClient, threadFrontmatter, type SlackMessage } from '../../lib/slack.js';
 import { defaultGh, describePrChange, fetchPrState, myOpenPrs, notifiedPrs, repoSlug, snapshotOf, toast, type Gh, type PrSnapshot } from './prStatus.js';
 
 export type WatchOptions = {
@@ -21,6 +22,8 @@ export type WatchOptions = {
   jiraEvery?: string;
   notify?: boolean;
   quiet?: boolean;
+  slack?: boolean;
+  slackEvery?: string;
 };
 
 const MINE_JQL = 'assignee = currentUser() AND statusCategory != Done';
@@ -28,6 +31,11 @@ const CHANGES_FILE = 'CHANGES.md';
 const TASK_NAME = 'jirallm watch';
 const PRS_FILE = '.prs.json';
 const JIRA_MARKER = '.watch.jira-at';
+const SLACK_MARKER = '.watch.slack-at';
+/** Slack is checked at most this often by default (one conversations.replies call per thread). */
+const SLACK_EVERY_DEFAULT = 5;
+/** Threads quiet for longer than this are no longer checked; exporting one again picks it back up. */
+export const SLACK_IDLE_DAYS = 14;
 
 type LocalIssue = { key: string; updatedAt?: string; commentsUpdatedAt?: string; commentCount?: number };
 type LocalPage = { id: string; origin: string; version: number; dir: string };
@@ -255,6 +263,56 @@ export function prChanges(repo: string, outputDir: string, dryRun: boolean | und
   return changes;
 }
 
+/**
+ * New replies in exported Slack threads (slack/<channel>-<ts>/thread.md) since their export: one
+ * conversations.replies call per thread, asking only for messages after the export's last one.
+ * A thread with new replies is exported again (which marks them as new). Threads without a reply for
+ * SLACK_IDLE_DAYS are skipped; Slack rate limiting stops the round and the rest waits for the next.
+ */
+export async function slackChanges(
+  outputDir: string,
+  dryRun: boolean | undefined,
+  client?: SlackClient,
+  now = Date.now()
+): Promise<PrChange[]> {
+  const root = path.join(outputDir, 'slack');
+  if (!existsSync(root)) return [];
+  const threads = readdirSync(root, { withFileTypes: true }).flatMap((d) => {
+    const file = path.join(root, d.name, 'thread.md');
+    const ts = /-(\d{10})(\d{6})$/.exec(d.name);
+    if (!d.isDirectory() || !ts || !existsSync(file)) return [];
+    const fm = threadFrontmatter(readFileSync(file, 'utf8'));
+    if (!fm.url || !fm.lastTs) return [];
+    if (now - Date.parse(fm.lastReplyAt ?? '') > SLACK_IDLE_DAYS * 86_400_000) return [];
+    return [{ dir: d.name, threadTs: `${ts[1]}.${ts[2]}`, url: fm.url, lastTs: fm.lastTs }];
+  });
+  if (threads.length === 0) return [];
+  const slack = client ?? new SlackClient(await loadSlackAuth());
+  const changes: PrChange[] = [];
+  for (const t of threads) {
+    try {
+      const { channel } = parseSlackUrl(t.url);
+      const page = await slack.call<{ messages?: SlackMessage[] }>('conversations.replies', {
+        channel, ts: t.threadTs, oldest: t.lastTs, inclusive: 'false', limit: '50',
+      });
+      const fresh = (page.messages ?? []).filter((m) => Number(m.ts) > Number(t.lastTs)).length;
+      if (fresh === 0) continue;
+      if (dryRun) {
+        changes.push({ line: `slack/${t.dir}: would re-export (new replies)`, url: t.url });
+        continue;
+      }
+      const exported = await exportSlackThread(t.url, { outputDir, client: slack });
+      const n = exported.newReplies || fresh;
+      changes.push({ line: `slack/${t.dir}: ${n} new repl${n === 1 ? 'y' : 'ies'} in "${exported.title}"`, url: t.url });
+    } catch (err) {
+      const msg = String(err instanceof Error ? err.message : err).split('\n')[0];
+      changes.push({ line: `slack/${t.dir}: check failed (${msg})`, error: true });
+      if (/ratelimited|HTTP 429|invalid_auth|not_authed|token_revoked/.test(msg)) break;
+    }
+  }
+  return changes;
+}
+
 export type ChangesOptions = { outputDir?: string; unseen?: boolean; max?: string };
 
 /** Splits CHANGES.md into its `## <stamp>` entries, oldest first. */
@@ -293,7 +351,7 @@ export function runChanges(opts: ChangesOptions): void {
   }
   const lines = [...latest.values()];
   const shown = lines.slice(-max);
-  const header = opts.unseen ? `Jira/Confluence/PR changes since ${seen || 'the start of the log'}` : 'Jira/Confluence/PR changes';
+  const header = opts.unseen ? `Jira/Confluence/Slack/PR changes since ${seen || 'the start of the log'}` : 'Jira/Confluence/Slack/PR changes';
   console.log(`${header} (re-exported to ${outputDir}; diff task.md with .task.previous.md for details):`);
   if (shown.length < lines.length) console.log(`- … ${lines.length - shown.length} older line(s) in ${file}`);
   console.log(shown.join('\n'));
@@ -310,6 +368,8 @@ function install(opts: WatchOptions, outputDir: string): void {
   if (opts.pages === false) args.push('--no-pages');
   if (opts.prs) args.push('--prs', path.resolve(opts.prs));
   if (opts.jiraEvery) args.push('--jira-every', opts.jiraEvery);
+  if (opts.slack === false) args.push('--no-slack');
+  if (opts.slackEvery) args.push('--slack-every', opts.slackEvery);
   if (opts.notify) args.push('--notify');
   args.push('--quiet');
   const quote = (s: string) => `"${s.replace(/"/g, '""')}"`;
@@ -352,7 +412,11 @@ export async function runWatch(opts: WatchOptions): Promise<void> {
   if (every !== undefined && !(every > 0)) throw new Error('--every takes a number of minutes.');
   const jiraEvery = opts.jiraEvery === undefined ? undefined : Number(opts.jiraEvery);
   if (jiraEvery !== undefined && !(jiraEvery > 0)) throw new Error('--jira-every takes a number of minutes.');
+  const slackEvery = opts.slackEvery === undefined ? SLACK_EVERY_DEFAULT : Number(opts.slackEvery);
+  if (!(slackEvery > 0)) throw new Error('--slack-every takes a number of minutes.');
+  const watchSlack = opts.slack !== false && (await hasSlackToken());
   const jiraMarker = path.join(outputDir, JIRA_MARKER);
+  const slackMarker = path.join(outputDir, SLACK_MARKER);
   for (;;) {
     const stamp = new Date().toLocaleString('sv-SE').slice(0, 16);
     const lastJira = existsSync(jiraMarker) ? Date.parse(readFileSync(jiraMarker, 'utf8').trim()) : NaN;
@@ -367,6 +431,14 @@ export async function runWatch(opts: WatchOptions): Promise<void> {
       if (jiraEvery !== undefined && !opts.dryRun) {
         mkdirSync(outputDir, { recursive: true });
         writeFileSync(jiraMarker, new Date().toISOString());
+      }
+    }
+    const lastSlack = existsSync(slackMarker) ? Date.parse(readFileSync(slackMarker, 'utf8').trim()) : NaN;
+    if (watchSlack && !(Date.now() - lastSlack < slackEvery * 60_000 - 30_000)) {
+      changes.push(...(await slackChanges(outputDir, opts.dryRun)));
+      if (!opts.dryRun) {
+        mkdirSync(outputDir, { recursive: true });
+        writeFileSync(slackMarker, new Date().toISOString());
       }
     }
     if (opts.prs) changes.push(...prChanges(opts.prs, outputDir, opts.dryRun));

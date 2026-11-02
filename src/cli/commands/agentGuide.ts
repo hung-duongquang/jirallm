@@ -113,7 +113,7 @@ Every write command accepts \`--dry-run\`: use it when unsure. \`start\` runs gi
 
 ## Staying current
 
-\`jirallm watch\` re-exports exported tickets and Confluence pages that changed since their local copy, plus open tickets assigned to me that are not exported yet, and appends one line per change to \`jira-export/CHANGES.md\` (e.g. \`ZOD-1: status: To Do → In Progress; Comments changed\`). \`jirallm changes\` prints them compactly (one line per ticket, latest state); \`--dry-run\` on \`watch\` only lists what would be re-exported. A session-start hook running \`jirallm changes --unseen\` puts new changes in context automatically. \`--install 15\` runs it every 15 minutes in the background (\`--uninstall\` removes it).
+\`jirallm watch\` re-exports exported tickets and Confluence pages that changed since their local copy, plus open tickets assigned to me that are not exported yet and exported Slack threads with new replies (when Slack is set up; every 5 minutes at most, threads quiet for 14 days are skipped), and appends one line per change to \`jira-export/CHANGES.md\` (e.g. \`ZOD-1: status: To Do → In Progress; Comments changed\`). \`jirallm changes\` prints them compactly (one line per ticket, latest state); \`--dry-run\` on \`watch\` only lists what would be re-exported. A session-start hook running \`jirallm changes --unseen\` puts new changes in context automatically. \`--install 15\` runs it every 15 minutes in the background (\`--uninstall\` removes it).
 `;
 
 export type AgentGuideOptions = { install?: string | boolean };

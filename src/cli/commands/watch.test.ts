@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { changeEntries, commentsChangedSince, describeChange, frontmatter, prChanges } from './watch.js';
+import { changeEntries, commentsChangedSince, describeChange, frontmatter, prChanges, slackChanges } from './watch.js';
+import type { SlackClient } from '../../lib/slack.js';
 
 const task = (status: string, comments: string) =>
   `---\nkey: "ZOD-1"\nstatus: "${status}"\nupdatedAt: "2026-10-22T04:35:11.422+0200"\n---\n\n# ZOD-1\n\n## Description\n\nSame.\n\n## Comments\n\n${comments}\n`;
@@ -126,5 +127,37 @@ describe('prChanges', () => {
     const review = fakeGh({ failed: false, notifications: 'HTTP/2.0 200 OK\nLast-Modified: t2\n\n[{"repository":{"full_name":"o/r"},"subject":{"type":"PullRequest","url":"https://api.github.com/repos/o/r/pulls/7"}}]' });
     prChanges('.', dir, false, review.gh);
     expect(review.calls).toContain('pr view');
+  });
+});
+
+describe('slackChanges', () => {
+  const thread = (lastReplyAt: string, lastTs: string) =>
+    `---\nslack:\n  title: "T"\n  lastReplyAt: "${lastReplyAt}"\n  lastTs: "${lastTs}"\n  url: "https://ws.slack.com/archives/C1/p1793000000000100"\n---\n# x\n`;
+
+  it('asks only for replies after the export and skips threads idle for 14 days', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'slackwatch-'));
+    const now = Date.parse('2026-11-02T10:00:00Z');
+    mkdirSync(path.join(dir, 'slack', 'c1-1793000000000100'), { recursive: true });
+    writeFileSync(path.join(dir, 'slack', 'c1-1793000000000100', 'thread.md'), thread('2026-11-01T10:00:00Z', '1793000500.000100'));
+    mkdirSync(path.join(dir, 'slack', 'c1-1790000000000100'), { recursive: true });
+    writeFileSync(path.join(dir, 'slack', 'c1-1790000000000100', 'thread.md'), thread('2026-10-01T10:00:00Z', '1790000500.000100'));
+    const calls: Record<string, string>[] = [];
+    const client = {
+      call: async (_m: string, params: Record<string, string>) => {
+        calls.push(params);
+        return { ok: true, messages: [{ ts: '1793000000.000100' }, { ts: '1793000600.000100' }] };
+      },
+    } as unknown as SlackClient;
+    const changes = await slackChanges(dir, true, client, now);
+    expect(calls).toEqual([{ channel: 'C1', ts: '1793000000.000100', oldest: '1793000500.000100', inclusive: 'false', limit: '50' }]);
+    expect(changes).toEqual([{ line: 'slack/c1-1793000000000100: would re-export (new replies)', url: 'https://ws.slack.com/archives/C1/p1793000000000100' }]);
+  });
+
+  it('reports nothing when only the parent comes back', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'slackwatch-'));
+    mkdirSync(path.join(dir, 'slack', 'c1-1793000000000100'), { recursive: true });
+    writeFileSync(path.join(dir, 'slack', 'c1-1793000000000100', 'thread.md'), thread('2026-11-01T10:00:00Z', '1793000500.000100'));
+    const client = { call: async () => ({ ok: true, messages: [{ ts: '1793000000.000100' }] }) } as unknown as SlackClient;
+    expect(await slackChanges(dir, false, client, Date.parse('2026-11-02T10:00:00Z'))).toEqual([]);
   });
 });
