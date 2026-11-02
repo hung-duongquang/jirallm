@@ -35,6 +35,8 @@ vi.mock('../../lib/jiraClient.js', () => ({
 
 vi.mock('../../lib/credentials.js', () => ({
   getToken: getTokenMock,
+  // No Slack token: the optional Slack line passes either way.
+  getSecret: async () => undefined,
 }));
 
 vi.mock('framewise', () => ({

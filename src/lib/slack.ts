@@ -84,6 +84,14 @@ type SlackResponse = { ok: boolean; error?: string; needed?: string; response_me
 
 export type SlackAuth = { token: string; cookie?: string };
 
+/** Printed instead of results when no Slack token is set, so agents skip their Slack steps. */
+export const SLACK_NOT_SET_UP = 'Slack not set up (no token): skipped. `jirallm slack:auth` enables it.';
+
+/** Whether a Slack token is stored or in the environment; no network call. */
+export async function hasSlackToken(): Promise<boolean> {
+  return Boolean(await getSecret(SLACK_TOKEN_ACCOUNT, 'JIRALLM_SLACK_TOKEN'));
+}
+
 /** Token from the keychain (`jirallm slack:auth`) or JIRALLM_SLACK_TOKEN / JIRALLM_SLACK_COOKIE. */
 export async function loadSlackAuth(): Promise<SlackAuth> {
   const token = await getSecret(SLACK_TOKEN_ACCOUNT, 'JIRALLM_SLACK_TOKEN');

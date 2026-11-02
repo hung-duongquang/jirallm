@@ -9,6 +9,7 @@ import {
 } from '../../lib/config.js';
 import { JiraClient } from '../../lib/jiraClient.js';
 import { getToken } from '../../lib/credentials.js';
+import { hasSlackToken } from '../../lib/slack.js';
 
 type Severity = 'pass' | 'fail' | 'warn';
 
@@ -81,6 +82,13 @@ async function checkKeychain(): Promise<CheckResult> {
           : 'Try reinstalling jirallm; ensure your platform binary is supported.',
     };
   }
+}
+
+/** Slack is optional, so a missing token passes; it only says how to turn Slack on. */
+async function checkSlack(): Promise<CheckResult> {
+  return (await hasSlackToken())
+    ? { name: 'Slack', severity: 'pass', detail: 'token set (slack, slack:search)' }
+    : { name: 'Slack', severity: 'pass', detail: 'not set up (optional; `jirallm slack:auth` enables it)' };
 }
 
 function checkConfig(): CheckResult {
@@ -220,6 +228,7 @@ export async function runDoctor(
   results.push(await checkKeychain());
   results.push(checkConfig());
   results.push(...(await checkJira(opts.org, opts.project)));
+  results.push(await checkSlack());
 
   if (opts.json) {
     process.stdout.write(`${JSON.stringify(results)}\n`);

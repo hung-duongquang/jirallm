@@ -2,9 +2,11 @@ import { intro, outro, password, isCancel, cancel } from '@clack/prompts';
 import { removeSecret, setSecret } from '../../lib/credentials.js';
 import {
   SLACK_COOKIE_ACCOUNT,
+  SLACK_NOT_SET_UP,
   SLACK_TOKEN_ACCOUNT,
   SlackClient,
   exportSlackThread,
+  hasSlackToken,
   loadSlackAuth,
   loadSlackThread,
   mentionedUsers,
@@ -55,6 +57,12 @@ export async function runSlackSearch(query: string, opts: SlackSearchOptions): P
   const queries = slackSearchQueries(query, opts.after);
   if (queries.length === 0) throw new Error('Empty search query.');
   const q = queries.join(' | ');
+  // Slack is optional: without a token this is not an error, just nothing to search.
+  if (!(await hasSlackToken())) {
+    if (opts.json) printJson({ skipped: SLACK_NOT_SET_UP, matches: [] });
+    else console.log(SLACK_NOT_SET_UP);
+    return;
+  }
   const client = new SlackClient(await loadSlackAuth());
   const { total, matches } = await client.searchAny(queries, max);
 
