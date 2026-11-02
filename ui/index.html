@@ -120,6 +120,9 @@
   .library .title { grid-column: 1 / -1; color: var(--muted); font-size: 12.5px; overflow: hidden;
     text-overflow: ellipsis; white-space: nowrap; }
   .library .meta { color: var(--muted); font-size: 12px; text-align: right; }
+  /* A Confluence row: the page title takes the key's place, the version and age stay right. */
+  .library li button.page { grid-template-columns: minmax(0, 1fr) auto; }
+  .library .page .key { font-family: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .preview { min-height: 0; display: flex; flex-direction: column; padding: 0; overflow: hidden; }
   .preview-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 12px 16px;
     border-bottom: 1px solid var(--border); }
@@ -251,7 +254,12 @@
         <button id="refresh" title="Reload the list from the folder">Reload</button>
         <button id="updateAll" title="Re-export these tickets from Jira with the options above (with Linked issues on, also the tickets they mention)">Update all</button>
       </div>
-      <input type="text" id="filter" placeholder="Filter by key, title, Confluence or Slack" style="margin-top:8px">
+      <div class="tabs" role="tablist" id="libTabs" style="margin:8px 0 0">
+        <button role="tab" data-kind="ticket" aria-selected="true">Jira</button>
+        <button role="tab" data-kind="page" aria-selected="false">Confluence</button>
+        <button role="tab" data-kind="slack" aria-selected="false">Slack</button>
+      </div>
+      <input type="text" id="filter" placeholder="Filter by key or title" style="margin-top:8px">
       <ul id="library"></ul>
     </section>
   </div>
@@ -581,14 +589,30 @@ async function loadLibrary() {
   catch (err) { libraryItems = []; toast(err.message); }
   renderLibrary();
 }
+// Which kind the Exported list shows: Jira tickets, Confluence pages or Slack threads.
+let libKind = store.get('libKind', 'ticket');
+const KIND_EMPTY = { ticket: 'No tickets exported in this folder yet.', page: 'No Confluence pages yet. They come with tickets that link them, or paste a page link above.', slack: 'No Slack threads yet. Paste a Slack message link above.' };
+function showKind(kind) {
+  if (!KIND_EMPTY[kind] || kind === libKind) return;
+  libKind = kind; store.set('libKind', kind); renderLibrary();
+}
 function renderLibrary() {
   const q = $('filter').value.trim().toLowerCase();
-  const items = libraryItems.filter((it) => !q || it.key.toLowerCase().includes(q) || it.title.toLowerCase().includes(q));
+  const ofKind = libraryItems.filter((it) => it.kind === libKind);
+  const items = ofKind.filter((it) => !q || it.key.toLowerCase().includes(q) || it.title.toLowerCase().includes(q));
+  for (const b of $('libTabs').querySelectorAll('button')) {
+    const n = libraryItems.filter((it) => it.kind === b.dataset.kind).length;
+    b.setAttribute('aria-selected', String(b.dataset.kind === libKind));
+    b.textContent = `${{ ticket: 'Jira', page: 'Confluence', slack: 'Slack' }[b.dataset.kind]}${n ? ` (${n})` : ''}`;
+  }
+  $('updateAll').hidden = libKind !== 'ticket';
+  // Within a tab the kind is implied: a Slack row shows its channel, a page row only its title.
+  const label = (it) => (it.kind === 'slack' ? it.key.replace(/^Slack\s*/, '') : it.kind === 'page' ? it.title : it.key);
   $('library').innerHTML = items.length ? items.map((it) => `
-    <li><button ${it.kind === 'ticket' ? `data-key="${esc(it.key)}"` : `data-kind="${esc(it.kind)}" data-id="${esc(it.id)}"`} aria-current="${isOpen(it)}">
-      <span class="key">${esc(it.key)}</span><span class="meta">${it.changedAt ? `<span class="changed" title="Changed in an update; open it and choose Diff">changed ${ago(it.changedAt)}</span> · ` : ''}${esc(it.status)} · ${ago(it.modified)}${it.docs?.length ? ` · <span title="Local notes: ${esc(it.docs.join(', '))}">${esc(it.docs.map(docLabel).join(', ').toLowerCase())}</span>` : ''}</span>
-      <span class="title">${esc(it.title)}</span>
-    </button></li>`).join('') : `<li class="hint" style="padding:8px">${libraryItems.length ? 'No match.' : 'Nothing exported in this folder yet.'}</li>`;
+    <li><button ${it.kind === 'ticket' ? `data-key="${esc(it.key)}"` : `data-kind="${esc(it.kind)}" data-id="${esc(it.id)}"`} aria-current="${isOpen(it)}"${it.kind === 'page' ? ` class="page" title="${esc(it.title)}"` : ''}>
+      <span class="key">${esc(label(it))}</span><span class="meta">${it.changedAt ? `<span class="changed" title="Changed in an update; open it and choose Diff">changed ${ago(it.changedAt)}</span> · ` : ''}${esc(it.status)} · ${ago(it.modified)}${it.docs?.length ? ` · <span title="Local notes: ${esc(it.docs.join(', '))}">${esc(it.docs.map(docLabel).join(', ').toLowerCase())}</span>` : ''}</span>
+      ${it.kind === 'page' ? '' : `<span class="title">${esc(it.title)}</span>`}
+    </button></li>`).join('') : `<li class="hint" style="padding:8px">${ofKind.length ? 'No match.' : KIND_EMPTY[libKind]}</li>`;
   if (!exporting) {
     $('updateAll').textContent = updateLabel();
     $('updateAll').disabled = items.length === 0;
@@ -600,6 +624,7 @@ $('library').onclick = (e) => {
   else if (b) openItem(b.dataset.kind, b.dataset.id);
 };
 $('filter').oninput = renderLibrary;
+$('libTabs').onclick = (e) => { const b = e.target.closest('button[data-kind]'); if (b) showKind(b.dataset.kind); };
 $('refresh').onclick = loadLibrary;
 $('outdir').onchange = () => { store.set('outdir', outDir()); loadLibrary(); };
 
@@ -654,6 +679,7 @@ async function openItem(kind, id) {
     const q = `kind=${encodeURIComponent(kind)}&id=${encodeURIComponent(id)}&dir=${encodeURIComponent(outDir())}`;
     const { markdown } = await api(`/api/item?${q}`);
     const it = libraryItems.find((x) => x.kind === kind && x.id === id);
+    showKind(kind);
     currentItem = { kind, id, key: it?.key ?? (kind === 'page' ? 'Confluence' : 'Slack'), q };
     current = null; currentMarkdown = markdown; currentDiff = null; currentDocs = []; docText = {};
     if (view !== 'source') view = 'rendered';
@@ -675,6 +701,7 @@ async function openTask(key, { fromLink = false, as } = {}) {
       as === 'diff' || hasDiff(key) ? api(`/api/diff?${q}`).catch(() => null) : null,
     ]);
     current = key; currentItem = null; currentMarkdown = markdown; currentDiff = diff;
+    showKind('ticket');
     currentDocs = docs; docText = {};
     if (as) view = as;
     if (view.startsWith('doc:') && !docs.includes(view.slice(4))) view = 'rendered';
