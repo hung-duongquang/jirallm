@@ -13,6 +13,8 @@ import { JiraApiError, requestWithRedirectPolicy, type RedirectPolicy } from './
 
 /** Folder (inside the export folder) that holds the exported Confluence pages. */
 export const CONFLUENCE_DIR = 'confluence';
+/** The page.md a changed re-export replaced; hidden so it is not picked up as context. */
+export const PREVIOUS_PAGE_FILE = '.page.previous.md';
 
 export type ConfluencePage = {
   id: string;
@@ -466,6 +468,8 @@ export async function exportConfluencePage(
   const path = join(pageDir, 'page.md');
   const previous = existsSync(path) ? readFileSync(path, 'utf-8') : null;
   if (previous !== content) writeFileSync(path, content, 'utf-8');
+  // Keep the replaced copy so a reader can diff what changed since the last export.
+  if (previous !== null && previous !== content) writeFileSync(join(pageDir, PREVIOUS_PAGE_FILE), previous, 'utf-8');
   const status = previous === null ? 'new' : previous === content ? 'unchanged' : 'changed';
   return { id: page.id, title: page.title, dirName, path, status, attachmentCount: files.length };
 }

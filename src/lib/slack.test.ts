@@ -1,5 +1,8 @@
-import { describe, expect, it, vi } from 'vitest';
-import { SlackClient, mrkdwnToMarkdown, parseSlackUrl, renderThread, type SlackMessage } from './slack.js';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+import { SlackClient, exportSlackThread, mrkdwnToMarkdown, parseSlackUrl, renderThread, threadTitle, type SlackMessage } from './slack.js';
 
 describe('parseSlackUrl', () => {
   it('turns the p-id into a message ts', () => {
@@ -80,5 +83,43 @@ describe('renderThread', () => {
     expect(md).toMatch(/## Linh · .*\n\nquestion\n\n> \*\*\[ZOD-1\]\(https:\/\/j\/ZOD-1\)\*\*\n> summary/);
     expect(md).toMatch(/## CI · .*\(linked message\)/);
     expect(md).toContain('![shot.png](./F1-shot.png)');
+  });
+});
+
+describe('threadTitle', () => {
+  it('skips a first line that is only a link', () => {
+    const messages = [{ ts: '1.0', text: '<https://acme.atlassian.net/browse/ZOD-1|acme.atlassian.net/browse/ZOD-1>\nPlease check the totals' }];
+    expect(threadTitle(messages, new Map())).toBe('Please check the totals');
+  });
+});
+
+describe('exportSlackThread new replies', () => {
+  const outputDir = mkdtempSync(join(tmpdir(), 'jl-slack-'));
+  afterAll(() => rmSync(outputDir, { recursive: true, force: true }));
+  const url = 'https://x.slack.com/archives/C1/p1000000000000000';
+  const clientWith = (messages: SlackMessage[]) =>
+    new SlackClient({ token: 'xoxp-1' }, (async (u: string) =>
+      new Response(JSON.stringify(u.endsWith('conversations.replies') ? { ok: true, messages } : { ok: true, channel: { name: 'dev' }, user: { real_name: 'Linh' } }))) as unknown as typeof fetch);
+  const parent = { ts: '1000000000.000000', thread_ts: '1000000000.000000', user: 'U1', text: 'question' };
+  const reply = (ts: string, text: string) => ({ ts, thread_ts: parent.ts, user: 'U1', text });
+
+  it('marks replies that arrived since the previous export and keeps the marks on a quiet update', async () => {
+    const first = await exportSlackThread(url, { outputDir, client: clientWith([parent, reply('1000000060.000000', 'one')]) });
+    expect(first.newReplies).toBe(0);
+
+    const second = await exportSlackThread(url, {
+      outputDir,
+      client: clientWith([parent, reply('1000000060.000000', 'one'), reply('1000000120.000000', 'two'), reply('1000000180.000000', 'three')]),
+    });
+    expect(second.newReplies).toBe(2);
+    const md = readFileSync(second.path, 'utf8');
+    expect(md).toContain('newReplies: 2');
+    expect(md.match(/^## .*\(new\)$/gm)).toHaveLength(2);
+
+    const third = await exportSlackThread(url, {
+      outputDir,
+      client: clientWith([parent, reply('1000000060.000000', 'one'), reply('1000000120.000000', 'two'), reply('1000000180.000000', 'three')]),
+    });
+    expect(third.newReplies).toBe(2);
   });
 });

@@ -43,6 +43,8 @@ const ISSUE_KEY = /\b[A-Z][A-Z0-9]+-\d+\b/;
 const ISSUE_KEY_STRICT = /^[A-Z][A-Z0-9]+-\d+$/i;
 /** The task.md a changed re-export replaced; hidden so it is not picked up as context. */
 const PREVIOUS_FILE = '.task.previous.md';
+/** The same for a Confluence page.md. */
+const PREVIOUS_PAGE_FILE = '.page.previous.md';
 
 // ---------- helpers ----------
 
@@ -323,7 +325,11 @@ async function listItems(outputDir, kind) {
   const items = await Promise.all(
     entries.filter((e) => e.isDirectory()).map(async (e) => {
       const path = join(root, e.name, file);
-      const [text, info] = await Promise.all([readFile(path, 'utf8').catch(() => null), stat(path).catch(() => null)]);
+      const [text, info, previousInfo] = await Promise.all([
+        readFile(path, 'utf8').catch(() => null),
+        stat(path).catch(() => null),
+        kind === 'page' ? stat(join(root, e.name, PREVIOUS_PAGE_FILE)).catch(() => null) : null,
+      ]);
       if (text === null) return null;
       const f = frontmatterFields(text);
       return {
@@ -335,7 +341,10 @@ async function listItems(outputDir, kind) {
         url: f.url ?? '',
         modified: info.mtime.toISOString(),
         size: info.size,
-        changedAt: null,
+        // A page: when an update last changed it (the earlier copy was kept then). A thread: when
+        // an update last brought new replies.
+        changedAt: previousInfo ? previousInfo.mtime.toISOString() : f.newRepliesAt ?? null,
+        newReplies: Number(f.newReplies) || 0,
         docs: [],
       };
     })
@@ -351,7 +360,8 @@ async function exportLink(body) {
   const outputDir = resolveOutputDir(body.dir);
   if (/^https:\/\/[\w-]+\.slack\.com\/archives\//i.test(url)) {
     const t = await lib.exportSlackThread(url, { outputDir });
-    return { kind: 'slack', id: t.dirName, title: t.title, detail: `${t.messageCount} message(s)${t.fileCount ? `, ${t.fileCount} file(s)` : ''}`, warnings: t.fileErrors };
+    const detail = `${t.messageCount} message(s)${t.newReplies ? `, ${t.newReplies} new` : ''}${t.fileCount ? `, ${t.fileCount} file(s)` : ''}`;
+    return { kind: 'slack', id: t.dirName, title: t.title, detail, warnings: t.fileErrors };
   }
   if (/\/wiki\//.test(url)) {
     const p = await lib.exportConfluencePageByUrl(url, { org: defaultOrg(), outputDir });
@@ -453,14 +463,19 @@ async function handle(req, res) {
         return;
       }
       case 'GET /api/diff': {
-        const dir = taskDirFor(resolveOutputDir(url.searchParams.get('dir')), url.searchParams.get('key'));
-        const previousFile = join(dir, PREVIOUS_FILE);
+        // A ticket (key=) or a Confluence page (kind=page&id=).
+        const outputDir = resolveOutputDir(url.searchParams.get('dir'));
+        const page = url.searchParams.get('kind') === 'page';
+        const dir = page
+          ? itemDirFor(outputDir, 'page', url.searchParams.get('id')).dir
+          : taskDirFor(outputDir, url.searchParams.get('key'));
+        const previousFile = join(dir, page ? PREVIOUS_PAGE_FILE : PREVIOUS_FILE);
         if (!existsSync(previousFile)) {
-          throw new HttpError(404, 'No earlier version yet. A diff appears after an update changes this ticket.');
+          throw new HttpError(404, `No earlier version yet. A diff appears after an update changes this ${page ? 'page' : 'ticket'}.`);
         }
         const [previous, current, info] = await Promise.all([
           readFile(previousFile, 'utf8'),
-          readFile(join(dir, 'task.md'), 'utf8'),
+          readFile(join(dir, page ? 'page.md' : 'task.md'), 'utf8'),
           stat(previousFile),
         ]);
         sendJson(res, 200, { ...unifiedDiff(previous, current), changedAt: info.mtime.toISOString() });

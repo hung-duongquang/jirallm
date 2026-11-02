@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { getSecret } from './credentials.js';
 
@@ -237,6 +237,8 @@ export type RenderInput = {
   names: Map<string, string>;
   /** Local path per file id, for files that were downloaded. */
   localFiles?: Map<string, string>;
+  /** Messages after this ts arrived since the previous export; their headings say "(new)". */
+  newSince?: string;
 };
 
 export function renderThread(input: RenderInput): string {
@@ -253,7 +255,8 @@ export function renderThread(input: RenderInput): string {
     const author = msg.user ? names.get(msg.user) ?? msg.user : msg.bot_profile?.name ?? msg.username ?? 'unknown';
     const marker = msg.ts === input.linkedTs && messages.length > 1 ? ' (linked message)' : '';
     const edited = msg.edited ? ' (edited)' : '';
-    lines.push(`## ${author} · ${formatTs(msg.ts)}${edited}${marker}`, '');
+    const isNew = input.newSince && Number(msg.ts) > Number(input.newSince) ? ' (new)' : '';
+    lines.push(`## ${author} · ${formatTs(msg.ts)}${edited}${marker}${isNew}`, '');
     const body = mrkdwnToMarkdown(msg.text ?? '', names);
     if (body) lines.push(body, '');
     for (const att of msg.attachments ?? []) {
@@ -283,12 +286,21 @@ export type ExportedSlackThread = {
   fileCount: number;
   /** Files that could not be downloaded, with the reason. */
   fileErrors: string[];
+  /** Replies that arrived since the previous export (0 on the first export). */
+  newReplies: number;
 };
 
-/** A short title for the list: the first line of the thread's first message. */
+/**
+ * A short title for the list: the first line of the thread's first message that is more than a
+ * bare link (a thread often opens with the ticket URL), else that link.
+ */
 export function threadTitle(messages: SlackMessage[], names: Map<string, string>): string {
-  const first = mrkdwnToMarkdown(messages[0]?.text ?? '', names).split('\n').find((l) => l.trim()) ?? '';
-  const plain = first.replace(/\*\*|`|~~/g, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').trim();
+  const lines = mrkdwnToMarkdown(messages[0]?.text ?? '', names)
+    .split('\n')
+    .map((l) => l.replace(/\*\*|`|~~/g, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/^[>\s•*-]+/, '').trim())
+    .filter(Boolean);
+  const isLink = (l: string) => /^(https?:\/\/)?[\w.-]+\.[a-z]{2,}\/\S*$/i.test(l);
+  const plain = lines.find((l) => !isLink(l)) ?? lines[0] ?? '';
   return plain.length > 100 ? `${plain.slice(0, 99)}…` : plain || '(no text)';
 }
 
@@ -337,6 +349,19 @@ export async function exportSlackThread(
     }
   }
 
+  // Replies newer than the last message of the previous export are new. When nothing new came in,
+  // the marks of the update that brought replies stay, so a quick second update does not drop them.
+  const path = join(dir, 'thread.md');
+  const prev = existsSync(path) ? threadFrontmatter(readFileSync(path, 'utf8')) : undefined;
+  const lastTs = messages.at(-1)!.ts;
+  let newSince = prev?.newSince;
+  let newRepliesAt = prev?.newRepliesAt;
+  if (prev?.lastTs && Number(lastTs) > Number(prev.lastTs)) {
+    newSince = prev.lastTs;
+    newRepliesAt = new Date().toISOString();
+  }
+  const newReplies = newSince ? messages.filter((m) => Number(m.ts) > Number(newSince)).length : 0;
+
   const title = threadTitle(messages, names);
   const frontmatter = [
     '---',
@@ -344,12 +369,32 @@ export async function exportSlackThread(
     `  title: ${JSON.stringify(title)}`,
     `  channel: ${JSON.stringify(channelName ?? link.channel)}`,
     `  messages: ${messages.length}`,
-    `  lastReplyAt: ${JSON.stringify(new Date(Number(messages.at(-1)!.ts) * 1000).toISOString())}`,
+    `  lastReplyAt: ${JSON.stringify(new Date(Number(lastTs) * 1000).toISOString())}`,
+    `  lastTs: ${JSON.stringify(lastTs)}`,
+    ...(newReplies
+      ? [`  newSince: ${JSON.stringify(newSince)}`, `  newReplies: ${newReplies}`, `  newRepliesAt: ${JSON.stringify(newRepliesAt)}`]
+      : []),
     `  url: ${JSON.stringify(url)}`,
     '---',
     '',
   ].join('\n');
-  const path = join(dir, 'thread.md');
-  writeFileSync(path, frontmatter + renderThread({ url, channelName, messages, linkedTs: link.ts, names, localFiles }));
-  return { dirName, path, title, messageCount: messages.length, fileCount: localFiles.size, fileErrors };
+  const body = renderThread({ url, channelName, messages, linkedTs: link.ts, names, localFiles, newSince: newReplies ? newSince : undefined });
+  writeFileSync(path, frontmatter + body);
+  return { dirName, path, title, messageCount: messages.length, fileCount: localFiles.size, fileErrors, newReplies };
+}
+
+/** The fields under `slack:` in a thread.md written by exportSlackThread. */
+export function threadFrontmatter(text: string): Record<string, string> {
+  const block = text.replace(/\r/g, '').match(/^---\n([\s\S]*?)\n---\n/)?.[1] ?? '';
+  const fields: Record<string, string> = {};
+  for (const m of block.matchAll(/^\s+(\w+):\s*(.*)$/gm)) {
+    try {
+      fields[m[1]] = String(JSON.parse(m[2]));
+    } catch {
+      fields[m[1]] = m[2];
+    }
+  }
+  // Exports from before lastTs was written: lastReplyAt is cut to the millisecond, so round up.
+  if (!fields.lastTs && fields.lastReplyAt) fields.lastTs = String(Date.parse(fields.lastReplyAt) / 1000 + 0.000999);
+  return fields;
 }
