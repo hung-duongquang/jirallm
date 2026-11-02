@@ -1,3 +1,5 @@
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { getSecret } from './credentials.js';
 
 export const SLACK_TOKEN_ACCOUNT = 'slack:token';
@@ -270,4 +272,84 @@ export function renderThread(input: RenderInput): string {
     if (msg.files?.length) lines.push('');
   }
   return `${lines.join('\n').trimEnd()}\n`;
+}
+
+export type ExportedSlackThread = {
+  /** Folder name below `<outputDir>/slack/`. */
+  dirName: string;
+  path: string;
+  title: string;
+  messageCount: number;
+  fileCount: number;
+  /** Files that could not be downloaded, with the reason. */
+  fileErrors: string[];
+};
+
+/** A short title for the list: the first line of the thread's first message. */
+export function threadTitle(messages: SlackMessage[], names: Map<string, string>): string {
+  const first = mrkdwnToMarkdown(messages[0]?.text ?? '', names).split('\n').find((l) => l.trim()) ?? '';
+  const plain = first.replace(/\*\*|`|~~/g, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').trim();
+  return plain.length > 100 ? `${plain.slice(0, 99)}…` : plain || '(no text)';
+}
+
+export type LoadedThread = { link: SlackLink; channelName?: string; messages: SlackMessage[]; names: Map<string, string> };
+
+/** Fetches the thread around `url`, with the names of its authors and mentioned users. */
+export async function loadSlackThread(url: string, client?: SlackClient): Promise<LoadedThread & { client: SlackClient }> {
+  const link = parseSlackUrl(url);
+  const slack = client ?? new SlackClient(await loadSlackAuth());
+  const [messages, channelName] = await Promise.all([slack.thread(link), slack.channelName(link.channel)]);
+  if (messages.length === 0) throw new Error('Slack returned no messages for this link.');
+  const ids = new Set<string>();
+  for (const m of messages) {
+    if (m.user) ids.add(m.user);
+    for (const id of mentionedUsers(m.text ?? '')) ids.add(id);
+  }
+  const names = new Map<string, string>();
+  for (const id of ids) names.set(id, await slack.userName(id));
+  return { link, channelName, messages, names, client: slack };
+}
+
+/**
+ * Writes `<outputDir>/slack/<channel>-<thread ts>/thread.md` and downloads the thread's files
+ * next to it (unless `files` is false). Exporting the same thread again overwrites it.
+ */
+export async function exportSlackThread(
+  url: string,
+  opts: { outputDir: string; files?: boolean; client?: SlackClient }
+): Promise<ExportedSlackThread> {
+  const { link, channelName, messages, names, client } = await loadSlackThread(url, opts.client);
+  const dirName = `${link.channel.toLowerCase()}-${(messages[0].thread_ts ?? messages[0].ts).replace('.', '')}`;
+  const dir = join(opts.outputDir, 'slack', dirName);
+  mkdirSync(dir, { recursive: true });
+
+  const localFiles = new Map<string, string>();
+  const fileErrors: string[] = [];
+  if (opts.files !== false) {
+    for (const file of messages.flatMap((m) => m.files ?? [])) {
+      const name = `${file.id}-${(file.name ?? file.title ?? 'file').replace(/[^\w.-]+/g, '_').slice(0, 80)}`;
+      try {
+        writeFileSync(join(dir, name), await client.download(file));
+        localFiles.set(file.id, `./${name}`);
+      } catch (err) {
+        fileErrors.push((err as Error).message);
+      }
+    }
+  }
+
+  const title = threadTitle(messages, names);
+  const frontmatter = [
+    '---',
+    'slack:',
+    `  title: ${JSON.stringify(title)}`,
+    `  channel: ${JSON.stringify(channelName ?? link.channel)}`,
+    `  messages: ${messages.length}`,
+    `  lastReplyAt: ${JSON.stringify(new Date(Number(messages.at(-1)!.ts) * 1000).toISOString())}`,
+    `  url: ${JSON.stringify(url)}`,
+    '---',
+    '',
+  ].join('\n');
+  const path = join(dir, 'thread.md');
+  writeFileSync(path, frontmatter + renderThread({ url, channelName, messages, linkedTs: link.ts, names, localFiles }));
+  return { dirName, path, title, messageCount: messages.length, fileCount: localFiles.size, fileErrors };
 }

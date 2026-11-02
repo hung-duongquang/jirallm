@@ -286,7 +286,78 @@ async function listLibrary(outputDir) {
         };
       })
   );
-  return items.filter(Boolean).sort((a, b) => b.modified.localeCompare(a.modified));
+  const tickets = items.filter(Boolean).map((it) => ({ kind: 'ticket', ...it }));
+  const [pages, threads] = await Promise.all([listItems(outputDir, 'page'), listItems(outputDir, 'slack')]);
+  return [...tickets, ...pages, ...threads].sort((a, b) => b.modified.localeCompare(a.modified));
+}
+
+// ---------- Confluence pages and Slack threads (exported next to the tickets) ----------
+
+/** Folder below the output dir and the markdown file of each non-ticket kind. */
+const ITEM_KINDS = {
+  page: { folder: 'confluence', file: 'page.md' },
+  slack: { folder: 'slack', file: 'thread.md' },
+};
+
+function itemDirFor(outputDir, kind, id) {
+  const spec = ITEM_KINDS[kind];
+  if (!spec) throw new HttpError(400, `Unknown kind: ${kind}`);
+  if (!/^[\w.-]+$/.test(id ?? '') || id.startsWith('.')) throw new HttpError(400, `Invalid id: ${id}`);
+  return { dir: join(outputDir, spec.folder, id), file: spec.file };
+}
+
+/** `name: value` lines of the frontmatter's one nested block (confluence: / slack:). */
+function frontmatterFields(text) {
+  const block = text.replace(/\r/g, '').match(/^---\n([\s\S]*?)\n---\n/)?.[1] ?? '';
+  const fields = {};
+  for (const m of block.matchAll(/^\s+(\w+):\s*(.*)$/gm)) {
+    try { fields[m[1]] = JSON.parse(m[2]); } catch { fields[m[1]] = m[2]; }
+  }
+  return fields;
+}
+
+async function listItems(outputDir, kind) {
+  const { folder, file } = ITEM_KINDS[kind];
+  const root = join(outputDir, folder);
+  const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
+  const items = await Promise.all(
+    entries.filter((e) => e.isDirectory()).map(async (e) => {
+      const path = join(root, e.name, file);
+      const [text, info] = await Promise.all([readFile(path, 'utf8').catch(() => null), stat(path).catch(() => null)]);
+      if (text === null) return null;
+      const f = frontmatterFields(text);
+      return {
+        kind,
+        id: e.name,
+        key: kind === 'page' ? 'Confluence' : `Slack${f.channel ? ` #${f.channel}` : ''}`,
+        title: f.title ?? text.match(/^# (.+)$/m)?.[1] ?? e.name,
+        status: kind === 'slack' && f.messages ? `${f.messages} message${f.messages === 1 ? '' : 's'}` : f.version ? `v${f.version}` : '',
+        url: f.url ?? '',
+        modified: info.mtime.toISOString(),
+        size: info.size,
+        changedAt: null,
+        docs: [],
+      };
+    })
+  );
+  return items.filter(Boolean);
+}
+
+const FILE_TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', pdf: 'application/pdf', json: 'application/json', txt: 'text/plain; charset=utf-8' };
+
+/** Exports one pasted Slack or Confluence link into the output dir. */
+async function exportLink(body) {
+  const url = String(body.url ?? '').trim();
+  const outputDir = resolveOutputDir(body.dir);
+  if (/^https:\/\/[\w-]+\.slack\.com\/archives\//i.test(url)) {
+    const t = await lib.exportSlackThread(url, { outputDir });
+    return { kind: 'slack', id: t.dirName, title: t.title, detail: `${t.messageCount} message(s)${t.fileCount ? `, ${t.fileCount} file(s)` : ''}`, warnings: t.fileErrors };
+  }
+  if (/\/wiki\//.test(url)) {
+    const p = await lib.exportConfluencePageByUrl(url, { org: defaultOrg(), outputDir });
+    return { kind: 'page', id: p.dirName, title: p.title, detail: `${p.status}${p.attachmentCount ? `, ${p.attachmentCount} attachment(s)` : ''}`, warnings: [] };
+  }
+  throw new HttpError(400, `Not a Slack message or Confluence page link: ${url}`);
 }
 
 function openInExplorer(target) {
@@ -411,10 +482,30 @@ async function handle(req, res) {
         sendJson(res, 200, { markdown: await readFile(file, 'utf8'), path: file });
         return;
       }
+      case 'GET /api/item': {
+        const { dir, file } = itemDirFor(resolveOutputDir(url.searchParams.get('dir')), url.searchParams.get('kind'), url.searchParams.get('id'));
+        const path = join(dir, file);
+        if (!existsSync(path)) throw new HttpError(404, 'Not exported yet');
+        sendJson(res, 200, { markdown: await readFile(path, 'utf8'), path });
+        return;
+      }
+      case 'GET /api/item/file': {
+        const { dir } = itemDirFor(resolveOutputDir(url.searchParams.get('dir')), url.searchParams.get('kind'), url.searchParams.get('id'));
+        // Only a file inside the item's folder (images and attachments its markdown links to).
+        const target = resolve(dir, url.searchParams.get('name') ?? '');
+        if (!target.startsWith(dir + sep) || !existsSync(target)) throw new HttpError(404, 'No such file');
+        res.writeHead(200, { 'content-type': FILE_TYPES[target.split('.').pop().toLowerCase()] ?? 'application/octet-stream' });
+        res.end(await readFile(target));
+        return;
+      }
+      case 'POST /api/link': {
+        sendJson(res, 200, await exportLink(await readJsonBody(req)));
+        return;
+      }
       case 'POST /api/open': {
         const body = await readJsonBody(req);
         const outputDir = resolveOutputDir(body.dir);
-        const target = body.key ? taskDirFor(outputDir, body.key) : outputDir;
+        const target = body.kind ? itemDirFor(outputDir, body.kind, body.id).dir : body.key ? taskDirFor(outputDir, body.key) : outputDir;
         if (!existsSync(target)) throw new HttpError(404, 'Folder does not exist yet');
         openInExplorer(target);
         sendJson(res, 200, { ok: true });

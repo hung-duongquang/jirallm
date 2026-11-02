@@ -69,3 +69,6 @@ export { countCases, toCell, fromCell, columnField, REPORT_COLUMNS, TEMPLATES } 
 export { playwrightResults } from './lib/qaPlaywright.js';
 export type { PlaywrightReport, PlaywrightResult } from './lib/qaPlaywright.js';
 export type { QaReport, QaCase, Verdict, Template } from './lib/qaReport.js';
+export { exportConfluencePageByUrl } from './lib/pageExport.js';
+export { exportSlackThread, parseSlackUrl } from './lib/slack.js';
+export type { ExportedSlackThread } from './lib/slack.js';

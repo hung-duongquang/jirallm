@@ -142,6 +142,7 @@
   .md pre code { background: none; padding: 0; }
   .md a { color: var(--accent); }
   .md img { max-width: 100%; }
+  .md a { overflow-wrap: anywhere; }
   .source { white-space: pre-wrap; font: 12.5px/1.5 ui-monospace, Consolas, monospace; margin: 12px 0; }
   .toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--text);
     color: var(--bg); padding: 8px 14px; border-radius: 6px; font-size: 13px; opacity: 0; transition: opacity .2s;
@@ -224,8 +225,8 @@
       </div>
 
       <div id="paneKeys">
-        <textarea id="keys" placeholder="ZOD-3619 ZOD-3602&#10;or paste Jira links" spellcheck="false"></textarea>
-        <p class="hint" id="keyCount">Separate keys with spaces, commas or new lines.</p>
+        <textarea id="keys" placeholder="ZOD-3619 ZOD-3602&#10;or paste Jira, Confluence or Slack links" spellcheck="false"></textarea>
+        <p class="hint" id="keyCount">Separate keys and links with spaces, commas or new lines.</p>
       </div>
 
       <div class="opts" id="opts">
@@ -250,7 +251,7 @@
         <button id="refresh" title="Reload the list from the folder">Reload</button>
         <button id="updateAll" title="Re-export these tickets from Jira with the options above (with Linked issues on, also the tickets they mention)">Update all</button>
       </div>
-      <input type="text" id="filter" placeholder="Filter by key or title" style="margin-top:8px">
+      <input type="text" id="filter" placeholder="Filter by key, title, Confluence or Slack" style="margin-top:8px">
       <ul id="library"></ul>
     </section>
   </div>
@@ -264,7 +265,7 @@
         <button data-view="source" aria-pressed="false">Markdown</button>
         <button data-view="diff" aria-pressed="false" id="viewDiff" hidden>Diff</button>
         <span id="docViews" style="display:contents"></span>
-        <button data-view="qa" aria-pressed="false" title="Test cases, pass/fail with evidence, publish to Confluence">Test report</button>
+        <button data-view="qa" aria-pressed="false" id="viewQa" title="Test cases, pass/fail with evidence, publish to Confluence">Test report</button>
       </div>
       <button id="copy">Copy</button>
       <button id="openTask">Open folder</button>
@@ -333,7 +334,10 @@ async function api(path, body) {
   if (!res.ok) throw new Error(data.error || res.statusText);
   return data;
 }
-function parseKeys(text) { return [...new Set((text.toUpperCase().match(KEY_RE) || []))]; }
+const LINK_RE = /https:\/\/[\w-]+\.slack\.com\/archives\/[^\s,]+|https:\/\/[\w.-]+\/wiki\/[^\s,]+/gi;
+function parseLinks(text) { return [...new Set(text.match(LINK_RE) || [])]; }
+// Keys outside Slack/Confluence links (a page slug like …/zod-1850-… is not a ticket).
+function parseKeys(text) { return [...new Set((text.replace(LINK_RE, ' ').toUpperCase().match(KEY_RE) || []))]; }
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 function ago(iso) {
   const s = (Date.now() - new Date(iso)) / 1000;
@@ -369,8 +373,11 @@ function syncOpts() {
 // ---- keys ----
 $('keys').value = store.get('keys', '');
 function updateKeyCount() {
-  const n = parseKeys($('keys').value).length;
-  $('keyCount').textContent = n ? `${n} ticket${n > 1 ? 's' : ''}: ${parseKeys($('keys').value).join(', ')}` : 'Separate keys with spaces, commas or new lines.';
+  const keys = parseKeys($('keys').value), links = parseLinks($('keys').value);
+  const parts = [];
+  if (keys.length) parts.push(`${keys.length} ticket${keys.length > 1 ? 's' : ''}: ${keys.join(', ')}`);
+  if (links.length) parts.push(`${links.length} link${links.length > 1 ? 's' : ''} (${links.map(linkKind).join(', ')})`);
+  $('keyCount').textContent = parts.join(' · ') || 'Separate keys and links with spaces, commas or new lines.';
   store.set('keys', $('keys').value);
 }
 $('keys').oninput = updateKeyCount;
@@ -512,10 +519,38 @@ $('progress').onclick = (e) => {
   if (li) openTask(li.dataset.k, { as: 'diff' });
 };
 
-$('export').onclick = () => {
+const linkKind = (url) => (/slack\.com/i.test(url) ? 'Slack' : 'Confluence');
+/** Exports pasted Slack/Confluence links one by one; returns the first exported item. */
+async function exportLinks(links) {
+  const list = $('progress');
+  list.innerHTML = links.map((l, i) => `<li data-l="${i}"><span class="key">${linkKind(l)}</span><span class="s">waiting</span></li>`).join('');
+  let first = null, failed = 0;
+  for (const [i, url] of links.entries()) {
+    const s = list.querySelector(`[data-l="${i}"] .s`);
+    s.className = 's run'; s.textContent = 'exporting…';
+    try {
+      const r = await api('/api/link', { url, dir: outDir() });
+      s.className = 's ok'; s.textContent = `${r.title} · ${r.detail}${r.warnings.length ? ` · ${r.warnings.length} file(s) not downloaded` : ''}`;
+      s.title = r.warnings.join('\n');
+      first ??= r;
+    } catch (err) { failed++; s.className = 's err'; s.textContent = err.message; }
+  }
+  if (failed) toast(`${failed} link(s) failed`);
+  return first;
+}
+
+$('export').onclick = async () => {
   if (exporting) { cancelExport(); return; }
-  const keys = parseKeys($('keys').value);
-  if (!keys.length) { selectTab(false); $('keys').focus(); toast('Enter at least one ticket key'); return; }
+  const keys = parseKeys($('keys').value), links = parseLinks($('keys').value);
+  if (!keys.length && !links.length) { selectTab(false); $('keys').focus(); toast('Enter a ticket key or a Slack/Confluence link'); return; }
+  if (links.length) {
+    $('export').disabled = true; $('export').textContent = `Exporting ${links.length} link(s)…`;
+    let first;
+    try { first = await exportLinks(links); }
+    finally { $('export').disabled = false; $('export').textContent = 'Export'; }
+    await loadLibrary();
+    if (!keys.length) { if (first) openItem(first.kind, first.id); return; }
+  }
   runExport(keys, { button: $('export'), busyLabel: `Exporting ${keys.length}…`, idleLabel: 'Export', openFirst: true });
 };
 
@@ -523,7 +558,7 @@ $('export').onclick = () => {
 const visibleLibraryKeys = () => {
   const q = $('filter').value.trim().toLowerCase();
   return libraryItems
-    .filter((it) => !q || it.key.toLowerCase().includes(q) || it.title.toLowerCase().includes(q))
+    .filter((it) => it.kind === 'ticket' && (!q || it.key.toLowerCase().includes(q) || it.title.toLowerCase().includes(q)))
     .map((it) => it.key);
 };
 $('updateAll').onclick = () => {
@@ -550,7 +585,7 @@ function renderLibrary() {
   const q = $('filter').value.trim().toLowerCase();
   const items = libraryItems.filter((it) => !q || it.key.toLowerCase().includes(q) || it.title.toLowerCase().includes(q));
   $('library').innerHTML = items.length ? items.map((it) => `
-    <li><button data-key="${esc(it.key)}" aria-current="${it.key === current}">
+    <li><button ${it.kind === 'ticket' ? `data-key="${esc(it.key)}"` : `data-kind="${esc(it.kind)}" data-id="${esc(it.id)}"`} aria-current="${isOpen(it)}">
       <span class="key">${esc(it.key)}</span><span class="meta">${it.changedAt ? `<span class="changed" title="Changed in an update; open it and choose Diff">changed ${ago(it.changedAt)}</span> · ` : ''}${esc(it.status)} · ${ago(it.modified)}${it.docs?.length ? ` · <span title="Local notes: ${esc(it.docs.join(', '))}">${esc(it.docs.map(docLabel).join(', ').toLowerCase())}</span>` : ''}</span>
       <span class="title">${esc(it.title)}</span>
     </button></li>`).join('') : `<li class="hint" style="padding:8px">${libraryItems.length ? 'No match.' : 'Nothing exported in this folder yet.'}</li>`;
@@ -559,7 +594,11 @@ function renderLibrary() {
     $('updateAll').disabled = items.length === 0;
   }
 }
-$('library').onclick = (e) => { const b = e.target.closest('button[data-key]'); if (b) openTask(b.dataset.key); };
+$('library').onclick = (e) => {
+  const b = e.target.closest('button[data-key], button[data-kind]');
+  if (b?.dataset.key) openTask(b.dataset.key);
+  else if (b) openItem(b.dataset.kind, b.dataset.id);
+};
 $('filter').oninput = renderLibrary;
 $('refresh').onclick = loadLibrary;
 $('outdir').onchange = () => { store.set('outdir', outDir()); loadLibrary(); };
@@ -607,6 +646,27 @@ const docLabel = (name) => name.replace(/\.md$/, '').replace(/[-_]+/g, ' ').repl
 const changedThisSession = new Set();
 const hasDiff = (key) =>
   changedThisSession.has(key) || Boolean(libraryItems.find((it) => it.key === key)?.changedAt);
+// An open Confluence page or Slack thread: { kind, id, key, q }; null while a ticket is open.
+let currentItem = null;
+const isOpen = (it) => (it.kind === 'ticket' ? !currentItem && it.key === current : currentItem?.kind === it.kind && currentItem?.id === it.id);
+async function openItem(kind, id) {
+  try {
+    const q = `kind=${encodeURIComponent(kind)}&id=${encodeURIComponent(id)}&dir=${encodeURIComponent(outDir())}`;
+    const { markdown } = await api(`/api/item?${q}`);
+    const it = libraryItems.find((x) => x.kind === kind && x.id === id);
+    currentItem = { kind, id, key: it?.key ?? (kind === 'page' ? 'Confluence' : 'Slack'), q };
+    current = null; currentMarkdown = markdown; currentDiff = null; currentDocs = []; docText = {};
+    if (view !== 'source') view = 'rendered';
+    renderPreview(); renderLibrary();
+  } catch (err) { toast(err.message); }
+}
+/** Relative images and links of a page or thread point into its folder, served by the helper. */
+function resolveItemFiles(root) {
+  const fileUrl = (rel) => `${apiBase()}/api/item/file?${currentItem.q}&name=${encodeURIComponent(decodeURIComponent(rel.replace(/^\.\//, '')))}`;
+  const local = (v) => v && !/^([a-z]+:|#|\/)/i.test(v);
+  root.querySelectorAll('img[src]').forEach((img) => { if (local(img.getAttribute('src'))) img.src = fileUrl(img.getAttribute('src')); });
+  root.querySelectorAll('a[href]').forEach((a) => { if (local(a.getAttribute('href'))) a.href = fileUrl(a.getAttribute('href')); });
+}
 async function openTask(key, { fromLink = false, as } = {}) {
   try {
     const q = `key=${encodeURIComponent(key)}&dir=${encodeURIComponent(outDir())}`;
@@ -614,7 +674,7 @@ async function openTask(key, { fromLink = false, as } = {}) {
       api(`/api/task?${q}`),
       as === 'diff' || hasDiff(key) ? api(`/api/diff?${q}`).catch(() => null) : null,
     ]);
-    current = key; currentMarkdown = markdown; currentDiff = diff;
+    current = key; currentItem = null; currentMarkdown = markdown; currentDiff = diff;
     currentDocs = docs; docText = {};
     if (as) view = as;
     if (view.startsWith('doc:') && !docs.includes(view.slice(4))) view = 'rendered';
@@ -626,7 +686,7 @@ async function openTask(key, { fromLink = false, as } = {}) {
   } catch (err) {
     // A linked issue that is not exported yet: offer to add it instead of clearing the preview.
     if (fromLink) { addKey(key); toast(`${key} is not exported yet — added to the ticket list`); return; }
-    current = key; renderLibrary();
+    current = key; currentItem = null; renderLibrary();
     $('previewBody').innerHTML = `<div class="empty">${esc(err.message)}</div>`;
   }
 }
@@ -654,7 +714,8 @@ $('previewBody').addEventListener('click', (e) => {
 function renderPreview() {
   const { fm, body } = splitFrontmatter(currentMarkdown);
   $('previewHead').hidden = false;
-  $('pKey').textContent = current;
+  $('pKey').textContent = currentItem ? currentItem.key : current;
+  $('viewQa').hidden = Boolean(currentItem);
   $('pTitle').textContent = (body.match(/^# (.+)$/m) || [])[1] || '';
   $('viewDiff').hidden = !currentDiff;
   if (currentDiff) $('viewDiff').innerHTML = `Diff <span class="plus">+${currentDiff.added}</span> <span class="minus">−${currentDiff.removed}</span>`;
@@ -666,7 +727,9 @@ function renderPreview() {
   if (view === 'diff') { $('previewBody').innerHTML = renderDiff(currentDiff); return; }
   if (view === 'source') { $('previewBody').innerHTML = `<pre class="source">${esc(currentMarkdown)}</pre>`; return; }
   if (view.startsWith('doc:')) { renderDoc(view.slice(4)); return; }
-  $('previewBody').innerHTML = renderMarkdown(fm, body.replace(/^\s*# .+\n+/, ''));
+  // A page or thread keeps its frontmatter out of the way: the header already names it.
+  $('previewBody').innerHTML = renderMarkdown(currentItem ? [] : fm, body.replace(/^\s*# .+\n+/, ''));
+  if (currentItem) resolveItemFiles($('previewBody'));
   renderMermaid($('previewBody'));
 }
 // ```mermaid blocks become diagrams; the library is only fetched when a page has one.
@@ -744,7 +807,7 @@ $('copy').onclick = async () => {
   const text = view.startsWith('doc:') ? docText[view.slice(4)] ?? '' : currentMarkdown;
   try { await navigator.clipboard.writeText(text); toast('Markdown copied'); } catch { toast('Copy failed'); }
 };
-$('openTask').onclick = () => api('/api/open', { dir: outDir(), key: current }).catch((e) => toast(e.message));
+$('openTask').onclick = () => api('/api/open', currentItem ? { dir: outDir(), kind: currentItem.kind, id: currentItem.id } : { dir: outDir(), key: current }).catch((e) => toast(e.message));
 $('openRoot').onclick = () => api('/api/open', { dir: outDir() }).catch((e) => toast(e.message));
 
 // ---- test report (tester workflow: same files and rules as `jirallm qa …`) ----
