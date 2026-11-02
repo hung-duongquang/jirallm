@@ -69,6 +69,81 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Whitespace at the edges of marked text is moved outside the Markdown markers, so `** x **` (which
   does not render as bold) becomes ` **x** `.
 
+## [0.15.0] - 2026-10-20
+
+### Added
+
+- New client methods for editing and removing existing worklogs, plus reading one back by id:
+  `JiraClient.updateWorklog(issueKey, worklogId, payload)` (`PUT /rest/api/2/issue/{key}/worklog/{id}`,
+  any subset of `started` / `timeSpentSeconds` / plain-string `comment` / `visibility`, returns
+  `{ id, issueId }` like `addWorklog`), `JiraClient.deleteWorklog(issueKey, worklogId)`
+  (`DELETE …/worklog/{id}?adjustEstimate=leave`, so the remaining estimate is untouched) and
+  `JiraClient.getWorklog(issueKey, worklogId)` (returns `{ id, started, timeSpentSeconds,
+  authorAccountId?, comment? }`, an ADF comment converted to markdown). Failures throw
+  `JiraApiError` with the HTTP `status` — a worklog that no longer exists surfaces as `status: 404`
+  and is left to the caller to treat as already gone.
+- `fetchIssueWorklogs` (and `fetchIssueDetails(..., { includeWorklog: true })`) now also keeps each
+  worklog's `id`, `timeSpentSeconds` and `authorAccountId` on `WorklogSummary`, so callers can match
+  remote worklogs to local records. The fields are optional and set only when Jira returns them
+  (`authorAccountId` is Cloud-only). Existing fields and the markdown output are unchanged;
+  `fetch --with-worklog --json` gains the three keys per worklog.
+- The package root now exports the `WorklogSummary`, `WorklogWritePayload`, `WorklogWriteVisibility`,
+  `WorklogRef` and `JiraWorklog` types.
+
+## [0.14.0] - 2026-10-19
+
+### Added
+
+- `create`/`edit --fix-versions <name>` and `--affects-versions <name>` write the built-in Fix
+  versions (`fixVersions`) and Affects versions (`versions`) fields (#27). Both work like
+  `--components`: one literal name per occurrence (repeat the flag for several, never comma-split),
+  sent as `[{ name }]`, and on `edit` the list replaces the existing set — `--fix-versions ''`
+  clears it. Dry-run output shows them under their Jira ids `fixVersions` / `versions`.
+- Before writing, `edit` / `create` check `--fix-versions` / `--affects-versions` against the
+  issue's edit screen (`editmeta`) or the issue type's create screen (`createmeta`), and abort
+  before any upload or write when Jira would reject them (#27). A field missing from the screen is
+  reported as such — e.g. `Fix versions isn't on the edit screen of CN-4467, so Jira would reject
+  --fix-versions.`, which is common for Story/Task screens — and a name that is not one of the
+  screen's allowed values is listed with the valid ones and a `did you mean` hint for a case-only
+  mismatch. Clearing with `''` only needs the field on the screen. On `edit` the check is one
+  `editmeta` read; on `create` it reuses the create-screen read the `--field` guard already makes.
+  It is skipped on `--dry-run`, which stays offline, and warns and proceeds if the screen metadata
+  can't be read. New client method: `JiraClient.getEditFields(issueKey)`.
+- `jirallm versions -o <org> -P <project>` lists a project's versions with their
+  released / unreleased / archived status, the names `--fix-versions` / `--affects-versions`
+  expect (#27). Library: `JiraClient.listVersions(projectKey)` and the `JiraVersion` type;
+  `createIssue` / `editIssue` accept `fixVersions` and `versions` name lists.
+- `--field` now recognises system-field keys (case-insensitively, with or without a `:type`
+  suffix) and points to the dedicated flag instead of reporting an unknown custom field — e.g.
+  `--field fixVersions:array=2.0.0` says to use `--fix-versions`, `--field status=Done` says to use
+  `jirallm transition` (#27). The JQL spellings `fixVersion` / `affectedVersion` are recognised too.
+  A configured custom field with the same friendly name still wins.
+
+### Fixed
+
+- `edit` uploaded `--attach` / `--attach-images` files before validating the rest of the input, so
+  a malformed `--field` or an unresolvable assignee or sprint failed after the files were already
+  on the issue (#27). Every check jirallm makes itself — including the version screen check above —
+  now runs before the first upload. Values only Jira validates (component, priority or parent
+  names) are still checked by Jira after the upload, so a rejected one leaves the uploaded files in
+  place.
+- `edit` with only attachment flags uploaded the files and then failed with
+  `editIssue called with no fields to update.` (#27). It now uploads, leaves the fields alone and
+  reports `{ issueKey, updated: false, attachments }`. `edit` with no field or attachment flag at
+  all fails up front with `Nothing to edit: …`, before any network call — `--dry-run` included, so
+  `edit KEY --dry-run` alone (which used to print an empty preview) now exits 1. A dry run with
+  attachments no longer claims the files were uploaded, and lists them as `attach:` lines like
+  `create` does.
+- `--components` followed directly by another flag (`edit KEY --components --dry-run`) swallowed
+  that flag as the component name, so `--dry-run` was lost and Jira was written to with a
+  component called `--dry-run` (#27). `--components`, `--fix-versions` and `--affects-versions` now
+  reject a value starting with `--`; single-dash names such as `-1.0` still work.
+- `--field constructor=1` (or `__proto__`, `toString`, …) resolved against `Object.prototype` and
+  sent a custom field keyed `undefined`, and `fetch --fields constructor` failed with
+  `name.startsWith is not a function` instead of the unknown-field error (#27). Field-name lookups now only see own keys.
+- Repeated `--components` / `--labels` names are de-duplicated before they reach Jira, and
+  `create --components ''` no longer sends an empty `components` list (#27).
+
 ## [0.13.1] - 2026-08-01
 
 ### Added
@@ -456,6 +531,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   except macOS without Homebrew, where it defaults to no (since setup may
   cascade into a long Homebrew + Xcode CLT install).
 
+[0.15.0]: https://github.com/doryski/jirallm/releases/tag/v0.15.0
+[0.14.0]: https://github.com/doryski/jirallm/releases/tag/v0.14.0
 [0.13.1]: https://github.com/doryski/jirallm/releases/tag/v0.13.1
 [0.13.0]: https://github.com/doryski/jirallm/releases/tag/v0.13.0
 [0.12.0]: https://github.com/doryski/jirallm/releases/tag/v0.12.0

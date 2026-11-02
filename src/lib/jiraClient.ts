@@ -92,6 +92,38 @@ export type WorklogSummary = {
   started: string;
   timeSpent: string;
   comment?: string;
+  id?: string;
+  timeSpentSeconds?: number;
+  authorAccountId?: string;
+};
+
+export type WorklogWriteVisibility = { type: 'group' | 'role'; value: string };
+
+export type WorklogWritePayload = {
+  started: string;
+  timeSpentSeconds: number;
+  comment?: string;
+  visibility?: WorklogWriteVisibility;
+};
+
+export type WorklogRef = { id: string; issueId: string };
+
+export type JiraWorklog = {
+  id: string;
+  started: string;
+  timeSpentSeconds: number;
+  authorAccountId?: string;
+  comment?: string;
+};
+
+type RawJiraWorklog = {
+  id: string;
+  issueId?: string;
+  author: { displayName: string; accountId?: string };
+  started: string;
+  timeSpent: string;
+  timeSpentSeconds: number;
+  comment?: string | JiraADFDocument;
 };
 
 export type JiraBoard = { id: number; name: string; type: string };
@@ -186,6 +218,16 @@ export type JiraComponent = {
   id: string;
   name: string;
   description?: string;
+};
+
+export type JiraVersion = {
+  id: string;
+  name: string;
+  description?: string;
+  released?: boolean;
+  archived?: boolean;
+  releaseDate?: string;
+  startDate?: string;
 };
 
 export type JiraCreateField = {
@@ -496,6 +538,25 @@ export const ATLASSIAN_REDIRECT_HOSTS = [
   '.atl-paas.net',
   '.atlassianusercontent.com',
 ] as const;
+
+const toNamedRefs = (names: string[]): Array<{ name: string }> => names.map((name) => ({ name }));
+
+type RawMetaField = {
+  name: string;
+  required: boolean;
+  schema?: { type?: string };
+  allowedValues?: Array<{ value?: string; name?: string }>;
+};
+
+const toScreenField = (fieldId: string, f: RawMetaField): JiraCreateField => ({
+  fieldId,
+  name: f.name,
+  required: f.required,
+  schemaType: f.schema?.type,
+  allowedValues: f.allowedValues
+    ?.map((v) => v.value ?? v.name)
+    .filter((v): v is string => Boolean(v)),
+});
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
@@ -991,12 +1052,7 @@ export class JiraClient {
 
     do {
       const response = await this.makeRequest<{
-        worklogs: Array<{
-          author: { displayName: string };
-          started: string;
-          timeSpent: string;
-          comment?: string | JiraADFDocument;
-        }>;
+        worklogs: Array<Partial<RawJiraWorklog> & Pick<RawJiraWorklog, 'author' | 'started' | 'timeSpent'>>;
         total: number;
         startAt: number;
         maxResults: number;
@@ -1009,6 +1065,9 @@ export class JiraClient {
           timeSpent: worklog.timeSpent,
         };
         if (worklog.comment) entry.comment = this.convertADFToMarkdown(worklog.comment);
+        if (worklog.id !== undefined) entry.id = worklog.id;
+        if (worklog.timeSpentSeconds !== undefined) entry.timeSpentSeconds = worklog.timeSpentSeconds;
+        if (worklog.author.accountId !== undefined) entry.authorAccountId = worklog.author.accountId;
         worklogs.push(entry);
       }
 
@@ -1069,18 +1128,19 @@ export class JiraClient {
     return { id: json.id };
   }
 
-  async addWorklog(
-    issueKey: string,
-    payload: {
-      started: string;
-      timeSpentSeconds: number;
-      comment?: string;
-      visibility?: { type: 'group' | 'role'; value: string };
-    }
-  ): Promise<{ id: string; issueId: string }> {
-    const url = `${this.config.baseUrl}/rest/api/2/issue/${issueKey}/worklog`;
+  private worklogUrl(issueKey: string, worklogId?: string): string {
+    const base = `${this.config.baseUrl}/rest/api/2/issue/${issueKey}/worklog`;
+    return worklogId === undefined ? base : `${base}/${worklogId}`;
+  }
+
+  private async sendWorklogWrite(
+    url: string,
+    method: 'POST' | 'PUT',
+    payload: Partial<WorklogWritePayload>,
+    label: string
+  ): Promise<WorklogRef> {
     const response = await this.httpRequest(url, {
-      method: 'POST',
+      method,
       headers: {
         Authorization: this.authHeader,
         Accept: 'application/json',
@@ -1089,10 +1149,60 @@ export class JiraClient {
       body: JSON.stringify(payload),
     });
     if (!response.ok) {
-      throw await JiraApiError.fromResponse(response, 'Jira addWorklog failed');
+      throw await JiraApiError.fromResponse(response, `Jira ${label} failed`);
     }
-    const json = (await response.json()) as { id: string; issueId: string };
+    const json = (await response.json()) as WorklogRef;
     return { id: json.id, issueId: json.issueId };
+  }
+
+  async addWorklog(issueKey: string, payload: WorklogWritePayload): Promise<WorklogRef> {
+    return this.sendWorklogWrite(this.worklogUrl(issueKey), 'POST', payload, 'addWorklog');
+  }
+
+  async updateWorklog(
+    issueKey: string,
+    worklogId: string,
+    payload: Partial<WorklogWritePayload>
+  ): Promise<WorklogRef> {
+    return this.sendWorklogWrite(
+      this.worklogUrl(issueKey, worklogId),
+      'PUT',
+      payload,
+      'updateWorklog'
+    );
+  }
+
+  async deleteWorklog(issueKey: string, worklogId: string): Promise<void> {
+    const url = `${this.worklogUrl(issueKey, worklogId)}?adjustEstimate=leave`;
+    const response = await this.httpRequest(url, {
+      method: 'DELETE',
+      headers: { Authorization: this.authHeader, Accept: 'application/json' },
+    });
+    if (!response.ok && response.status !== 204) {
+      throw await JiraApiError.fromResponse(response, 'Jira deleteWorklog failed');
+    }
+  }
+
+  async getWorklog(issueKey: string, worklogId: string): Promise<JiraWorklog> {
+    const response = await this.httpRequest(this.worklogUrl(issueKey, worklogId), {
+      method: 'GET',
+      headers: { Authorization: this.authHeader, Accept: 'application/json' },
+    });
+    if (!response.ok) {
+      throw await JiraApiError.fromResponse(response, 'Jira getWorklog failed');
+    }
+    const raw = (await response.json()) as RawJiraWorklog;
+    const worklog: JiraWorklog = {
+      id: raw.id,
+      started: raw.started,
+      timeSpentSeconds: raw.timeSpentSeconds,
+    };
+    if (raw.author?.accountId !== undefined) worklog.authorAccountId = raw.author.accountId;
+    if (raw.comment) {
+      worklog.comment =
+        typeof raw.comment === 'string' ? raw.comment : this.convertADFToMarkdown(raw.comment);
+    }
+    return worklog;
   }
 
   async updateComment(issueKey: string, commentId: string, wikiBody: string): Promise<void> {
@@ -1316,6 +1426,10 @@ export class JiraClient {
     return this.makeRequest<JiraComponent[]>(`/project/${projectKey}/components`);
   }
 
+  async listVersions(projectKey: string): Promise<JiraVersion[]> {
+    return this.makeRequest<JiraVersion[]>(`/project/${projectKey}/versions`);
+  }
+
   /**
    * Fetch the fields available on the create screen for a given issue type, including
    * allowedValues for select fields — helps users discover valid custom-field option strings.
@@ -1329,26 +1443,21 @@ export class JiraClient {
           `Available: ${types.map((t) => t.name).join(', ')}.`
       );
     }
-    type RawAllowed = { value?: string; name?: string };
-    type RawCreateField = {
-      fieldId: string;
-      name: string;
-      required: boolean;
-      schema?: { type?: string };
-      allowedValues?: RawAllowed[];
-    };
-    const response = await this.makeRequest<{ fields: RawCreateField[] }>(
+    const response = await this.makeRequest<{ fields: Array<RawMetaField & { fieldId: string }> }>(
       `/issue/createmeta/${projectKey}/issuetypes/${match.id}`
     );
-    return response.fields.map((f) => ({
-      fieldId: f.fieldId,
-      name: f.name,
-      required: f.required,
-      schemaType: f.schema?.type,
-      allowedValues: f.allowedValues
-        ?.map((v) => v.value ?? v.name)
-        .filter((v): v is string => Boolean(v)),
-    }));
+    return response.fields.map((f) => toScreenField(f.fieldId, f));
+  }
+
+  /**
+   * Fetch the fields on an existing issue's edit screen (`editmeta`), in the same shape as
+   * `getCreateFields`. A field missing here is one Jira rejects on edit for this issue.
+   */
+  async getEditFields(issueKey: string): Promise<JiraCreateField[]> {
+    const response = await this.makeRequest<{ fields: Record<string, RawMetaField> }>(
+      `/issue/${issueKey}/editmeta`
+    );
+    return Object.entries(response.fields).map(([fieldId, f]) => toScreenField(fieldId, f));
   }
 
   async listLinkTypes(): Promise<JiraIssueLinkType[]> {
@@ -1449,6 +1558,8 @@ export class JiraClient {
     priority?: string;
     parentKey?: string;
     components?: string[];
+    fixVersions?: string[];
+    versions?: string[];
     customFields?: Record<string, unknown>;
   }): Promise<{ id: string; key: string; self: string }> {
     const fields: Record<string, unknown> = {
@@ -1465,7 +1576,9 @@ export class JiraClient {
     if (input.labels) fields.labels = input.labels;
     if (input.priority) fields.priority = { name: input.priority };
     if (input.parentKey) fields.parent = { key: input.parentKey };
-    if (input.components) fields.components = input.components.map((name) => ({ name }));
+    if (input.components?.length) fields.components = toNamedRefs(input.components);
+    if (input.fixVersions?.length) fields.fixVersions = toNamedRefs(input.fixVersions);
+    if (input.versions?.length) fields.versions = toNamedRefs(input.versions);
     if (input.customFields) Object.assign(fields, input.customFields);
 
     const url = `${this.config.baseUrl}/rest/api/2/issue`;
@@ -1496,6 +1609,8 @@ export class JiraClient {
       parentKey?: string;
       dueDate?: string;
       components?: string[];
+      fixVersions?: string[];
+      versions?: string[];
       customFields?: Record<string, unknown>;
     }
   ): Promise<void> {
@@ -1515,7 +1630,9 @@ export class JiraClient {
     if (input.priority !== undefined) fields.priority = { name: input.priority };
     if (input.parentKey !== undefined) fields.parent = { key: input.parentKey };
     if (input.dueDate !== undefined) fields.duedate = input.dueDate;
-    if (input.components !== undefined) fields.components = input.components.map((name) => ({ name }));
+    if (input.components !== undefined) fields.components = toNamedRefs(input.components);
+    if (input.fixVersions !== undefined) fields.fixVersions = toNamedRefs(input.fixVersions);
+    if (input.versions !== undefined) fields.versions = toNamedRefs(input.versions);
     if (input.customFields !== undefined) Object.assign(fields, input.customFields);
 
     if (Object.keys(fields).length === 0) {

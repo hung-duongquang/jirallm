@@ -2,7 +2,7 @@ import { mkdtemp, writeFile, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { JiraClient } from './jiraClient.js';
+import { JiraClient, isJiraApiError } from './jiraClient.js';
 
 const FAKE_CONFIG = {
   baseUrl: 'https://example.atlassian.net',
@@ -146,6 +146,42 @@ describe('JiraClient.createIssue', () => {
     expect(body.fields.customfield_10050).toEqual({ value: 'High' });
   });
 
+  it('maps fixVersions and versions to [{ name }]', async () => {
+    const { client, calls } = captureFetch(() => ({
+      json: { id: '1', key: 'PROJ-1', self: 'x' },
+    }));
+    await client.createIssue({
+      projectKey: 'PROJ',
+      issueType: 'Bug',
+      summary: 's',
+      fixVersions: ['2.0.0', '2.1.0'],
+      versions: ['1.9.0'],
+    });
+    const body = calls[0].body as { fields: Record<string, unknown> };
+    expect(body.fields.fixVersions).toEqual([{ name: '2.0.0' }, { name: '2.1.0' }]);
+    expect(body.fields.versions).toEqual([{ name: '1.9.0' }]);
+  });
+
+  it('omits empty name lists on create (nothing to clear on a new issue)', async () => {
+    const { client, calls } = captureFetch(() => ({
+      json: { id: '1', key: 'PROJ-1', self: 'x' },
+    }));
+    await client.createIssue({
+      projectKey: 'PROJ',
+      issueType: 'Bug',
+      summary: 's',
+      components: [],
+      fixVersions: [],
+      versions: [],
+    });
+    const body = calls[0].body as { fields: Record<string, unknown> };
+    expect(body.fields).toEqual({
+      project: { key: 'PROJ' },
+      issuetype: { name: 'Bug' },
+      summary: 's',
+    });
+  });
+
   it('throws a descriptive error when Jira returns non-OK', async () => {
     const { client } = captureFetch(() => ({
       ok: false,
@@ -222,9 +258,32 @@ describe('JiraClient.editIssue', () => {
     expect(body.fields.duedate).toBe('2026-08-01');
   });
 
+  it('maps fixVersions and versions on edit', async () => {
+    const { client, calls } = captureFetch(() => ({ status: 204 }));
+    await client.editIssue('PROJ-1', { fixVersions: ['2.0.0'], versions: ['1.9.0'] });
+    const body = calls[0].body as { fields: Record<string, unknown> };
+    expect(body.fields).toEqual({
+      fixVersions: [{ name: '2.0.0' }],
+      versions: [{ name: '1.9.0' }],
+    });
+  });
+
+  it('sends an empty fixVersions array to clear the set', async () => {
+    const { client, calls } = captureFetch(() => ({ status: 204 }));
+    await client.editIssue('PROJ-1', { fixVersions: [] });
+    const body = calls[0].body as { fields: Record<string, unknown> };
+    expect(body.fields).toEqual({ fixVersions: [] });
+  });
+
   it('treats customFields/components as updatable fields (not "no fields")', async () => {
     const { client, calls } = captureFetch(() => ({ status: 204 }));
     await client.editIssue('PROJ-1', { customFields: { customfield_10051: 1 } });
+    expect(calls[0].method).toBe('PUT');
+  });
+
+  it('treats fixVersions/versions alone as updatable fields', async () => {
+    const { client, calls } = captureFetch(() => ({ status: 204 }));
+    await client.editIssue('PROJ-1', { versions: ['1.0'] });
     expect(calls[0].method).toBe('PUT');
   });
 
@@ -242,6 +301,41 @@ describe('JiraClient.listComponents', () => {
     const result = await client.listComponents('PROJ');
     expect(calls[0].url).toContain('/rest/api/3/project/PROJ/components');
     expect(result).toEqual([{ id: '1', name: 'Web' }]);
+  });
+});
+
+describe('JiraClient.getEditFields', () => {
+  it('GETs editmeta and flattens it into the create-field shape', async () => {
+    const { client, calls } = captureFetch(() => ({
+      json: {
+        fields: {
+          summary: { name: 'Summary', required: true, schema: { type: 'string' } },
+          fixVersions: {
+            name: 'Fix versions',
+            required: false,
+            schema: { type: 'array' },
+            allowedValues: [{ id: '1', name: 'W43/26' }, { id: '2', name: 'W44/26' }],
+          },
+        },
+      },
+    }));
+    const result = await client.getEditFields('CN-1');
+    expect(calls[0].url).toContain('/rest/api/3/issue/CN-1/editmeta');
+    expect(result).toEqual([
+      { fieldId: 'summary', name: 'Summary', required: true, schemaType: 'string', allowedValues: undefined },
+      { fieldId: 'fixVersions', name: 'Fix versions', required: false, schemaType: 'array', allowedValues: ['W43/26', 'W44/26'] },
+    ]);
+  });
+});
+
+describe('JiraClient.listVersions', () => {
+  it('GETs /project/{key}/versions', async () => {
+    const { client, calls } = captureFetch(() => ({
+      json: [{ id: '10', name: '2.0.0', released: false, archived: false }],
+    }));
+    const result = await client.listVersions('PROJ');
+    expect(calls[0].url).toContain('/rest/api/3/project/PROJ/versions');
+    expect(result).toEqual([{ id: '10', name: '2.0.0', released: false, archived: false }]);
   });
 });
 
@@ -629,6 +723,124 @@ describe('JiraClient.addWorklog', () => {
     await expect(
       client.addWorklog('PROJ-1', { started: 's', timeSpentSeconds: 60 })
     ).rejects.toThrow(/addWorklog failed: 403 Forbidden\nno worklog/);
+  });
+});
+
+describe('JiraClient.updateWorklog', () => {
+  it('PUTs /rest/api/2/issue/{key}/worklog/{id} with a plain-string comment', async () => {
+    const { client, calls } = captureFetch(() => ({ json: { id: 'w-1', issueId: '10000' } }));
+    const result = await client.updateWorklog('PROJ-1', 'w-1', {
+      timeSpentSeconds: 1800,
+      comment: 'edited',
+    });
+    expect(result).toEqual({ id: 'w-1', issueId: '10000' });
+    expect(calls[0].method).toBe('PUT');
+    expect(calls[0].url).toBe('https://example.atlassian.net/rest/api/2/issue/PROJ-1/worklog/w-1');
+    expect(calls[0].headers['Content-Type']).toBe('application/json');
+    expect(calls[0].body).toEqual({ timeSpentSeconds: 1800, comment: 'edited' });
+  });
+
+  it('throws a JiraApiError carrying the status on non-OK', async () => {
+    const { client } = captureFetch(() => ({
+      ok: false,
+      status: 400,
+      statusText: 'Bad Request',
+      text: '{"errorMessages":["bad started"]}',
+    }));
+    const error = await client
+      .updateWorklog('PROJ-1', 'w-1', { started: 'nope' })
+      .catch((e: unknown) => e);
+    expect(isJiraApiError(error)).toBe(true);
+    expect(error).toMatchObject({ status: 400, firstErrorMessage: 'bad started' });
+    expect((error as Error).message).toMatch(/updateWorklog failed: 400 Bad Request/);
+  });
+});
+
+describe('JiraClient.deleteWorklog', () => {
+  it('DELETEs /rest/api/2/issue/{key}/worklog/{id}?adjustEstimate=leave and tolerates 204', async () => {
+    const { client, calls } = captureFetch(() => ({ status: 204 }));
+    await expect(client.deleteWorklog('PROJ-1', 'w-1')).resolves.toBeUndefined();
+    expect(calls[0].method).toBe('DELETE');
+    expect(calls[0].url).toBe(
+      'https://example.atlassian.net/rest/api/2/issue/PROJ-1/worklog/w-1?adjustEstimate=leave'
+    );
+  });
+
+  it('surfaces 404 as a JiraApiError with status 404', async () => {
+    const { client } = captureFetch(() => ({
+      ok: false,
+      status: 404,
+      statusText: 'Not Found',
+      text: 'gone',
+    }));
+    const error = await client.deleteWorklog('PROJ-1', 'w-1').catch((e: unknown) => e);
+    expect(isJiraApiError(error)).toBe(true);
+    expect(error).toMatchObject({ status: 404, body: 'gone' });
+    expect((error as Error).message).toMatch(/deleteWorklog failed: 404 Not Found\ngone/);
+  });
+});
+
+describe('JiraClient.getWorklog', () => {
+  it('GETs /rest/api/2/issue/{key}/worklog/{id} and maps id/started/seconds/accountId/comment', async () => {
+    const { client, calls } = captureFetch(() => ({
+      json: {
+        id: 'w-1',
+        issueId: '10000',
+        author: { displayName: 'Alice', accountId: 'acc-1' },
+        started: '2026-01-01T09:00:00.000+0000',
+        timeSpent: '1h',
+        timeSpentSeconds: 3600,
+        comment: 'worked',
+      },
+    }));
+    const worklog = await client.getWorklog('PROJ-1', 'w-1');
+    expect(calls[0].method).toBe('GET');
+    expect(calls[0].url).toBe('https://example.atlassian.net/rest/api/2/issue/PROJ-1/worklog/w-1');
+    expect(worklog).toEqual({
+      id: 'w-1',
+      started: '2026-01-01T09:00:00.000+0000',
+      timeSpentSeconds: 3600,
+      authorAccountId: 'acc-1',
+      comment: 'worked',
+    });
+  });
+
+  it('converts an ADF comment to markdown and omits absent optional fields', async () => {
+    const { client } = captureFetch(() => ({
+      json: {
+        id: 'w-2',
+        author: { displayName: 'Server User' },
+        started: '2026-01-01T09:00:00.000+0000',
+        timeSpent: '30m',
+        timeSpentSeconds: 1800,
+        comment: {
+          version: 1,
+          type: 'doc',
+          content: [{ type: 'paragraph', content: [{ type: 'text', text: 'adf note' }] }],
+        },
+      },
+    }));
+    const worklog = await client.getWorklog('PROJ-1', 'w-2');
+    expect(worklog).toEqual({
+      id: 'w-2',
+      started: '2026-01-01T09:00:00.000+0000',
+      timeSpentSeconds: 1800,
+      comment: 'adf note\n',
+    });
+    expect('authorAccountId' in worklog).toBe(false);
+  });
+
+  it('surfaces 404 as a JiraApiError with status 404', async () => {
+    const { client } = captureFetch(() => ({
+      ok: false,
+      status: 404,
+      statusText: 'Not Found',
+      text: 'missing',
+    }));
+    const error = await client.getWorklog('PROJ-1', 'w-1').catch((e: unknown) => e);
+    expect(isJiraApiError(error)).toBe(true);
+    expect(error).toMatchObject({ status: 404 });
+    expect((error as Error).message).toMatch(/getWorklog failed: 404 Not Found\nmissing/);
   });
 });
 
