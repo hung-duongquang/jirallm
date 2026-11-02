@@ -99,3 +99,33 @@ export const __test = {
     cachedKeyring = undefined;
   },
 };
+
+/** Reads a non-Jira secret (e.g. `slack:token`) from the keychain, else from `envVar`. */
+export async function getSecret(account: string, envVar: string): Promise<string | undefined> {
+  const keyring = await loadKeyring();
+  if (keyring) {
+    try {
+      const value = new keyring.Entry(SERVICE, account).getPassword();
+      if (value) return value;
+    } catch {
+      // NoEntry → fall through to the environment
+    }
+  }
+  return process.env[envVar] || undefined;
+}
+
+export async function setSecret(account: string, value: string): Promise<void> {
+  const keyring = await loadKeyring();
+  if (!keyring) throw new Error('OS keychain (@napi-rs/keyring) is unavailable.');
+  new keyring.Entry(SERVICE, account).setPassword(value);
+}
+
+export async function removeSecret(account: string): Promise<boolean> {
+  const keyring = await loadKeyring();
+  if (!keyring) return false;
+  try {
+    return new keyring.Entry(SERVICE, account).deletePassword();
+  } catch {
+    return false;
+  }
+}

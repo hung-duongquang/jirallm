@@ -18,6 +18,7 @@ Output switches to JSON when stdout is piped. Prefer the compact forms below: th
 | Exact field values the markdown lacks or renders wrong (custom fields, link metadata, IDs) | `jirallm fetch PROJ-1 --raw --fields <jira field ids>` (e.g. `issuelinks,customfield_10050`); avoid bare `--raw`, it returns every field |
 | One Confluence page by URL (e.g. a test report) | `jirallm page <url>` → `jira-export/confluence/<id>-<slug>/page.md` |
 | Find Confluence pages (plain words or CQL) | `jirallm page:search "<words>" [--space KEY] --format tsv`, then `jirallm page <url>` on a hit |
+| A Slack message link (`https://<ws>.slack.com/archives/<channel>/p<id>`), with its thread | `jirallm slack <url>` prints Markdown; `--output-dir ./jira-export` also saves images. No token → ask the user to run `jirallm slack:auth` |
 | Child pages of a Confluence page (find where a new page goes) | `jirallm page:children <id or url> --format tsv` |
 | List issues (compact) | `jirallm search --org <org> '<JQL>' --fields key,summary,status,assignee --format tsv --all` |
 | Active sprint, by status | JQL `project = PROJ AND sprint in openSprints() AND status = "To Do"` |

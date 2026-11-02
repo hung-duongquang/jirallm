@@ -46,6 +46,7 @@ import { runStart, type StartOptions } from './commands/start.js';
 import { runAgentGuide, type AgentGuideOptions } from './commands/agentGuide.js';
 import { runPage, type PageOptions } from './commands/page.js';
 import { runPageSearch, type PageSearchOptions } from './commands/pageSearch.js';
+import { runSlack, runSlackAuth, type SlackOptions } from './commands/slack.js';
 import { runChanges, runWatch, type ChangesOptions, type WatchOptions } from './commands/watch.js';
 import { runPrContext, type PrContextOptions } from './commands/prContext.js';
 import { runPrStatus, type PrStatusOptions } from './commands/prStatus.js';
@@ -1589,6 +1590,37 @@ program
   .option('--format <format>', 'text, tsv or json (default: text, json when piped)')
   .action(async (page: string, opts: PageChildrenOptions) => {
     try { await runPageChildren(page, opts); } catch (err) { exitOnError(err); }
+  });
+
+program
+  .command('slack <url>')
+  .description('Read a Slack message link with its whole thread as Markdown (needs `jirallm slack:auth`)')
+  .option('--output-dir <path>', 'Write <dir>/slack/<channel>-<ts>/thread.md and download the thread\'s files instead of printing')
+  .option('--no-files', 'With --output-dir: skip downloading files')
+  .option('--json', 'Print the raw Slack messages and resolved user names as JSON')
+  .addHelpText('after', `
+A link to a reply shows the whole thread; the linked message is marked.
+
+Examples:
+  $ jirallm slack https://acme.slack.com/archives/C0123ABCD/p1793370497363139
+  $ jirallm slack <url> --output-dir ./jira-export
+`)
+  .action(async (url: string, opts: SlackOptions) => {
+    try { await runSlack(url, opts); } catch (err) { exitOnError(err); }
+  });
+
+program
+  .command('slack:auth')
+  .description('Store a Slack token in the OS keychain and check it (xoxp- user token, or xoxc- token + d cookie)')
+  .option('--check', 'Only check the stored token')
+  .option('--remove', 'Remove the stored token')
+  .addHelpText('after', `
+A user token (xoxp-) comes from a Slack app installed in the workspace with the scopes
+channels:history, groups:history, im:history, mpim:history and users:read. JIRALLM_SLACK_TOKEN
+(and JIRALLM_SLACK_COOKIE for xoxc-) work too when nothing is stored.
+`)
+  .action(async (opts: { check?: boolean; remove?: boolean }) => {
+    try { await runSlackAuth(opts); } catch (err) { exitOnError(err); }
   });
 
 program
