@@ -7,7 +7,10 @@ import {
   exportSlackThread,
   loadSlackAuth,
   loadSlackThread,
+  mentionedUsers,
   renderThread,
+  searchHits,
+  slackSearchQueries,
 } from '../../lib/slack.js';
 import { printJson } from '../jsonOutput.js';
 
@@ -36,6 +39,46 @@ export async function runSlack(url: string, opts: SlackOptions): Promise<void> {
   process.stdout.write(renderThread({ url, channelName, messages, linkedTs: link.ts, names }));
 }
 
+export type SlackSearchOptions = {
+  after?: string;
+  max?: string;
+  json?: boolean;
+};
+
+/**
+ * Searches Slack messages and prints one TSV row per thread (newest match): date, channel, author,
+ * matches in the thread, text, permalink. Open a hit with `jirallm slack <url>`.
+ */
+export async function runSlackSearch(query: string, opts: SlackSearchOptions): Promise<void> {
+  const max = opts.max ? Number(opts.max) : 20;
+  if (!Number.isInteger(max) || max < 1 || max > 500) throw new Error(`--max needs a number from 1 to 500, got: ${opts.max}`);
+  const queries = slackSearchQueries(query, opts.after);
+  if (queries.length === 0) throw new Error('Empty search query.');
+  const q = queries.join(' | ');
+  const client = new SlackClient(await loadSlackAuth());
+  const { total, matches } = await client.searchAny(queries, max);
+
+  const ids = new Set<string>();
+  for (const m of matches) {
+    if (m.user) ids.add(m.user);
+    for (const id of mentionedUsers(m.text ?? '')) ids.add(id);
+  }
+  const names = new Map<string, string>();
+  for (const id of ids) names.set(id, await client.userName(id));
+  const hits = searchHits(matches, names);
+
+  if (opts.json) {
+    printJson({ query: q, total, hits });
+    return;
+  }
+  console.error(`# ${q}: ${total} message(s)${total > matches.length ? `, showing the newest ${matches.length}` : ''}, ${hits.length} thread(s)`);
+  if (hits.length === 0) return;
+  console.log(['date', 'channel', 'author', 'matches', 'text', 'url'].join('\t'));
+  for (const h of hits) {
+    console.log([h.date, h.channel, h.author, String(h.more + 1), h.text.replace(/\t/g, ' '), h.url].join('\t'));
+  }
+}
+
 export async function runSlackAuth(opts: { remove?: boolean; check?: boolean }): Promise<void> {
   if (opts.remove) {
     const a = await removeSecret(SLACK_TOKEN_ACCOUNT);
@@ -47,7 +90,7 @@ export async function runSlackAuth(opts: { remove?: boolean; check?: boolean }):
     intro('jirallm slack:auth');
     const token = await password({
       message:
-        'Slack token (xoxp- user token from a Slack app with channels:history, groups:history, im:history, mpim:history, users:read; or an xoxc- browser token)',
+        'Slack token (xoxp- user token from a Slack app with channels:history, groups:history, im:history, mpim:history, users:read, search:read; or an xoxc- browser token)',
       validate: (v) => (/^xox[pcb]-/.test(v ?? '') ? undefined : 'Expected a token starting with xoxp-, xoxb- or xoxc-'),
     });
     if (isCancel(token)) {

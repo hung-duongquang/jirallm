@@ -47,7 +47,7 @@ import { runStart, type StartOptions } from './commands/start.js';
 import { runAgentGuide, type AgentGuideOptions } from './commands/agentGuide.js';
 import { runPage, type PageOptions } from './commands/page.js';
 import { runPageSearch, type PageSearchOptions } from './commands/pageSearch.js';
-import { runSlack, runSlackAuth, type SlackOptions } from './commands/slack.js';
+import { runSlack, runSlackAuth, runSlackSearch, type SlackOptions, type SlackSearchOptions } from './commands/slack.js';
 import { runChanges, runWatch, type ChangesOptions, type WatchOptions } from './commands/watch.js';
 import { runPrContext, type PrContextOptions } from './commands/prContext.js';
 import { runPrStatus, type PrStatusOptions } from './commands/prStatus.js';
@@ -1654,13 +1654,34 @@ Examples:
   });
 
 program
+  .command('slack:search <query>')
+  .description('Search Slack messages; one TSV row per thread (newest match first), open a hit with `slack <url>`')
+  .option('--after <date>', 'Only messages after this day (YYYY-MM-DD, exclusive)')
+  .option('--max <n>', 'Most matching messages to read (default 20, max 500)')
+  .option('--json', 'Print the hits as JSON')
+  .addHelpText('after', `
+The query uses Slack search syntax ("phrases", in:#channel, from:@user, before:/after:). Slack's
+API has no OR, so "a OR b" runs one search per alternative and merges them. Bare Jira keys are
+quoted for you: Slack splits ZOD-3988 on the hyphen and would match any "ZOD".
+Search a PR by its link (pull/3030): "#3030" matches nothing. Matches in the same thread fold into one row; the matches column counts them. Needs a token that
+may search (an xoxc- browser token, or xoxp- with search:read).
+
+Examples:
+  $ jirallm slack:search "ZOD-3988 OR ZOD-3985 OR pull/3030" --after 2026-10-28
+  $ jirallm slack:search "postcode lookup in:#healthcare-claim-invoicing"
+`)
+  .action(async (query: string, opts: SlackSearchOptions) => {
+    try { await runSlackSearch(query, opts); } catch (err) { exitOnError(err); }
+  });
+
+program
   .command('slack:auth')
   .description('Store a Slack token in the OS keychain and check it (xoxp- user token, or xoxc- token + d cookie)')
   .option('--check', 'Only check the stored token')
   .option('--remove', 'Remove the stored token')
   .addHelpText('after', `
 A user token (xoxp-) comes from a Slack app installed in the workspace with the scopes
-channels:history, groups:history, im:history, mpim:history and users:read. JIRALLM_SLACK_TOKEN
+channels:history, groups:history, im:history, mpim:history, users:read and search:read (for slack:search). JIRALLM_SLACK_TOKEN
 (and JIRALLM_SLACK_COOKIE for xoxc-) work too when nothing is stored.
 `)
   .action(async (opts: { check?: boolean; remove?: boolean }) => {

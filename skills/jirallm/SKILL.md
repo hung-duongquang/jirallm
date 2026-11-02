@@ -19,6 +19,7 @@ Output switches to JSON when stdout is piped. Prefer the compact forms below: th
 | One Confluence page by URL (e.g. a test report) | `jirallm page <url>` → `jira-export/confluence/<id>-<slug>/page.md` |
 | Find Confluence pages (plain words or CQL) | `jirallm page:search "<words>" [--space KEY] --format tsv`, then `jirallm page <url>` on a hit |
 | A Slack message link (`https://<ws>.slack.com/archives/<channel>/p<id>`), with its thread | `jirallm slack <url>` prints Markdown; `--output-dir ./jira-export` also saves images. No token → ask the user to run `jirallm slack:auth` |
+| Slack discussions of a ticket or PR (decisions not written in Jira) | `jirallm slack:search "PROJ-1 OR PROJ-0 OR pull/123" --after <ticket created>`: one TSV row per thread with its permalink; open the relevant ones with `jirallm slack <url>` |
 | Child pages of a Confluence page (find where a new page goes) | `jirallm page:children <id or url> --format tsv` |
 | List issues (compact) | `jirallm search --org <org> '<JQL>' --fields key,summary,status,assignee --format tsv --all` |
 | Active sprint, by status | JQL `project = PROJ AND sprint in openSprints() AND status = "To Do"` |
@@ -63,6 +64,13 @@ Run `jirallm pr-context --repo <worktree>` (key taken from the branch name) befo
 - A failed check: read the digest, reproduce locally, fix and push (ask before pushing unless the user asked for it); only open the full log (`gh run view --job <id> --log-failed`) when the digest is not enough. Report infra failures (missing secrets, cache, runner) to the user instead of changing code for them.
 - Review threads awaiting me: fix or answer each one, then tell the user what you changed. Replying on GitHub and resolving threads are **writes**: confirm first.
 - `jirallm watch --prs <repo>` tracks all my open PRs between sessions: new CI failures, CI back to green, new reviews, threads awaiting me, new comments and merged/closed PRs are added to `CHANGES.md` (state in `jira-export/.prs.json`), so they show up at session start with `jirallm changes --unseen`. It is cheap enough to run every minute (one `gh pr list` plus a GitHub notifications poll that is a free 304 when nothing happened); a PR is only read in full when its checks changed or it got a notification. Recommended schedule: `jirallm watch --install 1 --jira-every 5 --prs <repo> --notify` (PRs every minute, Jira/Confluence every 5 minutes, a Windows toast only when something changed; clicking it opens the PR or ticket).
+
+## Reviewing someone else's PR for a ticket
+
+Business decisions often live only in Slack. Before reviewing the code:
+1. Export the ticket (`--include-parent` when it is a sub-task) and find its PR (`gh pr list --search "<key>" --state all`).
+2. `jirallm slack:search "<key> OR <parent key> OR pull/<pr>" --after <ticket created, YYYY-MM-DD>` and open the threads that look relevant with `jirallm slack <url>`.
+3. Review the diff against the acceptance criteria plus what was decided in those threads; name the thread when a finding rests on it, and don't flag behaviour a thread explicitly agreed to.
 
 ## Testing a ticket (tester workflow)
 

@@ -71,6 +71,15 @@ export type SlackMessage = {
   subtype?: string;
 };
 
+export type SlackSearchMatch = {
+  ts: string;
+  text?: string;
+  user?: string;
+  username?: string;
+  permalink: string;
+  channel?: { id?: string; name?: string; is_im?: boolean; is_mpim?: boolean };
+};
+
 type SlackResponse = { ok: boolean; error?: string; needed?: string; response_metadata?: { next_cursor?: string } };
 
 export type SlackAuth = { token: string; cookie?: string };
@@ -142,6 +151,35 @@ export class SlackClient {
       cursor = page.response_metadata?.next_cursor || undefined;
     } while (cursor);
     return out;
+  }
+
+  /** Messages matching a Slack search query, newest first, up to `max` (search.messages, 100 per page). */
+  async search(query: string, max: number): Promise<{ total: number; matches: SlackSearchMatch[] }> {
+    const matches: SlackSearchMatch[] = [];
+    let total = 0;
+    for (let page = 1; matches.length < max; page++) {
+      const res = await this.call<{ messages?: { total?: number; matches?: SlackSearchMatch[]; paging?: { pages?: number } } }>(
+        'search.messages',
+        { query, sort: 'timestamp', sort_dir: 'desc', count: String(Math.min(100, max)), page: String(page) }
+      );
+      total = res.messages?.total ?? 0;
+      matches.push(...(res.messages?.matches ?? []));
+      if (page >= (res.messages?.paging?.pages ?? 1)) break;
+    }
+    return { total, matches: matches.slice(0, max) };
+  }
+
+  /** Messages matching any of `queries`, each message once, newest first, up to `max`. */
+  async searchAny(queries: string[], max: number): Promise<{ total: number; matches: SlackSearchMatch[] }> {
+    const seen = new Map<string, SlackSearchMatch>();
+    let total = 0;
+    for (const q of queries) {
+      const res = await this.search(q, max);
+      total += res.total;
+      for (const m of res.matches) seen.set(`${m.channel?.id ?? ''}:${m.ts}`, m);
+    }
+    const matches = [...seen.values()].sort((a, b) => Number(b.ts) - Number(a.ts));
+    return { total, matches: matches.slice(0, max) };
   }
 
   async channelName(channel: string): Promise<string | undefined> {
@@ -381,6 +419,82 @@ export async function exportSlackThread(
   const body = renderThread({ url, channelName, messages, linkedTs: link.ts, names, localFiles, newSince: newReplies ? newSince : undefined });
   writeFileSync(path, frontmatter + body);
   return { dirName, path, title, messageCount: messages.length, fileCount: localFiles.size, fileErrors, newReplies };
+}
+
+/**
+ * Builds search.messages queries. Slack's API has no OR (all terms must match), so the query is
+ * split on OR (outside quotes) into one query per alternative. Slack splits ZOD-3988 on the hyphen
+ * and would match any "ZOD", so bare Jira keys are quoted; `after` (YYYY-MM-DD) becomes the after:
+ * modifier (exclusive day) on each.
+ */
+export function slackSearchQueries(query: string, after?: string): string[] {
+  if (after && !/^\d{4}-\d{2}-\d{2}$/.test(after)) throw new Error(`--after needs a date as YYYY-MM-DD, got: ${after}`);
+  const alternatives: string[] = [''];
+  for (const [i, part] of query.split(/("[^"]*")/).entries()) {
+    if (i % 2 === 1) {
+      alternatives[alternatives.length - 1] += part;
+      continue;
+    }
+    const [first, ...rest] = part.replace(/\b[A-Z][A-Z0-9]+-\d+\b/g, '"$&"').split(/\s+OR\s+/);
+    alternatives[alternatives.length - 1] += first;
+    alternatives.push(...rest);
+  }
+  return alternatives
+    .map((q) => q.trim())
+    .filter(Boolean)
+    .map((q) => (after ? `${q} after:${after}` : q));
+}
+
+export type SlackSearchHit = {
+  date: string;
+  channel: string;
+  author: string;
+  text: string;
+  url: string;
+  /** Other matches in the same thread, folded into this (newest) one. */
+  more: number;
+};
+
+/** The thread a match belongs to: its permalink's thread_ts, else the message itself. */
+function threadKey(m: SlackSearchMatch): string {
+  let threadTs: string | null = null;
+  try {
+    threadTs = new URL(m.permalink).searchParams.get('thread_ts');
+  } catch {
+    // keep the message ts
+  }
+  return `${m.channel?.id ?? ''}:${threadTs ?? m.ts}`;
+}
+
+/**
+ * One hit per thread (the newest match; its permalink opens the thread with `jirallm slack <url>`),
+ * text flattened to one line of at most `width` characters.
+ */
+export function searchHits(matches: SlackSearchMatch[], names: Map<string, string>, width = 150): SlackSearchHit[] {
+  const byThread = new Map<string, SlackSearchHit>();
+  for (const m of matches) {
+    const key = threadKey(m);
+    const seen = byThread.get(key);
+    if (seen) {
+      seen.more++;
+      continue;
+    }
+    const ch = m.channel;
+    const channel = ch?.is_im ? 'DM' : ch?.is_mpim ? 'group DM' : ch?.name ? `#${ch.name}` : ch?.id ?? '?';
+    const text = mrkdwnToMarkdown(m.text ?? '', names)
+      .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/\s+/g, ' ')
+      .trim();
+    byThread.set(key, {
+      date: formatTs(m.ts),
+      channel,
+      author: (m.user && names.get(m.user)) || m.username || m.user || '?',
+      text: text.length > width ? `${text.slice(0, width - 1)}…` : text,
+      url: m.permalink,
+      more: 0,
+    });
+  }
+  return [...byThread.values()];
 }
 
 /** The fields under `slack:` in a thread.md written by exportSlackThread. */
