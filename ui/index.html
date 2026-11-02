@@ -563,14 +563,31 @@ $('export').onclick = async () => {
 };
 
 // Re-export the tickets in the list (all of them, or only those matching the filter).
-const visibleLibraryKeys = () => {
+/** Rows of the open tab that match the filter. */
+const visibleItems = () => {
   const q = $('filter').value.trim().toLowerCase();
-  return libraryItems
-    .filter((it) => it.kind === 'ticket' && (!q || it.key.toLowerCase().includes(q) || it.title.toLowerCase().includes(q)))
-    .map((it) => it.key);
+  return libraryItems.filter((it) => it.kind === libKind && (!q || it.key.toLowerCase().includes(q) || it.title.toLowerCase().includes(q)));
 };
+const visibleLibraryKeys = () => (libKind === 'ticket' ? visibleItems().map((it) => it.key) : []);
+/** Re-exports the shown Confluence pages or Slack threads from the link each one was exported from. */
+async function updateLinks() {
+  const links = visibleItems().map((it) => it.url).filter(Boolean);
+  if (!links.length) { toast('Nothing to update'); return; }
+  const button = $('updateAll');
+  exporting = true;
+  for (const b of [$('export'), button]) b.disabled = true;
+  button.textContent = `Updating ${links.length}…`;
+  try { await exportLinks(links); }
+  finally {
+    exporting = false;
+    for (const b of [$('export'), button]) b.disabled = false;
+  }
+  await loadLibrary();
+  if (currentItem) openItem(currentItem.kind, currentItem.id); // show the refreshed content
+}
 $('updateAll').onclick = () => {
-  if (exporting) { cancelExport(); return; }
+  if (exporting) { if (exportRun) cancelExport(); return; }
+  if (libKind !== 'ticket') { updateLinks(); return; }
   const keys = visibleLibraryKeys();
   if (!keys.length) { toast('Nothing to update'); return; }
   // Uses the options above, so with "Linked issues" on it also fetches tickets the listed
@@ -579,7 +596,7 @@ $('updateAll').onclick = () => {
     openFirst: false });
 };
 function updateLabel() {
-  const n = visibleLibraryKeys().length;
+  const n = visibleItems().length;
   return $('filter').value.trim() ? `Update ${n} shown` : `Update all (${n})`;
 }
 
@@ -605,7 +622,11 @@ function renderLibrary() {
     b.setAttribute('aria-selected', String(b.dataset.kind === libKind));
     b.textContent = `${{ ticket: 'Jira', page: 'Confluence', slack: 'Slack' }[b.dataset.kind]}${n ? ` (${n})` : ''}`;
   }
-  $('updateAll').hidden = libKind !== 'ticket';
+  $('updateAll').title = {
+    ticket: 'Re-export these tickets from Jira with the options above (with Linked issues on, also the tickets they mention)',
+    page: 'Re-export these Confluence pages',
+    slack: 'Re-read these Slack threads (new replies, edits)',
+  }[libKind];
   // Within a tab the kind is implied: a Slack row shows its channel, a page row only its title.
   const label = (it) => (it.kind === 'slack' ? it.key.replace(/^Slack\s*/, '') : it.kind === 'page' ? it.title : it.key);
   $('library').innerHTML = items.length ? items.map((it) => `
