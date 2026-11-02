@@ -1,6 +1,6 @@
 ---
 name: jirallm
-description: Read and update Jira and Confluence from the shell with jirallm. Use when a task mentions a Jira key (e.g. ZOD-1234), a sprint, a board column, or asks to assign, transition, comment or log work; to find, read or write a Confluence page (spec, test report); to write up a ticket's business or technical context, documentation or a how-to-test for testers or the team; to test a ticket; before opening a pull request for a ticket branch; after a PR is raised, to follow its CI pipeline (failed checks and their logs) and code reviews (review threads, comments) until it is green and approved; or to check what changed in tickets or whether the local ticket context is current.
+description: Read and update Jira and Confluence, and read Slack, from the shell with jirallm. Use when a task mentions a Jira key (e.g. ZOD-1234), a sprint, a board column, or asks to assign, transition, comment or log work; when implementing a ticket, or reviewing or re-reviewing a pull request (also one named only by its number), to find the Slack discussions where decisions not written in Jira were made; to read a pasted Slack message link; to find, read or write a Confluence page (spec, test report); to write up a ticket's business or technical context, documentation or a how-to-test for testers or the team; to test a ticket; before opening a pull request for a ticket branch; after a PR is raised, to follow its CI pipeline (failed checks and their logs) and code reviews (review threads, comments) until it is green and approved; or to check what changed in tickets or whether the local ticket context is current.
 model: sonnet
 ---
 
@@ -50,6 +50,15 @@ Write-ups for a ticket (business and technical context, how to test, a design no
 2. Find the parent page: the user's choice, or `page:search` / `page:children` under the space's feature or sprint pages. Ask when unsure.
 3. `jirallm page:publish jira-export/<key>/context.md --space KEY --parent <id> --link <key> --dry-run`, show the plan, and publish after the user confirms (a **write**). Later runs update the same page (the id is kept in `.context.md.confluence.json`); a page with the same title is never overwritten without `--page`.
 
+## Implementing a ticket
+
+Business decisions often live only in Slack. After exporting the ticket (or `start`), and before writing code:
+1. `jirallm slack:search "<key> OR <parent key>" --after <ticket created, YYYY-MM-DD>` and open the threads that look relevant with `jirallm slack <url>`.
+2. Tell the user when a thread decided something the acceptance criteria don't say, or contradicts them, and ask which one wins before building on it.
+3. Implement against the acceptance criteria plus those decisions; name the thread in the PR description when the code follows it.
+
+No Slack token (`slack:auth` error): say so once and carry on with Jira alone.
+
 ## Before opening a PR
 
 Run `jirallm pr-context --repo <worktree>` (key taken from the branch name) before `gh pr create`. It re-exports the ticket and prints what changed in Jira since work started (first branch commit): requirement and description edits as line diffs, new comments, status and assignee changes, plus the branch commits and diffstat. Then:
@@ -68,9 +77,11 @@ Run `jirallm pr-context --repo <worktree>` (key taken from the branch name) befo
 ## Reviewing someone else's PR for a ticket
 
 Business decisions often live only in Slack. Before reviewing the code:
-1. Export the ticket (`--include-parent` when it is a sub-task) and find its PR (`gh pr list --search "<key>" --state all`).
+1. Export the ticket (`--include-parent` when it is a sub-task) and find its PR (`gh pr list --search "<key>" --state all`), or, given only a PR number, take the key from its title or branch (`gh pr view <pr> --json title,headRefName`).
 2. `jirallm slack:search "<key> OR <parent key> OR pull/<pr>" --after <ticket created, YYYY-MM-DD>` and open the threads that look relevant with `jirallm slack <url>`.
 3. Review the diff against the acceptance criteria plus what was decided in those threads; name the thread when a finding rests on it, and don't flag behaviour a thread explicitly agreed to.
+
+Re-review (the author pushed fixes): repeat step 2 with `--after <date of my last review>` and re-read the threads found before (`jirallm slack <url>` shows new replies), since answers to review points are often given in Slack rather than on the PR.
 
 ## Testing a ticket (tester workflow)
 
