@@ -26,6 +26,7 @@ Output switches to JSON when stdout is piped. Prefer the compact forms below: th
 | A board **column** (columns are not statuses) | `jirallm boards --org <org>` → `jirallm board:issues --help` |
 | Valid transitions of an issue | `jirallm transition PROJ-1 --list` |
 | Who am I / find a user | `jirallm me --org <org>`, `jirallm users <query> --org <org>` |
+| Versions (releases) of a project, e.g. for a fix version | `jirallm versions --org <org> -P <project>` (the names `edit --fix-versions` expects) |
 | Environment check | `jirallm doctor` |
 
 Search tips: `--fields` takes friendly names (`key,summary,status,assignee,sprint,parent`) or raw ids (`customfield_10050`). `--format tsv` prints a header line and one line per issue; nested values collapse to their key or name. With `--all`, a "more results" note on stderr means the `--max` cap was hit.
@@ -41,6 +42,7 @@ jirallm or the Atlassian MCP server: use jirallm for ticket context (files on di
 | Transition | `jirallm transition PROJ-1 --to "Code Review"` (positional status is an error) |
 | Comment | `jirallm comment PROJ-1 --help` (markdown is converted) |
 | Log work | `jirallm worklog PROJ-1 "1h 30m"` |
+| Set fix / affects versions | `jirallm edit PROJ-1 --fix-versions <name> [--fix-versions <name>]` (replaces the whole set; `''` clears it; names from `versions`) |
 | Publish a markdown file as a Confluence page (create, then update) | `jirallm page:publish <file.md> --space KEY --parent <id> --link PROJ-1 --dry-run` |
 
 ## Documents for the team
