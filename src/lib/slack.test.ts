@@ -6,6 +6,7 @@ import {
   SlackClient,
   exportSlackThread,
   mrkdwnToMarkdown,
+  parseSlackFileUrl,
   parseSlackUrl,
   renderThread,
   searchHits,
@@ -209,5 +210,46 @@ describe('exportSlackThread new replies', () => {
       client: clientWith([parent, reply('1000000060.000000', 'one'), reply('1000000120.000000', 'two'), reply('1000000180.000000', 'three')]),
     });
     expect(third.newReplies).toBe(2);
+  });
+});
+
+describe('Slack file links', () => {
+  const fileUrl = 'https://x.slack.com/files/U9/F0CE6EDUY9Z/image.png';
+
+  it('parses the file id and ignores other URLs', () => {
+    expect(parseSlackFileUrl(fileUrl)).toEqual({ workspace: 'x', fileId: 'F0CE6EDUY9Z' });
+    expect(parseSlackFileUrl('https://x.slack.com/archives/C1/p1000000000000000')).toBeUndefined();
+    expect(parseSlackFileUrl('https://example.com/files/U9/F1/a.png')).toBeUndefined();
+  });
+
+  it('exports the message that first shared the file, before it has replies', async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), 'jl-slack-file-'));
+    const calls: string[] = [];
+    const fetchImpl = (async (u: string, init?: { body?: string }) => {
+      const method = u.split('/').pop()!;
+      calls.push(`${method} ${init?.body ?? ''}`);
+      if (method === 'files.info') {
+        return new Response(JSON.stringify({
+          ok: true,
+          file: { id: 'F0CE6EDUY9Z', shares: { private: { C2: [{ ts: '1000000100.000000' }], C1: [{ ts: '1000000000.000000' }] } } },
+        }));
+      }
+      if (method === 'conversations.replies') {
+        return new Response(JSON.stringify({ ok: true, messages: [{ ts: '1000000000.000000', user: 'U1', files: [{ id: 'F0CE6EDUY9Z', name: 'image.png', mimetype: 'image/png', url_private: 'https://files.slack.com/x' }] }] }));
+      }
+      if (u.startsWith('https://files.slack.com/')) return new Response(new Uint8Array([1, 2]), { headers: { 'content-type': 'image/png' } });
+      return new Response(JSON.stringify({ ok: true, channel: { name: 'dev' }, user: { real_name: 'Trang' } }));
+    }) as unknown as typeof fetch;
+    try {
+      const t = await exportSlackThread(fileUrl, { outputDir, client: new SlackClient({ token: 'xoxp-1' }, fetchImpl) });
+      expect(calls.find((c) => c.startsWith('conversations.replies'))).toContain('channel=C1');
+      expect(t.dirName).toBe('c1-1000000000000000');
+      expect(t.fileCount).toBe(1);
+      const md = readFileSync(t.path, 'utf8');
+      expect(md).toContain('url: "https://x.slack.com/archives/C1/p1000000000000000"');
+      expect(md).toContain('![image.png](./F0CE6EDUY9Z-image.png)');
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
   });
 });

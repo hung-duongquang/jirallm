@@ -1639,7 +1639,7 @@ program
 
 program
   .command('slack <url>')
-  .description('Read a Slack message link with its whole thread as Markdown (needs `jirallm slack:auth`)')
+  .description('Read a Slack message link (or an image/file link, resolved to the message that shares it) with its whole thread as Markdown (needs `jirallm slack:auth`)')
   .option('--output-dir <path>', 'Write <dir>/slack/<channel>-<ts>/thread.md and download the thread\'s files instead of printing')
   .option('--no-files', 'With --output-dir: skip downloading files')
   .option('--json', 'Print the raw Slack messages and resolved user names as JSON')

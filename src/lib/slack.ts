@@ -39,6 +39,32 @@ export function parseSlackUrl(url: string): SlackLink {
   };
 }
 
+/**
+ * The file id of a Slack file link (what "Copy link" on an image gives):
+ * https://<ws>.slack.com/files/<user>/<F…>/<name>. Undefined for any other URL.
+ */
+export function parseSlackFileUrl(url: string): { workspace: string; fileId: string } | undefined {
+  let parsed: URL;
+  try {
+    parsed = new URL(url.trim());
+  } catch {
+    return undefined;
+  }
+  const host = parsed.hostname.toLowerCase();
+  const m = /^\/files\/[A-Z0-9]+\/(F[A-Z0-9]+)(\/|$)/i.exec(parsed.pathname);
+  if (!host.endsWith('.slack.com') || !m) return undefined;
+  return { workspace: host.slice(0, -'.slack.com'.length), fileId: m[1].toUpperCase() };
+}
+
+/** Message link for a channel + ts, in the shape parseSlackUrl reads. */
+export function slackMessageUrl(link: SlackLink): string {
+  const base = `https://${link.workspace}.slack.com/archives/${link.channel}/p${link.ts.replace('.', '')}`;
+  return link.threadTs && link.threadTs !== link.ts ? `${base}?thread_ts=${link.threadTs}` : base;
+}
+
+type FileShare = { ts: string; thread_ts?: string };
+export type SlackFileInfo = SlackFile & { shares?: { public?: Record<string, FileShare[]>; private?: Record<string, FileShare[]> } };
+
 export type SlackFile = {
   id: string;
   name?: string;
@@ -188,6 +214,23 @@ export class SlackClient {
     }
     const matches = [...seen.values()].sort((a, b) => Number(b.ts) - Number(a.ts));
     return { total, matches: matches.slice(0, max) };
+  }
+
+  /**
+   * Message link for a Slack message or file link. A file link is resolved with files.info to the
+   * first message that shares the file (the thread parent stays in thread_ts), so an image can be
+   * read before anyone replies to it.
+   */
+  async resolveLink(url: string): Promise<SlackLink> {
+    const file = parseSlackFileUrl(url);
+    if (!file) return parseSlackUrl(url);
+    const res = await this.call<{ file?: SlackFileInfo }>('files.info', { file: file.fileId });
+    const shares = { ...res.file?.shares?.public, ...res.file?.shares?.private };
+    const found = Object.entries(shares)
+      .flatMap(([channel, list]) => list.map((s) => ({ channel, ...s })))
+      .sort((a, b) => Number(a.ts) - Number(b.ts))[0];
+    if (!found) throw new Error(`Slack file ${file.fileId} is not shared in any conversation you can read.`);
+    return { workspace: file.workspace, channel: found.channel, ts: found.ts, threadTs: found.thread_ts };
   }
 
   async channelName(channel: string): Promise<string | undefined> {
@@ -350,12 +393,21 @@ export function threadTitle(messages: SlackMessage[], names: Map<string, string>
   return plain.length > 100 ? `${plain.slice(0, 99)}…` : plain || '(no text)';
 }
 
-export type LoadedThread = { link: SlackLink; channelName?: string; messages: SlackMessage[]; names: Map<string, string> };
+export type LoadedThread = {
+  link: SlackLink;
+  /** Message link of `link` (a file link is replaced by the message that shares the file). */
+  url: string;
+  channelName?: string;
+  messages: SlackMessage[];
+  names: Map<string, string>;
+};
 
-/** Fetches the thread around `url`, with the names of its authors and mentioned users. */
+/** Fetches the thread around `url` (message or file link), with the names of its authors and mentioned users. */
 export async function loadSlackThread(url: string, client?: SlackClient): Promise<LoadedThread & { client: SlackClient }> {
-  const link = parseSlackUrl(url);
+  // Refuse a non-Slack URL before asking for a token.
+  if (!parseSlackFileUrl(url)) parseSlackUrl(url);
   const slack = client ?? new SlackClient(await loadSlackAuth());
+  const link = await slack.resolveLink(url);
   const [messages, channelName] = await Promise.all([slack.thread(link), slack.channelName(link.channel)]);
   if (messages.length === 0) throw new Error('Slack returned no messages for this link.');
   const ids = new Set<string>();
@@ -365,7 +417,8 @@ export async function loadSlackThread(url: string, client?: SlackClient): Promis
   }
   const names = new Map<string, string>();
   for (const id of ids) names.set(id, await slack.userName(id));
-  return { link, channelName, messages, names, client: slack };
+  const messageUrl = parseSlackFileUrl(url) ? slackMessageUrl(link) : url;
+  return { link, url: messageUrl, channelName, messages, names, client: slack };
 }
 
 /**
@@ -373,10 +426,11 @@ export async function loadSlackThread(url: string, client?: SlackClient): Promis
  * next to it (unless `files` is false). Exporting the same thread again overwrites it.
  */
 export async function exportSlackThread(
-  url: string,
+  fileOrMessageUrl: string,
   opts: { outputDir: string; files?: boolean; client?: SlackClient }
 ): Promise<ExportedSlackThread> {
-  const { link, channelName, messages, names, client } = await loadSlackThread(url, opts.client);
+  // Frontmatter and Source keep the message link, so watch can re-read the thread.
+  const { link, url, channelName, messages, names, client } = await loadSlackThread(fileOrMessageUrl, opts.client);
   const dirName = `${link.channel.toLowerCase()}-${(messages[0].thread_ts ?? messages[0].ts).replace('.', '')}`;
   const dir = join(opts.outputDir, 'slack', dirName);
   mkdirSync(dir, { recursive: true });

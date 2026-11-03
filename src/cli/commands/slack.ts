@@ -33,12 +33,12 @@ export async function runSlack(url: string, opts: SlackOptions): Promise<void> {
     console.log(thread.path);
     return;
   }
-  const { link, channelName, messages, names } = await loadSlackThread(url);
+  const { link, url: messageUrl, channelName, messages, names } = await loadSlackThread(url);
   if (opts.json) {
     printJson({ link, channelName, users: Object.fromEntries(names), messages });
     return;
   }
-  process.stdout.write(renderThread({ url, channelName, messages, linkedTs: link.ts, names }));
+  process.stdout.write(renderThread({ url: messageUrl, channelName, messages, linkedTs: link.ts, names }));
 }
 
 export type SlackSearchOptions = {

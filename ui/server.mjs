@@ -361,7 +361,7 @@ const FILE_TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gi
 async function exportLink(body) {
   const url = String(body.url ?? '').trim();
   const outputDir = resolveOutputDir(body.dir);
-  if (/^https:\/\/[\w-]+\.slack\.com\/archives\//i.test(url)) {
+  if (/^https:\/\/[\w-]+\.slack\.com\/(archives|files)\//i.test(url)) {
     const t = await lib.exportSlackThread(url, { outputDir });
     const detail = `${t.messageCount} message(s)${t.newReplies ? `, ${t.newReplies} new` : ''}${t.fileCount ? `, ${t.fileCount} file(s)` : ''}`;
     return { kind: 'slack', id: t.dirName, title: t.title, detail, warnings: t.fileErrors };
