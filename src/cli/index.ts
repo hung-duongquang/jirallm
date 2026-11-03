@@ -48,6 +48,7 @@ import { runAgentGuide, type AgentGuideOptions } from './commands/agentGuide.js'
 import { runPage, type PageOptions } from './commands/page.js';
 import { runPageSearch, type PageSearchOptions } from './commands/pageSearch.js';
 import { runSlack, runSlackAuth, runSlackSearch, type SlackOptions, type SlackSearchOptions } from './commands/slack.js';
+import { runSharePoint, runSharePointAuth, runSharePointSearch, type SharePointOptions, type SharePointSearchOptions } from './commands/sharepoint.js';
 import { runChanges, runWatch, type ChangesOptions, type WatchOptions } from './commands/watch.js';
 import { runPrContext, type PrContextOptions } from './commands/prContext.js';
 import { runPrStatus, type PrStatusOptions } from './commands/prStatus.js';
@@ -1686,6 +1687,60 @@ channels:history, groups:history, im:history, mpim:history, users:read and searc
 `)
   .action(async (opts: { check?: boolean; remove?: boolean }) => {
     try { await runSlackAuth(opts); } catch (err) { exitOnError(err); }
+  });
+
+program
+  .command('sharepoint <url>')
+  .description('Read a SharePoint page (…/SitePages/<page>.aspx) as Markdown (needs `jirallm sharepoint:auth`)')
+  .option('--output-dir <path>', 'Write <dir>/sharepoint/<site>-<page>/page.md and download its images instead of printing')
+  .option('--no-images', 'With --output-dir: skip downloading images')
+  .option('--json', 'Print the raw page item (CanvasContent1 and metadata) as JSON')
+  .addHelpText('after', `
+Text sections become Markdown (tables included); web parts with stored content (quick links,
+people, call-to-action tiles, images, files, embeds) become lists and links. Web parts that fill
+themselves when viewed (news feeds, events, FAQ search) are named but have no content to export.
+A changed page keeps the previous copy as .page.previous.md.
+
+Examples:
+  $ jirallm sharepoint https://contoso.sharepoint.com/sites/Intranet/SitePages/Expenses.aspx
+  $ jirallm sharepoint <url> --output-dir ./jira-export
+`)
+  .action(async (url: string, opts: SharePointOptions) => {
+    try { await runSharePoint(url, opts); } catch (err) { exitOnError(err); }
+  });
+
+program
+  .command('sharepoint:search <query>')
+  .description('Search SharePoint pages (all sites you can read); one TSV row per hit, open one with `sharepoint <url>`')
+  .option('--site <url>', 'Only this site (and its subsites)')
+  .option('--documents', 'Also return documents and other items, not only pages')
+  .option('--max <n>', 'Most results (default 20, max 500)')
+  .option('--json', 'Print the hits as JSON')
+  .addHelpText('after', `
+The query uses SharePoint KQL: words, "phrases", AND/OR/NOT, property filters such as
+Title:expenses or LastModifiedTime>2026-01-01.
+
+Examples:
+  $ jirallm sharepoint:search '"functioneel beheer"'
+  $ jirallm sharepoint:search 'lease auto' --site https://contoso.sharepoint.com/sites/IntranetHR
+`)
+  .action(async (query: string, opts: SharePointSearchOptions) => {
+    try { await runSharePointSearch(query, opts); } catch (err) { exitOnError(err); }
+  });
+
+program
+  .command('sharepoint:auth')
+  .description('Store a SharePoint browser session (FedAuth/rtFa cookies) in the OS keychain and check it')
+  .option('--check', 'Only check the stored session')
+  .option('--remove', 'Remove the stored session')
+  .addHelpText('after', `
+Paste "Copy as cURL" (or the Cookie header) of any request to the site from your browser's
+DevTools; only the FedAuth and rtFa cookies are kept. The session lasts as long as the browser
+sign-in does; run this again when commands report an expired session. SHAREPOINT_COOKIE and
+SHAREPOINT_URL work too when nothing is stored.
+`)
+  .action(async (opts: { check?: boolean; remove?: boolean }) => {
+    try { await runSharePointAuth(opts); } catch (err) { exitOnError(err); }
   });
 
 program

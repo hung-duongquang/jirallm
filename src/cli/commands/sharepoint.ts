@@ -1,0 +1,110 @@
+import { intro, outro, password, text, isCancel, cancel } from '@clack/prompts';
+import { getSecret, removeSecret, setSecret } from '../../lib/credentials.js';
+import {
+  SHAREPOINT_COOKIE_ACCOUNT,
+  SHAREPOINT_NOT_SET_UP,
+  SHAREPOINT_URL_ACCOUNT,
+  SharePointClient,
+  exportSharePointPage,
+  fetchSharePointPage,
+  hasSharePointAuth,
+  loadSharePointAuth,
+  parseCookieInput,
+  parseOrigin,
+  parseSharePointPageUrl,
+  renderSharePointPage,
+  searchSharePoint,
+} from '../../lib/sharepoint.js';
+import { printJson } from '../jsonOutput.js';
+
+export type SharePointOptions = { outputDir?: string; images?: boolean; json?: boolean };
+
+/**
+ * Prints a SharePoint page as Markdown, or with --output-dir writes
+ * <dir>/sharepoint/<site>-<page>/page.md and downloads its images next to it.
+ */
+export async function runSharePoint(url: string, opts: SharePointOptions): Promise<void> {
+  if (opts.outputDir && !opts.json) {
+    const page = await exportSharePointPage(url, { outputDir: opts.outputDir, images: opts.images });
+    for (const err of page.imageErrors) console.error(`# ${err}`);
+    console.log(`✓ ${page.title}: ${page.path} (${page.changed ? 'updated' : 'unchanged'}, ${page.imageCount} image(s))`);
+    return;
+  }
+  const link = parseSharePointPageUrl(url);
+  const client = new SharePointClient(await loadSharePointAuth(url));
+  const item = await fetchSharePointPage(client, link);
+  if (opts.json) {
+    printJson({ link, item });
+    return;
+  }
+  process.stdout.write(renderSharePointPage(url, link, item).markdown);
+}
+
+export type SharePointSearchOptions = { site?: string; documents?: boolean; max?: string; json?: boolean };
+
+/** One TSV row per hit: modified, site, title, url, summary. Open a page with `jirallm sharepoint <url>`. */
+export async function runSharePointSearch(query: string, opts: SharePointSearchOptions): Promise<void> {
+  const max = opts.max ? Number(opts.max) : 20;
+  if (!Number.isInteger(max) || max < 1 || max > 500) throw new Error(`--max needs a number from 1 to 500, got: ${opts.max}`);
+  if (!query.trim()) throw new Error('Empty search query.');
+  if (!(await hasSharePointAuth())) {
+    if (opts.json) printJson({ skipped: SHAREPOINT_NOT_SET_UP, hits: [] });
+    else console.log(SHAREPOINT_NOT_SET_UP);
+    return;
+  }
+  const client = new SharePointClient(await loadSharePointAuth(opts.site));
+  const { kql, total, hits } = await searchSharePoint(client, query, { site: opts.site, documents: opts.documents, max });
+  if (opts.json) {
+    printJson({ query: kql, total, hits });
+    return;
+  }
+  console.error(`# ${kql}: ${total} result(s)${total > hits.length ? `, showing ${hits.length}` : ''}`);
+  if (hits.length === 0) return;
+  const cols = ['modified', 'site', 'title', 'url', 'summary'] as const;
+  console.log(cols.join('\t'));
+  for (const h of hits) console.log(cols.map((c) => h[c].replace(/\t/g, ' ')).join('\t'));
+}
+
+export async function runSharePointAuth(opts: { remove?: boolean; check?: boolean }): Promise<void> {
+  if (opts.remove) {
+    const a = await removeSecret(SHAREPOINT_COOKIE_ACCOUNT);
+    const b = await removeSecret(SHAREPOINT_URL_ACCOUNT);
+    console.log(a || b ? 'Removed the SharePoint session.' : 'No SharePoint session stored.');
+    return;
+  }
+  if (!opts.check) {
+    intro('jirallm sharepoint:auth');
+    const site = await text({
+      message: 'SharePoint site URL (any page of it)',
+      placeholder: 'https://contoso.sharepoint.com/sites/Intranet',
+      initialValue: (await getSecret(SHAREPOINT_URL_ACCOUNT, 'SHAREPOINT_URL')) ?? '',
+      validate: (v) => (parseOrigin(v ?? '') ? undefined : 'Expected https://<tenant>.sharepoint.com/…'),
+    });
+    if (isCancel(site)) {
+      cancel('Cancelled.');
+      return;
+    }
+    const pasted = await password({
+      message:
+        'Browser session cookie: open the site in your browser, DevTools → Network → any request to the site → Copy → Copy as cURL (bash), and paste it here (or paste only the Cookie header)',
+      validate: (v) => {
+        try {
+          parseCookieInput(v ?? '');
+          return undefined;
+        } catch (err) {
+          return (err as Error).message;
+        }
+      },
+    });
+    if (isCancel(pasted)) {
+      cancel('Cancelled.');
+      return;
+    }
+    await setSecret(SHAREPOINT_URL_ACCOUNT, site.trim());
+    await setSecret(SHAREPOINT_COOKIE_ACCOUNT, parseCookieInput(pasted));
+    outro('Stored in the OS keychain (only the FedAuth and rtFa cookies).');
+  }
+  const client = new SharePointClient(await loadSharePointAuth());
+  const me = await client.json<{ Title?: string; Email?: string }>(`${client.origin}/_api/web/currentuser?$select=Title,Email`);
+  console.log(`SharePoint OK: ${me.Title ?? '?'} <${me.Email ?? '?'}> on ${client.origin}`);
+}

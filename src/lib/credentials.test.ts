@@ -115,3 +115,22 @@ describe('credentials', () => {
     });
   });
 });
+
+describe('long secrets (Windows Credential Manager limit)', () => {
+  it('splits a long secret over several entries and reads it back', async () => {
+    const { getSecret, setSecret, removeSecret } = await import('./credentials.js');
+    const long = 'x'.repeat(2500) + 'end';
+    await setSecret('sharepoint:cookie', long);
+    expect(store.get(k('jirallm', 'sharepoint:cookie'))).toBe('jirallm-chunks:3');
+    expect([...store.values()].every((v) => v.length <= 1000)).toBe(true);
+    expect(await getSecret('sharepoint:cookie', 'NOPE')).toBe(long);
+
+    await setSecret('sharepoint:cookie', 'short');
+    expect(store.size).toBe(1);
+    expect(await getSecret('sharepoint:cookie', 'NOPE')).toBe('short');
+
+    await setSecret('sharepoint:cookie', long);
+    expect(await removeSecret('sharepoint:cookie')).toBe(true);
+    expect(store.size).toBe(0);
+  });
+});

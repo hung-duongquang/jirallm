@@ -100,15 +100,49 @@ export const __test = {
   },
 };
 
+/**
+ * Windows Credential Manager holds at most 2560 bytes per entry (1280 UTF-16 chars), less than a
+ * SharePoint FedAuth cookie. Longer secrets are split: the main entry holds a `chunks:<n>` marker
+ * and `<account>#1`…`#n` hold the parts.
+ */
+const SECRET_CHUNK = 1000;
+const CHUNK_MARKER = /^jirallm-chunks:(\d+)$/;
+
+function readEntry(keyring: KeyringModule, account: string): string | null {
+  try {
+    return new keyring.Entry(SERVICE, account).getPassword();
+  } catch {
+    return null; // NoEntry
+  }
+}
+
+function deleteEntry(keyring: KeyringModule, account: string): boolean {
+  try {
+    return new keyring.Entry(SERVICE, account).deletePassword();
+  } catch {
+    return false;
+  }
+}
+
+/** Removes the `#n` parts of a chunked secret (no-op for a plain one). */
+function deleteChunks(keyring: KeyringModule, account: string): void {
+  const marker = CHUNK_MARKER.exec(readEntry(keyring, account) ?? '');
+  if (!marker) return;
+  for (let i = 1; i <= Number(marker[1]); i++) deleteEntry(keyring, `${account}#${i}`);
+}
+
 /** Reads a non-Jira secret (e.g. `slack:token`) from the keychain, else from `envVar`. */
 export async function getSecret(account: string, envVar: string): Promise<string | undefined> {
   const keyring = await loadKeyring();
   if (keyring) {
-    try {
-      const value = new keyring.Entry(SERVICE, account).getPassword();
-      if (value) return value;
-    } catch {
-      // NoEntry → fall through to the environment
+    const value = readEntry(keyring, account);
+    const marker = CHUNK_MARKER.exec(value ?? '');
+    if (marker) {
+      const parts: string[] = [];
+      for (let i = 1; i <= Number(marker[1]); i++) parts.push(readEntry(keyring, `${account}#${i}`) ?? '');
+      if (parts.every(Boolean)) return parts.join('');
+    } else if (value) {
+      return value;
     }
   }
   return process.env[envVar] || undefined;
@@ -117,15 +151,21 @@ export async function getSecret(account: string, envVar: string): Promise<string
 export async function setSecret(account: string, value: string): Promise<void> {
   const keyring = await loadKeyring();
   if (!keyring) throw new Error('OS keychain (@napi-rs/keyring) is unavailable.');
-  new keyring.Entry(SERVICE, account).setPassword(value);
+  deleteChunks(keyring, account);
+  if (value.length <= SECRET_CHUNK) {
+    new keyring.Entry(SERVICE, account).setPassword(value);
+    return;
+  }
+  const count = Math.ceil(value.length / SECRET_CHUNK);
+  for (let i = 1; i <= count; i++) {
+    new keyring.Entry(SERVICE, `${account}#${i}`).setPassword(value.slice((i - 1) * SECRET_CHUNK, i * SECRET_CHUNK));
+  }
+  new keyring.Entry(SERVICE, account).setPassword(`jirallm-chunks:${count}`);
 }
 
 export async function removeSecret(account: string): Promise<boolean> {
   const keyring = await loadKeyring();
   if (!keyring) return false;
-  try {
-    return new keyring.Entry(SERVICE, account).deletePassword();
-  } catch {
-    return false;
-  }
+  deleteChunks(keyring, account);
+  return deleteEntry(keyring, account);
 }
