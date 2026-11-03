@@ -15,7 +15,7 @@ import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { existsSync, realpathSync } from 'node:fs';
-import { dirname, join, resolve, sep } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { unifiedDiff } from './diff.mjs';
@@ -289,8 +289,8 @@ async function listLibrary(outputDir) {
       })
   );
   const tickets = items.filter(Boolean).map((it) => ({ kind: 'ticket', ...it }));
-  const [pages, threads] = await Promise.all([listItems(outputDir, 'page'), listItems(outputDir, 'slack')]);
-  return [...tickets, ...pages, ...threads].sort((a, b) => b.modified.localeCompare(a.modified));
+  const [pages, threads, spPages] = await Promise.all([listItems(outputDir, 'page'), listItems(outputDir, 'slack'), listItems(outputDir, 'sharepoint')]);
+  return [...tickets, ...pages, ...threads, ...spPages].sort((a, b) => b.modified.localeCompare(a.modified));
 }
 
 // ---------- Confluence pages and Slack threads (exported next to the tickets) ----------
@@ -299,7 +299,10 @@ async function listLibrary(outputDir) {
 const ITEM_KINDS = {
   page: { folder: 'confluence', file: 'page.md' },
   slack: { folder: 'slack', file: 'thread.md' },
+  sharepoint: { folder: 'sharepoint', file: 'page.md' },
 };
+/** Kinds that keep the previous copy as .page.previous.md (so they have a diff). */
+const PAGE_KINDS = new Set(['page', 'sharepoint']);
 
 function itemDirFor(outputDir, kind, id) {
   const spec = ITEM_KINDS[kind];
@@ -328,14 +331,14 @@ async function listItems(outputDir, kind) {
       const [text, info, previousInfo] = await Promise.all([
         readFile(path, 'utf8').catch(() => null),
         stat(path).catch(() => null),
-        kind === 'page' ? stat(join(root, e.name, PREVIOUS_PAGE_FILE)).catch(() => null) : null,
+        PAGE_KINDS.has(kind) ? stat(join(root, e.name, PREVIOUS_PAGE_FILE)).catch(() => null) : null,
       ]);
       if (text === null) return null;
       const f = frontmatterFields(text);
       return {
         kind,
         id: e.name,
-        key: kind === 'page' ? 'Confluence' : `Slack${f.channel ? ` #${f.channel}` : ''}`,
+        key: kind === 'page' ? 'Confluence' : kind === 'sharepoint' ? `SharePoint${f.site ? ` ${f.site}` : ''}` : `Slack${f.channel ? ` #${f.channel}` : ''}`,
         title: f.title ?? text.match(/^# (.+)$/m)?.[1] ?? e.name,
         status: kind === 'slack' && f.messages ? `${f.messages} message${f.messages === 1 ? '' : 's'}` : f.version ? `v${f.version}` : '',
         url: f.url ?? '',
@@ -354,7 +357,7 @@ async function listItems(outputDir, kind) {
 
 const FILE_TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', pdf: 'application/pdf', json: 'application/json', txt: 'text/plain; charset=utf-8' };
 
-/** Exports one pasted Slack or Confluence link into the output dir. */
+/** Exports one pasted Slack, Confluence or SharePoint link into the output dir. */
 async function exportLink(body) {
   const url = String(body.url ?? '').trim();
   const outputDir = resolveOutputDir(body.dir);
@@ -363,11 +366,15 @@ async function exportLink(body) {
     const detail = `${t.messageCount} message(s)${t.newReplies ? `, ${t.newReplies} new` : ''}${t.fileCount ? `, ${t.fileCount} file(s)` : ''}`;
     return { kind: 'slack', id: t.dirName, title: t.title, detail, warnings: t.fileErrors };
   }
+  if (/^https:\/\/[\w-]+\.sharepoint\.com\//i.test(url)) {
+    const p = await lib.exportSharePointPage(url, { outputDir });
+    return { kind: 'sharepoint', id: basename(p.dir), title: p.title, detail: `${p.changed ? 'updated' : 'unchanged'}${p.imageCount ? `, ${p.imageCount} image(s)` : ''}`, warnings: p.imageErrors };
+  }
   if (/\/wiki\//.test(url)) {
     const p = await lib.exportConfluencePageByUrl(url, { org: defaultOrg(), outputDir });
     return { kind: 'page', id: p.dirName, title: p.title, detail: `${p.status}${p.attachmentCount ? `, ${p.attachmentCount} attachment(s)` : ''}`, warnings: [] };
   }
-  throw new HttpError(400, `Not a Slack message or Confluence page link: ${url}`);
+  throw new HttpError(400, `Not a Slack message, Confluence page or SharePoint page link: ${url}`);
 }
 
 function openInExplorer(target) {
@@ -463,11 +470,12 @@ async function handle(req, res) {
         return;
       }
       case 'GET /api/diff': {
-        // A ticket (key=) or a Confluence page (kind=page&id=).
+        // A ticket (key=) or a Confluence/SharePoint page (kind=page|sharepoint&id=).
         const outputDir = resolveOutputDir(url.searchParams.get('dir'));
-        const page = url.searchParams.get('kind') === 'page';
+        const kind = url.searchParams.get('kind');
+        const page = PAGE_KINDS.has(kind);
         const dir = page
-          ? itemDirFor(outputDir, 'page', url.searchParams.get('id')).dir
+          ? itemDirFor(outputDir, kind, url.searchParams.get('id')).dir
           : taskDirFor(outputDir, url.searchParams.get('key'));
         const previousFile = join(dir, page ? PREVIOUS_PAGE_FILE : PREVIOUS_FILE);
         if (!existsSync(previousFile)) {

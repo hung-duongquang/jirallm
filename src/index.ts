@@ -78,3 +78,5 @@ export type { QaReport, QaCase, Verdict, Template } from './lib/qaReport.js';
 export { exportConfluencePageByUrl } from './lib/pageExport.js';
 export { exportSlackThread, parseSlackUrl } from './lib/slack.js';
 export type { ExportedSlackThread } from './lib/slack.js';
+export { exportSharePointPage, parseSharePointPageUrl } from './lib/sharepoint.js';
+export type { ExportedSharePointPage } from './lib/sharepoint.js';

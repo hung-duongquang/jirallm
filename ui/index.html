@@ -229,7 +229,7 @@
       </div>
 
       <div id="paneKeys">
-        <textarea id="keys" placeholder="ZOD-3619 ZOD-3602&#10;or paste Jira, Confluence or Slack links" spellcheck="false"></textarea>
+        <textarea id="keys" placeholder="ZOD-3619 ZOD-3602&#10;or paste Jira, Confluence, Slack or SharePoint links" spellcheck="false"></textarea>
         <p class="hint" id="keyCount">Separate keys and links with spaces, commas or new lines.</p>
       </div>
 
@@ -259,6 +259,7 @@
         <button role="tab" data-kind="ticket" aria-selected="true">Jira</button>
         <button role="tab" data-kind="page" aria-selected="false">Confluence</button>
         <button role="tab" data-kind="slack" aria-selected="false">Slack</button>
+        <button role="tab" data-kind="sharepoint" aria-selected="false">SharePoint</button>
       </div>
       <input type="text" id="filter" placeholder="Filter by key or title" style="margin-top:8px">
       <ul id="library"></ul>
@@ -343,7 +344,7 @@ async function api(path, body) {
   if (!res.ok) throw new Error(data.error || res.statusText);
   return data;
 }
-const LINK_RE = /https:\/\/[\w-]+\.slack\.com\/archives\/[^\s,]+|https:\/\/[\w.-]+\/wiki\/[^\s,]+/gi;
+const LINK_RE = /https:\/\/[\w-]+\.slack\.com\/archives\/[^\s,]+|https:\/\/[\w-]+\.sharepoint\.com\/[^\s,]+|https:\/\/[\w.-]+\/wiki\/[^\s,]+/gi;
 function parseLinks(text) { return [...new Set(text.match(LINK_RE) || [])]; }
 // Keys outside Slack/Confluence links (a page slug like …/zod-1850-… is not a ticket).
 function parseKeys(text) { return [...new Set((text.replace(LINK_RE, ' ').toUpperCase().match(KEY_RE) || []))]; }
@@ -528,8 +529,10 @@ $('progress').onclick = (e) => {
   if (li) openTask(li.dataset.k, { as: 'diff' });
 };
 
-const linkKind = (url) => (/slack\.com/i.test(url) ? 'Slack' : 'Confluence');
-/** Exports pasted Slack/Confluence links one by one; returns the first exported item. */
+/** Confluence and SharePoint pages: titled rows, page.md, a diff after a changing update. */
+const isPage = (kind) => kind === 'page' || kind === 'sharepoint';
+const linkKind = (url) => (/slack\.com/i.test(url) ? 'Slack' : /sharepoint\.com/i.test(url) ? 'SharePoint' : 'Confluence');
+/** Exports pasted Slack/Confluence/SharePoint links one by one; returns the first exported item. */
 async function exportLinks(links) {
   const list = $('progress');
   list.innerHTML = links.map((l, i) => `<li data-l="${i}"><span class="key">${linkKind(l)}</span><span class="s">waiting</span></li>`).join('');
@@ -551,7 +554,7 @@ async function exportLinks(links) {
 $('export').onclick = async () => {
   if (exporting) { cancelExport(); return; }
   const keys = parseKeys($('keys').value), links = parseLinks($('keys').value);
-  if (!keys.length && !links.length) { selectTab(false); $('keys').focus(); toast('Enter a ticket key or a Slack/Confluence link'); return; }
+  if (!keys.length && !links.length) { selectTab(false); $('keys').focus(); toast('Enter a ticket key or a Slack, Confluence or SharePoint link'); return; }
   if (links.length) {
     $('export').disabled = true; $('export').textContent = `Exporting ${links.length} link(s)…`;
     let first;
@@ -609,7 +612,7 @@ async function loadLibrary() {
 }
 // Which kind the Exported list shows: Jira tickets, Confluence pages or Slack threads.
 let libKind = store.get('libKind', 'ticket');
-const KIND_EMPTY = { ticket: 'No tickets exported in this folder yet.', page: 'No Confluence pages yet. They come with tickets that link them, or paste a page link above.', slack: 'No Slack threads yet. Paste a Slack message link above.' };
+const KIND_EMPTY = { ticket: 'No tickets exported in this folder yet.', page: 'No Confluence pages yet. They come with tickets that link them, or paste a page link above.', slack: 'No Slack threads yet. Paste a Slack message link above.', sharepoint: 'No SharePoint pages yet. Paste a page link (…/SitePages/Page.aspx) above. Sign in once first with: jirallm sharepoint:auth' };
 function showKind(kind) {
   if (!KIND_EMPTY[kind] || kind === libKind) return;
   libKind = kind; store.set('libKind', kind); renderLibrary();
@@ -628,19 +631,20 @@ function renderLibrary() {
   for (const b of $('libTabs').querySelectorAll('button')) {
     const n = libraryItems.filter((it) => it.kind === b.dataset.kind).length;
     b.setAttribute('aria-selected', String(b.dataset.kind === libKind));
-    b.textContent = `${{ ticket: 'Jira', page: 'Confluence', slack: 'Slack' }[b.dataset.kind]}${n ? ` (${n})` : ''}`;
+    b.textContent = `${{ ticket: 'Jira', page: 'Confluence', slack: 'Slack', sharepoint: 'SharePoint' }[b.dataset.kind]}${n ? ` (${n})` : ''}`;
   }
   $('updateAll').title = {
     ticket: 'Re-export these tickets from Jira with the options above (with Linked issues on, also the tickets they mention)',
     page: 'Re-export these Confluence pages',
     slack: 'Re-read these Slack threads (new replies, edits)',
+    sharepoint: 'Re-export these SharePoint pages',
   }[libKind];
   // Within a tab the kind is implied: a Slack row shows its channel, a page row only its title.
-  const label = (it) => (it.kind === 'slack' ? it.key.replace(/^Slack\s*/, '') : it.kind === 'page' ? it.title : it.key);
+  const label = (it) => (it.kind === 'slack' ? it.key.replace(/^Slack\s*/, '') : isPage(it.kind) ? it.title : it.key);
   $('library').innerHTML = items.length ? items.map((it) => `
-    <li><button ${it.kind === 'ticket' ? `data-key="${esc(it.key)}"` : `data-kind="${esc(it.kind)}" data-id="${esc(it.id)}"`} aria-current="${isOpen(it)}"${it.kind === 'page' ? ` class="page" title="${esc(it.title)}"` : ''}>
+    <li><button ${it.kind === 'ticket' ? `data-key="${esc(it.key)}"` : `data-kind="${esc(it.kind)}" data-id="${esc(it.id)}"`} aria-current="${isOpen(it)}"${isPage(it.kind) ? ` class="page" title="${esc(it.title)}"` : ''}>
       <span class="key">${esc(label(it))}</span><span class="meta">${changedMark(it)}${esc(it.status)} · ${ago(it.modified)}${it.docs?.length ? ` · <span title="Local notes: ${esc(it.docs.join(', '))}">${esc(it.docs.map(docLabel).join(', ').toLowerCase())}</span>` : ''}</span>
-      ${it.kind === 'page' ? '' : `<span class="title">${esc(it.title)}</span>`}
+      ${isPage(it.kind) ? '' : `<span class="title">${esc(it.title)}</span>`}
     </button></li>`).join('') : `<li class="hint" style="padding:8px">${ofKind.length ? 'No match.' : KIND_EMPTY[libKind]}</li>`;
   if (!exporting) {
     $('updateAll').textContent = updateLabel();
@@ -710,10 +714,10 @@ async function openItem(kind, id, { keepTab = false } = {}) {
     // Only a changed Confluence page has an earlier copy; a thread marks its new replies instead.
     const [{ markdown }, diff] = await Promise.all([
       api(`/api/item?${q}`),
-      kind === 'page' && it?.changedAt ? api(`/api/diff?${q}`).catch(() => null) : null,
+      isPage(kind) && it?.changedAt ? api(`/api/diff?${q}`).catch(() => null) : null,
     ]);
     if (!keepTab) showKind(kind);
-    currentItem = { kind, id, key: it?.key ?? (kind === 'page' ? 'Confluence' : 'Slack'), q, file: kind === 'page' ? 'page.md' : 'thread.md' };
+    currentItem = { kind, id, key: it?.key ?? ({ page: 'Confluence', sharepoint: 'SharePoint' }[kind] ?? 'Slack'), q, file: isPage(kind) ? 'page.md' : 'thread.md' };
     current = null; currentMarkdown = markdown; currentDiff = diff; currentDocs = []; docText = {};
     if (view !== 'source' && !(view === 'diff' && diff)) view = 'rendered';
     renderPreview(); renderLibrary();
