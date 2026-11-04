@@ -1808,8 +1808,14 @@ program
   .option('--output-dir <path>', 'Export directory', './jira-export')
   .option('--unseen', 'Only entries not printed by an earlier --unseen call (prints nothing when none; for session-start hooks)')
   .option('--max <n>', 'Line cap (default 20)')
-  .action((opts: ChangesOptions) => {
-    try { runChanges(opts); } catch (err) { exitOnError(err); }
+  .option('--follow [seconds]', "Keep running: every N seconds (default 30) print what `watch` logged since, as --unseen does (for an agent's background monitor)")
+  .addHelpText('after', `
+Examples:
+  $ jirallm changes --unseen
+  $ jirallm changes --follow   # Claude Code: run it under the Monitor tool; each change becomes an event
+`)
+  .action(async (opts: ChangesOptions) => {
+    try { await runChanges(opts); } catch (err) { exitOnError(err); }
   });
 
 program

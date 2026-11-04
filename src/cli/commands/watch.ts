@@ -313,7 +313,7 @@ export async function slackChanges(
   return changes;
 }
 
-export type ChangesOptions = { outputDir?: string; unseen?: boolean; max?: string };
+export type ChangesOptions = { outputDir?: string; unseen?: boolean; max?: string; follow?: string | boolean };
 
 /** Splits CHANGES.md into its `## <stamp>` entries, oldest first. */
 export function changeEntries(md: string): { stamp: string; lines: string[] }[] {
@@ -326,19 +326,41 @@ export function changeEntries(md: string): { stamp: string; lines: string[] }[] 
 /**
  * Prints the logged changes, newest last, capped at `--max` lines. With `--unseen` only entries
  * after the last `--unseen` call are printed (nothing at all when there are none), so a
- * session-start hook adds context only when something moved.
+ * session-start hook adds context only when something moved. `--follow [seconds]` keeps going:
+ * every N seconds (default 30) it prints what `watch` appended since, as `--unseen` does, so an
+ * agent's background monitor (each stdout line is an event) hears about it mid-session.
  */
-export function runChanges(opts: ChangesOptions): void {
+export async function runChanges(opts: ChangesOptions): Promise<void> {
   const outputDir = opts.outputDir ?? './jira-export';
-  const file = path.join(outputDir, CHANGES_FILE);
-  if (!existsSync(file)) return;
   const max = opts.max === undefined ? 20 : Number(opts.max);
   if (!Number.isInteger(max) || max < 1) throw new Error('--max must be a positive integer.');
+  if (opts.follow === undefined || opts.follow === false) {
+    const report = changesReport(outputDir, !!opts.unseen, max);
+    if (report) console.log(report);
+    return;
+  }
+  const seconds = opts.follow === true ? 30 : Number(opts.follow);
+  if (!(seconds >= 1)) throw new Error('--follow takes a number of seconds.');
+  for (;;) {
+    const report = changesReport(outputDir, true, max);
+    if (report) console.log(report);
+    await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+  }
+}
+
+/**
+ * The compact change report (header, then one line per item with the latest state), or null when
+ * there is nothing to show. With `unseen` only entries after the `.changes.seen` marker count, and
+ * the marker moves past them.
+ */
+export function changesReport(outputDir: string, unseen: boolean, max: number): string | null {
+  const file = path.join(outputDir, CHANGES_FILE);
+  if (!existsSync(file)) return null;
   const marker = path.join(outputDir, '.changes.seen');
-  const seen = opts.unseen && existsSync(marker) ? readFileSync(marker, 'utf-8').trim() : '';
+  const seen = unseen && existsSync(marker) ? readFileSync(marker, 'utf-8').trim() : '';
   const entries = changeEntries(readFileSync(file, 'utf-8')).filter((e) => e.stamp > seen);
-  if (entries.length === 0) return;
-  if (opts.unseen) writeFileSync(marker, entries[entries.length - 1].stamp);
+  if (entries.length === 0) return null;
+  if (unseen) writeFileSync(marker, entries[entries.length - 1].stamp);
 
   // One line per item, latest state wins: a ticket that changed twice is listed once.
   const latest = new Map<string, string>();
@@ -351,10 +373,11 @@ export function runChanges(opts: ChangesOptions): void {
   }
   const lines = [...latest.values()];
   const shown = lines.slice(-max);
-  const header = opts.unseen ? `Jira/Confluence/Slack/PR changes since ${seen || 'the start of the log'}` : 'Jira/Confluence/Slack/PR changes';
-  console.log(`${header} (re-exported to ${outputDir}; diff task.md with .task.previous.md for details):`);
-  if (shown.length < lines.length) console.log(`- … ${lines.length - shown.length} older line(s) in ${file}`);
-  console.log(shown.join('\n'));
+  const header = unseen ? `Jira/Confluence/Slack/PR changes since ${seen || 'the start of the log'}` : 'Jira/Confluence/Slack/PR changes';
+  const out = [`${header} (re-exported to ${outputDir}; diff task.md with .task.previous.md for details):`];
+  if (shown.length < lines.length) out.push(`- … ${lines.length - shown.length} older line(s) in ${file}`);
+  out.push(...shown);
+  return out.join('\n');
 }
 
 /** Windows Task Scheduler entry running `jirallm watch` every N minutes from this directory, without a console window. */

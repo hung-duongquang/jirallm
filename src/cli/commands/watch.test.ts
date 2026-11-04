@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { changeEntries, commentsChangedSince, describeChange, frontmatter, prChanges, slackChanges } from './watch.js';
+import { changeEntries, changesReport, commentsChangedSince, describeChange, frontmatter, prChanges, slackChanges } from './watch.js';
 import type { SlackClient } from '../../lib/slack.js';
 
 const task = (status: string, comments: string) =>
@@ -159,5 +159,21 @@ describe('slackChanges', () => {
     writeFileSync(path.join(dir, 'slack', 'c1-1793000000000100', 'thread.md'), thread('2026-11-01T10:00:00Z', '1793000500.000100'));
     const client = { call: async () => ({ ok: true, messages: [{ ts: '1793000000.000100' }] }) } as unknown as SlackClient;
     expect(await slackChanges(dir, false, client, Date.parse('2026-11-02T10:00:00Z'))).toEqual([]);
+  });
+});
+
+describe('changesReport', () => {
+  it('with unseen, reports each entry once and moves the marker, so a follow loop never repeats', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'changes-'));
+    const file = path.join(dir, 'CHANGES.md');
+    writeFileSync(file, '\n## 2026-11-04 10:00\n\n- ZOD-1: status: To Do → In Progress\n');
+    expect(changesReport(dir, true, 20)).toContain('- ZOD-1: status: To Do → In Progress (2026-11-04 10:00)');
+    expect(changesReport(dir, true, 20)).toBeNull();
+    writeFileSync(file, '\n## 2026-11-04 10:00\n\n- ZOD-1: status: To Do → In Progress\n\n## 2026-11-04 10:05\n\n- #12 ZOD-2: CI failed\n');
+    const next = changesReport(dir, true, 20)!;
+    expect(next).toContain('since 2026-11-04 10:00');
+    expect(next).toContain('- #12 ZOD-2: CI failed (2026-11-04 10:05)');
+    expect(next).not.toContain('ZOD-1');
+    expect(changesReport(dir, false, 20)).toContain('ZOD-1');
   });
 });
