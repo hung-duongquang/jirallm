@@ -454,6 +454,33 @@ Native binaries (via [`@napi-rs/keyring`](https://www.npmjs.com/package/@napi-rs
 - **Windows** (x64, arm64, ia32) — fully supported. Tokens stored in Windows Credential Manager. `ffmpeg` must be on `PATH` for video frame extraction.
 - **FreeBSD** (x64) — keychain works; other features untested.
 
+## Privacy and network traffic
+
+jirallm runs on your own machine. It has no server, account or telemetry.
+
+**Where it connects**
+
+| Destination | When | What is sent |
+| --- | --- | --- |
+| Your Jira site (`base_url`) | every export / command | your e-mail + API token, the issue keys and JQL you ask for |
+| Your Confluence sites (`confluence_urls`, default the Jira site) | exporting linked pages, `page*` commands | the same Jira token, page ids |
+| `slack.com/api` | only `slack*` commands, after `slack:auth` | your Slack token, the channel/thread you ask for |
+| Your SharePoint site | only `sharepoint*` commands, after `sharepoint:auth` | your browser session cookies, the page or query you ask for |
+| `api.github.com` (via `gh`) | only `pr-status`, `watch --prs`, PR-stack export | your `gh` login, PR numbers |
+| `registry.npmjs.org/jirallm/latest` | update check, at most once per 24 h | only the package name (plus your IP, like any HTTP request) |
+
+Nothing else is contacted. Jira/Confluence redirects are only followed to the same host or to Atlassian hosts (attachment media). The `Authorization` and `Cookie` headers are dropped as soon as the origin changes, so the token never leaves your own site.
+
+**Update check.** Every CLI run may start a background check, handled by [`update-notifier`](https://github.com/sindresorhus/update-notifier). It runs at most once a day and asks the public npm registry for the latest `jirallm` version. No issue data, tokens or config are sent. The last-check time is stored in `~/.config/configstore/update-notifier-jirallm.json`. To turn the check off, set `NO_UPDATE_NOTIFIER=1` or pass `--no-update-notifier`. It is also off in CI and with `--json`.
+
+**Where data is stored**
+
+- Tokens live in the OS keychain (macOS Keychain, Windows Credential Manager, Secret Service), never in config files.
+- Exports (`task.md`, attachments, video frames, Confluence/Slack/SharePoint pages) are written only to the output directory (default `./jira-export`). Video frames are extracted locally with `ffmpeg`.
+- `jirallm ui` listens on `127.0.0.1` only. It accepts browser calls only from its own address and the hosted page. The hosted page (GitHub Pages) is static: ticket data goes from your machine to your browser and never to that website.
+
+**Using exports with an AI assistant.** jirallm itself sends nothing to an LLM. When you give an export to Claude Code or another assistant, that content (descriptions, comments, attachments, screenshots, video frames) goes to the assistant's provider. Tickets can contain personal, patient or customer data. Check that your organisation allows that data to be shared with your assistant before you do it.
+
 ## Contributing
 
 Issues and pull requests are welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md) for development setup and guidelines, and please follow our [Code of Conduct](./CODE_OF_CONDUCT.md).

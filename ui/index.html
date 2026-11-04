@@ -1106,6 +1106,12 @@ function renderSetup(problem, offline) {
           </div>
         </li>
       </ol>
+      <p class="hint"><b>Privacy:</b> this page is static and receives no ticket data. The helper only talks to your own
+        Jira/Confluence (and Slack, SharePoint or GitHub if you set those up). Its daily update check asks
+        <code>registry.npmjs.org</code> for the latest version and sends nothing else (turn it off with <code>NO_UPDATE_NOTIFIER=1</code>).
+        Exports stay in your output folder. Tickets can hold patient or customer data, so check your organisation's rules
+        before giving them to an AI assistant.
+        <a href="https://github.com/hung-duongquang/jirallm#privacy-and-network-traffic" target="_blank" rel="noopener">Details</a></p>
       <p class="hint">Optional, for PR stacks: install the <a href="https://cli.github.com" target="_blank" rel="noopener">GitHub CLI</a> and run <code>gh auth login</code>.
         Safari blocks pages from reaching your own computer; use Chrome, Edge or Firefox.</p>
 
