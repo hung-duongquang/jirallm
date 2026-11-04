@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { realpathSync } from 'node:fs';
 import { Command, InvalidArgumentError, Option } from 'commander';
-import updateNotifier from 'update-notifier';
+import { checkForUpdates } from './updateCheck.js';
 import { JiraExporter } from '../lib/exporter.js';
 import { listOrgs, loadProfile } from '../lib/config.js';
 import { resolveOrgInteractive } from './resolveOrg.js';
@@ -344,14 +344,7 @@ const pkg = createRequire(import.meta.url)('../../package.json') as {
 
 program.name(pkg.name).description(pkg.description).version(pkg.version);
 
-const notifier = updateNotifier({ pkg, updateCheckInterval: 1000 * 60 * 60 * 24 });
-if (!process.argv.includes('--json')) {
-  notifier.notify({
-    defer: true,
-    isGlobal: true,
-    message: `Update available {currentVersion} → {latestVersion}\nRun \`${pkg.name} upgrade\` to update.`,
-  });
-}
+checkForUpdates(pkg.version);
 
 function addExportOptions(cmd: Command): Command {
   return cmd
@@ -632,7 +625,7 @@ Examples:
 
 program
   .command('upgrade')
-  .description('Upgrade jirallm to the latest version (auto-detects npm/pnpm/yarn/Homebrew)')
+  .description('Upgrade jirallm to the latest release (reinstalls from the GitHub release branch)')
   .option('-y, --yes', 'Skip confirmation prompt')
   .option('--check', 'Print whether an update is available without installing (exits non-zero if outdated)')
   .option('--json', 'Output JSON instead of human-readable')

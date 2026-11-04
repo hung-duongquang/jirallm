@@ -2,6 +2,9 @@ import { createRequire } from 'node:module';
 import { confirm, intro, isCancel, note, outro } from '@clack/prompts';
 import { detectJsPackageManagerFromUserAgent } from '../../lib/platform.js';
 import { runInteractive } from '../../lib/runCommand.js';
+import { fetchLatestVersion, isNewer, RELEASE_SOURCE } from '../updateCheck.js';
+
+export { fetchLatestVersion };
 
 export type InstallMethod =
   | { kind: 'npx' }
@@ -19,31 +22,17 @@ export function detectInstallMethod(
   return { kind: detectJsPackageManagerFromUserAgent(userAgent) };
 }
 
-export function upgradeCommandFor(method: InstallMethod, packageName: string): string | undefined {
+export function upgradeCommandFor(method: InstallMethod, source: string = RELEASE_SOURCE): string | undefined {
   switch (method.kind) {
     case 'pnpm':
-      return `pnpm add -g ${packageName}@latest`;
+      return `pnpm add -g ${source}`;
     case 'yarn':
-      return `yarn global add ${packageName}@latest`;
+      return `yarn global add ${source}`;
     case 'npm':
-      return `npm install -g ${packageName}@latest`;
+      return `npm install -g ${source}`;
     default:
       return undefined;
   }
-}
-
-type RegistryResponse = { version: string };
-
-export async function fetchLatestVersion(packageName: string): Promise<string> {
-  const res = await fetch(`https://registry.npmjs.org/${packageName}/latest`, {
-    headers: { accept: 'application/json' },
-  });
-  if (!res.ok) {
-    throw new Error(`Registry responded ${res.status} ${res.statusText}`);
-  }
-  const json = (await res.json()) as RegistryResponse;
-  if (!json.version) throw new Error('Registry response missing "version" field');
-  return json.version;
 }
 
 function readPackageMeta(): { name: string; version: string } {
@@ -57,8 +46,8 @@ export async function runUpgrade(opts: UpgradeOpts = {}): Promise<void> {
   const method = detectInstallMethod();
 
   if (opts.check) {
-    const latest = await fetchLatestVersion(name);
-    const outdated = latest !== version;
+    const latest = await fetchLatestVersion();
+    const outdated = isNewer(latest, version);
     if (opts.json) {
       console.log(JSON.stringify({ current: version, latest, outdated }));
     } else {
@@ -82,7 +71,7 @@ export async function runUpgrade(opts: UpgradeOpts = {}): Promise<void> {
     return;
   }
 
-  const cmd = upgradeCommandFor(method, name);
+  const cmd = upgradeCommandFor(method);
   if (!cmd) {
     console.error(`Could not determine an upgrade command for install method "${method.kind}".`);
     process.exit(1);

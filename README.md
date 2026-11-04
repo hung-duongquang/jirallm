@@ -40,7 +40,14 @@ Setup guide for colleagues: <https://hung-duongquang.github.io/jirallm/?setup>
 
 ### Updating
 
-Run the install command again. Do not use `jirallm upgrade`: it installs the upstream `jirallm` package from npm, which lacks this project's web UI and commands.
+jirallm checks the release branch once a day in the background and prints a notice on the next run. To upgrade:
+
+```bash
+jirallm upgrade           # reinstalls from github:hung-duongquang/jirallm#release (npm / pnpm / yarn)
+jirallm upgrade --check   # only report whether a newer release exists
+```
+
+Running the install command again does the same.
 
 ## Configuration
 
@@ -458,11 +465,11 @@ jirallm runs on your own machine. It has no server, account or telemetry.
 | `slack.com/api` | only `slack*` commands, after `slack:auth` | your Slack token, the channel/thread you ask for |
 | Your SharePoint site | only `sharepoint*` commands, after `sharepoint:auth` | your browser session cookies, the page or query you ask for |
 | `api.github.com` (via `gh`) | only `pr-status`, `watch --prs`, PR-stack export | your `gh` login, PR numbers |
-| `registry.npmjs.org/jirallm/latest` | update check, at most once per 24 h | only the package name (plus your IP, like any HTTP request) |
+| `raw.githubusercontent.com/hung-duongquang/jirallm/release/package.json` | update check, at most once per 24 h | a plain GET, no data (only your IP, like any HTTP request) |
 
 Nothing else is contacted. Jira/Confluence redirects are only followed to the same host or to Atlassian hosts (attachment media). The `Authorization` and `Cookie` headers are dropped as soon as the origin changes, so the token never leaves your own site.
 
-**Update check.** Every CLI run may start a background check, handled by [`update-notifier`](https://github.com/sindresorhus/update-notifier). It runs at most once a day and asks the public npm registry for the latest `jirallm` version. No issue data, tokens or config are sent. The last-check time is stored in `~/.config/configstore/update-notifier-jirallm.json`. To turn the check off, set `NO_UPDATE_NOTIFIER=1` or pass `--no-update-notifier`. It is also off in CI and with `--json`.
+**Update check.** At most once a day, a CLI run starts a small detached background process. It reads the version from this repo's `release` branch on GitHub and stores it in `update-check.json`, next to `config.toml`. No issue data, tokens, config or identifiers are sent. To turn it off, set `NO_UPDATE_NOTIFIER=1`. It is also off in CI, with `--json`, and when output is not a terminal.
 
 **Where data is stored**
 

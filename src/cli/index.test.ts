@@ -106,9 +106,7 @@ vi.mock('../lib/config.js', async () => {
 vi.mock('./resolveOrg.js', () => ({
   resolveOrgInteractive: (...a: unknown[]) => resolveOrgInteractiveMock(...a),
 }));
-vi.mock('update-notifier', () => ({
-  default: () => ({ notify: vi.fn() }),
-}));
+vi.mock('./updateCheck.js', () => ({ checkForUpdates: vi.fn() }));
 
 import { buildProgram, dedupeIssueKeys } from './index.js';
 

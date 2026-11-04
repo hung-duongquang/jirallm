@@ -1093,7 +1093,7 @@ function renderSetup(problem, offline) {
         in your OS keychain by the helper and is never sent to this website.</p>
       <ol>
         <li class="${offline ? '' : 'done'}"><b>Install the helper</b> (once; needs Node.js 20+):${code(INSTALL_CMD)}
-          <span class="hint">To update later, run the same command again. <code>jirallm upgrade</code> would switch to the npm release, which has no web UI.</span></li>
+          <span class="hint">To update later, run the same command again. <code>jirallm upgrade</code> does the same.</span></li>
         <li><b>Add your Jira token.</b>
           <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noopener">Create an API token</a>,
           then run the wizard and enter ${jira ? `<code>${esc(jira)}</code>` : 'your Jira URL'}, your e-mail and the token:${code('jirallm init')}</li>
@@ -1107,8 +1107,8 @@ function renderSetup(problem, offline) {
         </li>
       </ol>
       <p class="hint"><b>Privacy:</b> this page is static and receives no ticket data. The helper only talks to your own
-        Jira/Confluence (and Slack, SharePoint or GitHub if you set those up). Its daily update check asks
-        <code>registry.npmjs.org</code> for the latest version and sends nothing else (turn it off with <code>NO_UPDATE_NOTIFIER=1</code>).
+        Jira/Confluence (and Slack, SharePoint or GitHub if you set those up). Its daily update check reads the latest version
+        from this project's GitHub release branch and sends nothing else (turn it off with <code>NO_UPDATE_NOTIFIER=1</code>).
         Exports stay in your output folder. Tickets can hold patient or customer data, so check your organisation's rules
         before giving them to an AI assistant.
         <a href="https://github.com/hung-duongquang/jirallm#privacy-and-network-traffic" target="_blank" rel="noopener">Details</a></p>

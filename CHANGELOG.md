@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Own repository (hung-duongquang/jirallm, no longer a fork). The daily update check and `jirallm upgrade`
+  use the GitHub `release` branch instead of the upstream npm package; `update-notifier` is removed.
+  `NO_UPDATE_NOTIFIER=1` still turns the check off. README documents privacy and network traffic.
+
 ### Added
 
 - Linked Confluence pages are exported with their issues (on by default; `--no-confluence` or the

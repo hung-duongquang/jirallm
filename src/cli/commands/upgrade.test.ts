@@ -70,34 +70,34 @@ describe('detectInstallMethod', () => {
 
 describe('upgradeCommandFor', () => {
   it.each([
-    ['npm', 'npm install -g jirallm@latest'],
-    ['pnpm', 'pnpm add -g jirallm@latest'],
-    ['yarn', 'yarn global add jirallm@latest'],
+    ['npm', 'npm install -g github:hung-duongquang/jirallm#release'],
+    ['pnpm', 'pnpm add -g github:hung-duongquang/jirallm#release'],
+    ['yarn', 'yarn global add github:hung-duongquang/jirallm#release'],
   ] as const)('produces %s command', (kind, expected) => {
-    expect(upgradeCommandFor({ kind }, 'jirallm')).toBe(expected);
+    expect(upgradeCommandFor({ kind })).toBe(expected);
   });
 
   it('returns undefined for non-installable methods', () => {
-    expect(upgradeCommandFor({ kind: 'npx' }, 'jirallm')).toBeUndefined();
-    expect(upgradeCommandFor({ kind: 'homebrew' }, 'jirallm')).toBeUndefined();
+    expect(upgradeCommandFor({ kind: 'npx' })).toBeUndefined();
+    expect(upgradeCommandFor({ kind: 'homebrew' })).toBeUndefined();
   });
 });
 
 describe('fetchLatestVersion', () => {
-  it('returns version from registry', async () => {
+  it('returns version from the release branch', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ version: '9.9.9' }), { status: 200 })
     );
-    await expect(fetchLatestVersion('jirallm')).resolves.toBe('9.9.9');
+    await expect(fetchLatestVersion()).resolves.toBe('9.9.9');
     expect(fetchSpy).toHaveBeenCalledWith(
-      'https://registry.npmjs.org/jirallm/latest',
+      'https://raw.githubusercontent.com/hung-duongquang/jirallm/release/package.json',
       expect.any(Object)
     );
   });
 
   it('throws on non-OK response', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('nope', { status: 500, statusText: 'err' }));
-    await expect(fetchLatestVersion('jirallm')).rejects.toThrow(/500/);
+    await expect(fetchLatestVersion()).rejects.toThrow(/500/);
   });
 });
 
@@ -134,21 +134,21 @@ describe('runUpgrade', () => {
     setEnv('/usr/local/lib/node_modules/jirallm/dist/cli/index.js', 'npm/10');
     runInteractiveMock.mockResolvedValue(0);
     await runUpgrade({ yes: true });
-    expect(runInteractiveMock).toHaveBeenCalledWith('npm install -g jirallm@latest');
+    expect(runInteractiveMock).toHaveBeenCalledWith('npm install -g github:hung-duongquang/jirallm#release');
   });
 
   it('pnpm global install with --yes: runs pnpm command', async () => {
     setEnv('/usr/local/lib/node_modules/jirallm/dist/cli/index.js', 'pnpm/9');
     runInteractiveMock.mockResolvedValue(0);
     await runUpgrade({ yes: true });
-    expect(runInteractiveMock).toHaveBeenCalledWith('pnpm add -g jirallm@latest');
+    expect(runInteractiveMock).toHaveBeenCalledWith('pnpm add -g github:hung-duongquang/jirallm#release');
   });
 
   it('yarn global install with --yes: runs yarn command', async () => {
     setEnv('/usr/local/lib/node_modules/jirallm/dist/cli/index.js', 'yarn/1.22');
     runInteractiveMock.mockResolvedValue(0);
     await runUpgrade({ yes: true });
-    expect(runInteractiveMock).toHaveBeenCalledWith('yarn global add jirallm@latest');
+    expect(runInteractiveMock).toHaveBeenCalledWith('yarn global add github:hung-duongquang/jirallm#release');
   });
 
   it('--check up-to-date: prints versions, does not spawn, does not exit', async () => {
