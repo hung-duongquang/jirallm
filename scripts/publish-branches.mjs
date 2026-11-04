@@ -1,4 +1,4 @@
-// Publishes two generated branches to a remote (default: `fork`), without touching the
+// Publishes two generated branches to a remote (default: `origin`), without touching the
 // working tree or the current branch:
 //
 //   release   - the built package (dist/, ui/, package.json, README.md, LICENSE) plus the Claude Code
@@ -13,7 +13,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } 
 import { tmpdir } from 'node:os';
 import { join, relative, sep } from 'node:path';
 
-const remote = process.argv[2] ?? 'fork';
+const remote = process.argv[2] ?? 'origin';
 const tmp = mkdtempSync(join(tmpdir(), 'jirallm-publish-'));
 const indexFile = join(tmp, 'index');
 const env = { ...process.env, GIT_INDEX_FILE: indexFile };

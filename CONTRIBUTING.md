@@ -24,7 +24,7 @@ Prerequisites:
 Clone and install:
 
 ```bash
-git clone https://github.com/doryski/jirallm.git
+git clone https://github.com/hung-duongquang/jirallm.git
 cd jirallm
 pnpm install
 ```

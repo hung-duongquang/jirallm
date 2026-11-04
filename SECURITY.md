@@ -2,7 +2,7 @@
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in `jirallm`, please **do not** open a public issue. Instead, report it privately via [GitHub Security Advisories](https://github.com/doryski/jirallm/security/advisories/new).
+If you discover a security vulnerability in `jirallm`, please **do not** open a public issue. Instead, report it privately via [GitHub Security Advisories](https://github.com/hung-duongquang/jirallm/security/advisories/new).
 
 You will receive a response within a reasonable timeframe. If the issue is confirmed, a patch will be released as soon as possible.
 

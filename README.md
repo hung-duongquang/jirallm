@@ -1,7 +1,6 @@
 # jirallm
 
-[![CI](https://github.com/doryski/jirallm/actions/workflows/ci.yml/badge.svg)](https://github.com/doryski/jirallm/actions/workflows/ci.yml)
-[![npm version](https://img.shields.io/npm/v/jirallm)](https://www.npmjs.com/package/jirallm)
+[![CI](https://github.com/hung-duongquang/jirallm/actions/workflows/ci.yml/badge.svg)](https://github.com/hung-duongquang/jirallm/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org/)
 
@@ -33,23 +32,15 @@ It exists because every team that uses Jira + LLMs ends up writing the same brit
 ## Installation
 
 ```bash
-# Global CLI
-npm install -g jirallm
-# or
-pnpm add -g jirallm
-
-# As a library inside a project
-pnpm add jirallm
+# Global CLI (built release branch, includes the web UI and the Claude Code plugin files)
+npm install -g github:hung-duongquang/jirallm#release
 ```
+
+Setup guide for colleagues: <https://hung-duongquang.github.io/jirallm/?setup>
 
 ### Updating
 
-`jirallm` checks for new versions once a day in the background and prints a notice on the next invocation. To upgrade:
-
-```bash
-jirallm upgrade           # auto-detects npm / pnpm / yarn / Homebrew
-jirallm upgrade --check   # just report whether an update is available
-```
+Run the install command again. Do not use `jirallm upgrade`: it installs the upstream `jirallm` package from npm, which lacks this project's web UI and commands.
 
 ## Configuration
 
@@ -491,7 +482,7 @@ Found a vulnerability? Please follow the disclosure process in [SECURITY.md](./S
 
 ## License
 
-MIT — see [LICENSE](./LICENSE). Authored by [Dominik Rycharski](https://github.com/doryski).
+MIT — see [LICENSE](./LICENSE). Based on [Doryski/jirallm](https://github.com/Doryski/jirallm) by [Dominik Rycharski](https://github.com/Doryski). Upstream changes are still merged in regularly.
 
 ### Third-party tools
 
