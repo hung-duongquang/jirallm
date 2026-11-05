@@ -128,12 +128,23 @@ try {
       $e = $x.e
       if ($x.kind -eq 'find') {
         if (-not $DryRun) {
+          # Only the part that differs is rewritten (common prefix and suffix stay), so mixed formatting
+          # in a match survives: "Presenter: Hung" -> "Presenter: Hung Duong" only inserts " Duong".
+          $a = [string]$e.find; $b = [string]$e.replace
+          $pre = 0; while ($pre -lt $a.Length -and $pre -lt $b.Length -and $a[$pre] -ceq $b[$pre]) { $pre++ }
+          $suf = 0; while ($suf -lt ($a.Length - $pre) -and $suf -lt ($b.Length - $pre) -and $a[$a.Length - 1 - $suf] -ceq $b[$b.Length - 1 - $suf]) { $suf++ }
+          $mid = $b.Substring($pre, $b.Length - $pre - $suf)
+          $cut = $a.Length - $pre - $suf
           foreach ($sh in $x.shapes) {
             $tr = $sh.TextFrame.TextRange; $guard = 0; $after = 0
             while ($guard -lt 200) {
-              $r = $tr.Replace($e.find, $e.replace, $after)
-              if ($null -eq $r) { break }
-              $after = $r.Start - 1 + $r.Length; $guard++
+              # Find(FindWhat, After, MatchCase = true, WholeWords = false)
+              $f = $tr.Find($a, $after, -1, 0)
+              if ($null -eq $f) { break }
+              $start = $f.Start
+              if ($cut -gt 0) { $tr.Characters($start + $pre, $cut).Text = $mid }
+              elseif ($mid) { if ($pre -gt 0) { $tr.Characters($start + $pre - 1, 1).InsertAfter($mid) | Out-Null } else { $tr.Characters($start, 1).InsertBefore($mid) | Out-Null } }
+              $after = $start - 1 + $b.Length; $guard++
             }
           }
         }
