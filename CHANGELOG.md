@@ -8,6 +8,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `jirallm sharepoint:edit <url>` changes text in a PowerPoint deck on SharePoint: a shape (`--shape`/`--text`),
+  the speaker notes (`--notes`), find/replace, or a JSON list (`--edits`). PowerPoint opens the deck in a
+  window and saves to SharePoint (a deck you have open is edited in that window), then the deck is reopened
+  and every change is read back. Formatting per paragraph is kept; `--dry-run` changes nothing.
+  `jirallm sharepoint` output shows shape names as `<!-- TextBox 18 -->`.
 - `jirallm sharepoint <url>` reads Office documents (PowerPoint, Word, Excel) from sharing links, file paths
   and Doc.aspx links through the local Office apps with your own sign-in (Windows + Microsoft 365, no cookie).
   `--output-dir` writes `document.md` and the original file (`--no-copy` skips it).

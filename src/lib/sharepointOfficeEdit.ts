@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { OFFICE_NOT_SUPPORTED, parseOfficeLink } from './sharepointOffice.js';
+import { OFFICE_NOT_SUPPORTED, parseOfficeLink, type Raw } from './sharepointOffice.js';
 
 /**
  * Edits a PowerPoint deck on SharePoint in place through PowerPoint (COM), with the user's own
@@ -23,7 +23,7 @@ export type EditResult = { slide: number | null; target: string; before: string;
 export function validateEdits(input: unknown): SlideEdit[] {
   const list = Array.isArray(input) ? input : [input];
   if (!list.length) throw new Error('No edits given.');
-  return list.map((e: any, i) => {
+  return list.map((e: Raw, i) => {
     const where = `edit ${i + 1}`;
     const slide = e?.slide === undefined || e?.slide === null ? undefined : Number(e.slide);
     if (slide !== undefined && (!Number.isInteger(slide) || slide < 1)) throw new Error(`${where}: slide must be a slide number (1, 2, …)`);
@@ -192,7 +192,7 @@ export async function editPowerPoint(url: string, edits: SlideEdit[], opts: { dr
     const script = join(temp, 'edit.ps1');
     const editsPath = join(temp, 'edits.json');
     const out = join(temp, 'out.json');
-    writeFileSync(script, '﻿' + OFFICE_EDIT_PS1);
+    writeFileSync(script, '\uFEFF' + OFFICE_EDIT_PS1);
     writeFileSync(editsPath, JSON.stringify(edits));
     const args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, '-Url', url, '-Edits', editsPath, '-Out', out];
     if (opts.dryRun) args.push('-DryRun');
@@ -206,19 +206,19 @@ export async function editPowerPoint(url: string, edits: SlideEdit[], opts: { dr
         reject(new Error(`Edit failed (check the deck in PowerPoint before retrying): ${message || err.message}`));
       });
     });
-    return parseEditReport(JSON.parse(readFileSync(out, 'utf8').replace(/^﻿/, '')));
+    return parseEditReport(JSON.parse(readFileSync(out, 'utf8').replace(/^\uFEFF/, '')));
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }
 }
 
-export function parseEditReport(raw: any): EditReport {
+export function parseEditReport(raw: Raw): EditReport {
   const list = raw?.results === undefined || raw?.results === null ? [] : Array.isArray(raw.results) ? raw.results : [raw.results];
   return {
     wasOpen: Boolean(raw?.wasOpen),
     fullName: String(raw?.fullName ?? ''),
-    results: list.map((r: any) => ({
-      slide: r.slide ?? null,
+    results: list.map((r: Raw) => ({
+      slide: r.slide === undefined || r.slide === null ? null : Number(r.slide),
       target: String(r.target),
       before: String(r.before ?? ''),
       after: String(r.after ?? ''),

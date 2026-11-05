@@ -28,7 +28,7 @@ describe('editsFromOptions', () => {
   it('builds edits from flags and reads @file values', () => {
     const dir = mkdtempSync(join(tmpdir(), 'jirallm-edit-test-'));
     try {
-      writeFileSync(join(dir, 'notes.md'), '﻿Line one\r\nLine two\r\n');
+      writeFileSync(join(dir, 'notes.md'), '\uFEFFLine one\r\nLine two\r\n');
       writeFileSync(join(dir, 'edits.json'), JSON.stringify([{ find: 'a', replace: 'b' }]));
       expect(
         editsFromOptions({ slide: '10', shape: 'TextBox 18', text: 'x', notes: `@${join(dir, 'notes.md')}`, edits: join(dir, 'edits.json') })

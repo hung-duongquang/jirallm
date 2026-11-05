@@ -74,7 +74,7 @@ export type SharePointEditOptions = {
 
 /** `@path` reads the value from a file (UTF-8), so multi-line text needs no shell quoting. */
 function valueOf(v: string): string {
-  return v.startsWith('@') ? readFileSync(v.slice(1), 'utf8').replace(/^﻿/, '').replace(/\r\n/g, '\n').replace(/\n$/, '') : v;
+  return v.startsWith('@') ? readFileSync(v.slice(1), 'utf8').replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\n$/, '') : v;
 }
 
 export function editsFromOptions(opts: SharePointEditOptions): SlideEdit[] {

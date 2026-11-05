@@ -200,7 +200,7 @@ export async function extractOfficeDocument(link: OfficeLink, opts: { copyTo?: s
     const script = join(temp, 'extract.ps1');
     const json = join(temp, 'out.json');
     // A BOM makes Windows PowerShell 5.1 read the script as UTF-8.
-    writeFileSync(script, '﻿' + OFFICE_EXTRACT_PS1);
+    writeFileSync(script, '\uFEFF' + OFFICE_EXTRACT_PS1);
     const args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, '-Url', link.url, '-Kind', link.kind, '-Json', json, '-TempDir', temp];
     if (opts.copyTo) args.push('-Copy', opts.copyTo);
     await new Promise<void>((resolve, reject) => {
@@ -211,7 +211,7 @@ export async function extractOfficeDocument(link: OfficeLink, opts: { copyTo?: s
         reject(new Error(`Could not open the ${link.kind} document (are you signed in to Office with access to it?): ${detail || err.message}`));
       });
     });
-    return normalizeOfficeDocument(JSON.parse(readFileSync(json, 'utf8').replace(/^﻿/, '')));
+    return normalizeOfficeDocument(JSON.parse(readFileSync(json, 'utf8').replace(/^\uFEFF/, '')));
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }
@@ -230,17 +230,20 @@ function rows(value: unknown): string[][] {
   return outer.map((r) => list<unknown>(r).map(String));
 }
 
-export function normalizeOfficeDocument(raw: any): OfficeDocument {
+/** Untyped JSON as PowerShell wrote it. */
+export type Raw = Record<string, unknown>;
+
+export function normalizeOfficeDocument(raw: Raw): OfficeDocument {
   const name = String(raw?.name ?? 'document');
   if (raw?.kind === 'powerpoint') {
     return {
       kind: 'powerpoint',
       name,
-      slides: list<any>(raw.slides).map((s) => ({
+      slides: list<Raw>(raw.slides).map((s) => ({
         index: Number(s.index),
         hidden: Boolean(s.hidden),
         title: String(s.title ?? ''),
-        shapes: list<any>(s.shapes).map((sh) => ({ name: String(sh.name ?? ''), paragraphs: list<unknown>(sh.paragraphs).map(String) })),
+        shapes: list<Raw>(s.shapes).map((sh) => ({ name: String(sh.name ?? ''), paragraphs: list<unknown>(sh.paragraphs).map(String) })),
         tables: list<unknown>(s.tables).map(rows),
         pictures: Number(s.pictures ?? 0),
         notes: String(s.notes ?? ''),
@@ -251,13 +254,13 @@ export function normalizeOfficeDocument(raw: any): OfficeDocument {
     return {
       kind: 'word',
       name,
-      blocks: list<any>(raw.blocks).map((b) =>
+      blocks: list<Raw>(raw.blocks).map((b) =>
         b.type === 'table' ? { type: 'table' as const, rows: rows(b.rows) } : { type: 'paragraph' as const, level: Number(b.level), list: Boolean(b.list), text: String(b.text ?? '') }
       ),
     };
   }
   if (raw?.kind === 'excel') {
-    return { kind: 'excel', name, sheets: list<any>(raw.sheets).map((s) => ({ name: String(s.name), csv: String(s.csv ?? ''), rows: Number(s.rows), columns: Number(s.columns) })) };
+    return { kind: 'excel', name, sheets: list<Raw>(raw.sheets).map((s) => ({ name: String(s.name), csv: String(s.csv ?? ''), rows: Number(s.rows), columns: Number(s.columns) })) };
   }
   throw new Error(`Unexpected document data from Office (kind ${String(raw?.kind)})`);
 }
@@ -284,7 +287,7 @@ export function parseCsv(text: string): string[][] {
   let row: string[] = [];
   let field = '';
   let quoted = false;
-  const s = text.replace(/^﻿/, '');
+  const s = text.replace(/^\uFEFF/, '');
   for (let i = 0; i < s.length; i++) {
     const ch = s[i];
     if (quoted) {

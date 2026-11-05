@@ -38,7 +38,7 @@ describe('parseOfficeLink', () => {
 
 describe('parseCsv', () => {
   it('handles quotes, doubled quotes, commas and newlines inside fields', () => {
-    expect(parseCsv('﻿a,"b, c","say ""hi"""\r\n1,"two\nlines",3\r\n')).toEqual([
+    expect(parseCsv('\uFEFFa,"b, c","say ""hi"""\r\n1,"two\nlines",3\r\n')).toEqual([
       ['a', 'b, c', 'say "hi"'],
       ['1', 'two\nlines', '3'],
     ]);
