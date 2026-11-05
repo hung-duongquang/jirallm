@@ -3,6 +3,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { OFFICE_NOT_SUPPORTED, parseOfficeLink, type Raw } from './sharepointOffice.js';
+import { SharePointClient, SharePointSessionError, hasSharePointAuth, loadSharePointAuth } from './sharepoint.js';
+import { expectations, waitForServerContent } from './sharepointServerCheck.js';
 
 /**
  * Edits a PowerPoint deck on SharePoint in place through PowerPoint (COM), with the user's own
@@ -83,6 +85,7 @@ $running = @(Get-Process POWERPNT -ErrorAction SilentlyContinue).Count -gt 0
 $app = New-Object -ComObject PowerPoint.Application
 $results = @()
 $wasOpen = $false
+$applied = $false
 try {
   $before = @(foreach ($q in $app.Presentations) { $q.FullName })
   # A real, visible open (like double-clicking the file), so PowerPoint's own save uploads to SharePoint.
@@ -124,6 +127,7 @@ try {
       $plan += @{ e = $e; kind = 'shape'; shape = $match[0]; before = (Clean $match[0].TextFrame.TextRange.Text) -replace $CR, $LF }
     }
     # 2. Apply.
+    $applied = $true
     foreach ($x in $plan) {
       $e = $x.e
       if ($x.kind -eq 'find') {
@@ -156,49 +160,69 @@ try {
       $results += @{ slide = $e.slide; target = $(if ($x.kind -eq 'notes') { 'notes' } else { "shape:$($e.shape)" }); before = $x.before; after = ($text -replace "\r\n", $LF) }
     }
     if (-not $DryRun) { $p.Save() }
-  } finally { if (-not $wasOpen) { $p.Close() } }
-  # 3. Verify: Close waits for the upload; open the saved deck again and read each target back.
-  if (-not $DryRun -and -not $wasOpen) {
-    $v = $app.Presentations.Open($fullName, -1, 0, 0)
-    try {
-      foreach ($r in $results) {
-        if ($r.target -eq 'find') {
-          $all = ''
-          $slides = if ($null -ne $r.slide) { @($v.Slides.Item([int]$r.slide)) } else { @($v.Slides) }
-          foreach ($s in $slides) { foreach ($sh in (AllShapes $s)) { if ($sh.HasTextFrame -and $sh.TextFrame.HasText) { $all += [string]$sh.TextFrame.TextRange.Text + $LF } } }
-          $r.verified = ([string]$r.after).Contains([string]$r.before) -or ((CountOf $all ([string]$r.before)) -eq 0)
-          continue
-        }
-        $s = $v.Slides.Item([int]$r.slide)
-        $sh = if ($r.target -eq 'notes') { NotesShape $s } else { @((AllShapes $s) | Where-Object { $_.Name -eq $r.target.Substring(6) })[0] }
-        $now = if ($null -eq $sh) { '' } else { ((Clean $sh.TextFrame.TextRange.Text) -replace $CR, $LF).Trim() }
-        $r.verified = $now -eq ([string]$r.after).Trim()
-      }
-    } finally { $v.Close() }
+  } finally {
+    # After a real save the deck stays open in its window: PowerPoint uploads to SharePoint in the
+    # background, and closing or quitting right away can leave the upload stuck in the Office cache.
+    if (($DryRun -or -not $applied) -and -not $wasOpen) { $p.Close() }
   }
 } finally { if (-not $running -and $app.Presentations.Count -eq 0) { $app.Quit() } }
 $report = @{ wasOpen = $wasOpen; fullName = $fullName; results = @($results) }
 [IO.File]::WriteAllText($Out, (ConvertTo-Json $report -Depth 6 -Compress), (New-Object System.Text.UTF8Encoding $false))
 `;
 
+export type ServerStatus =
+  | { status: 'verified'; version: string; modified: string }
+  /** The server did not hold every change before the timeout (upload still running, or lost). */
+  | { status: 'pending'; version?: string; modified?: string; waitedSeconds: number }
+  /** No SharePoint session to check with (`jirallm sharepoint:auth`). */
+  | { status: 'unchecked'; message: string };
+
 export type EditReport = {
-  /** The deck was already open in the user's PowerPoint; the edit went into that window (AutoSave syncs it). */
+  /** The deck was already open in the user's PowerPoint; the edit went into that window. */
   wasOpen: boolean;
   /** The document's own URL on SharePoint (not the sharing link). */
   fullName: string;
   results: EditResult[];
+  /** Absent on a dry run. */
+  server?: ServerStatus;
 };
 
+export type EditOptions = {
+  dryRun?: boolean;
+  timeoutMs?: number;
+  /** How long to wait for SharePoint to hold the changes (default 120 s). */
+  verifyTimeoutMs?: number;
+  /** For tests: the client for the server check (null = no session), the PowerShell runner, the sleep. */
+  client?: SharePointClient | null;
+  run?: (args: string[]) => Promise<void>;
+  sleep?: (ms: number) => Promise<void>;
+};
+
+function runPowerShell(args: string[], timeoutMs: number): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    execFile('powershell.exe', args, { timeout: timeoutMs, windowsHide: true, maxBuffer: 10 * 1024 * 1024 }, (err, _stdout, stderr) => {
+      if (!err) return resolve();
+      const detail = stderr.replace(/\s+/g, ' ').trim();
+      // PowerShell wraps a thrown string in its error record; keep the message itself.
+      const message = /^(.*?) At .*?\.ps1:\d+/.exec(detail)?.[1] ?? detail.slice(0, 600);
+      if (/80040154|Class not registered|COM class factory/i.test(detail)) return reject(new Error(OFFICE_NOT_SUPPORTED));
+      reject(new Error(`Edit failed (check the deck in PowerPoint before retrying): ${message || err.message}`));
+    });
+  });
+}
+
 /**
- * Applies the edits in a visible PowerPoint window and saves to SharePoint, then reopens the deck
- * and reads every target back (`verified`). With `dryRun`, only checks the targets.
+ * Applies the edits in a visible PowerPoint window and saves; the deck stays open so PowerPoint can
+ * finish uploading. Then checks SharePoint itself (not Office's cache): it waits until the server's
+ * copy holds every changed line (and, for find edits, no longer the old text). With `dryRun`, only checks the targets.
  */
-export async function editPowerPoint(url: string, edits: SlideEdit[], opts: { dryRun?: boolean; timeoutMs?: number } = {}): Promise<EditReport> {
+export async function editPowerPoint(url: string, edits: SlideEdit[], opts: EditOptions = {}): Promise<EditReport> {
   const link = parseOfficeLink(url);
   if (!link) throw new Error(`Not a SharePoint Office document link: ${url}`);
   if (link.kind !== 'powerpoint') throw new Error(`Only PowerPoint decks can be edited (this link is ${link.kind}).`);
-  if (process.platform !== 'win32') throw new Error(OFFICE_NOT_SUPPORTED);
+  if (!opts.run && process.platform !== 'win32') throw new Error(OFFICE_NOT_SUPPORTED);
   const temp = mkdtempSync(join(tmpdir(), 'jirallm-office-edit-'));
+  let report: EditReport;
   try {
     const script = join(temp, 'edit.ps1');
     const editsPath = join(temp, 'edits.json');
@@ -207,19 +231,28 @@ export async function editPowerPoint(url: string, edits: SlideEdit[], opts: { dr
     writeFileSync(editsPath, JSON.stringify(edits));
     const args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, '-Url', url, '-Edits', editsPath, '-Out', out];
     if (opts.dryRun) args.push('-DryRun');
-    await new Promise<void>((resolve, reject) => {
-      execFile('powershell.exe', args, { timeout: opts.timeoutMs ?? 240_000, windowsHide: true, maxBuffer: 10 * 1024 * 1024 }, (err, _stdout, stderr) => {
-        if (!err) return resolve();
-        const detail = stderr.replace(/\s+/g, ' ').trim();
-        // PowerShell wraps a thrown string in its error record; keep the message itself.
-        const message = /^(.*?) At .*?\.ps1:\d+/.exec(detail)?.[1] ?? detail.slice(0, 600);
-        if (/80040154|Class not registered|COM class factory/i.test(detail)) return reject(new Error(OFFICE_NOT_SUPPORTED));
-        reject(new Error(`Edit failed (check the deck in PowerPoint before retrying): ${message || err.message}`));
-      });
-    });
-    return parseEditReport(JSON.parse(readFileSync(out, 'utf8').replace(/^\uFEFF/, '')));
+    await (opts.run ? opts.run(args) : runPowerShell(args, opts.timeoutMs ?? 240_000));
+    report = parseEditReport(JSON.parse(readFileSync(out, 'utf8').replace(/^\uFEFF/, '')));
   } finally {
     rmSync(temp, { recursive: true, force: true });
+  }
+  if (opts.dryRun) return report;
+
+  let client = opts.client;
+  if (client === undefined) client = (await hasSharePointAuth()) ? new SharePointClient(await loadSharePointAuth(report.fullName)) : null;
+  if (!client) return { ...report, server: { status: 'unchecked', message: 'no SharePoint session; `jirallm sharepoint:auth` enables the check' } };
+  const timeoutMs = opts.verifyTimeoutMs ?? 120_000;
+  try {
+    const check = await waitForServerContent(client, report.fullName, expectations(report.results), { timeoutMs, sleep: opts.sleep });
+    const results = report.results.map((r, i) => ({ ...r, verified: check.verified[i] }));
+    const server: ServerStatus =
+      !check.timedOut && check.info
+        ? { status: 'verified', version: check.info.version, modified: check.info.modified }
+        : { status: 'pending', version: check.info?.version, modified: check.info?.modified, waitedSeconds: Math.round(timeoutMs / 1000) };
+    return { ...report, results, server };
+  } catch (err) {
+    if (err instanceof SharePointSessionError) return { ...report, server: { status: 'unchecked', message: err.message } };
+    throw err;
   }
 }
 
@@ -234,16 +267,20 @@ export function parseEditReport(raw: Raw): EditReport {
       before: String(r.before ?? ''),
       after: String(r.after ?? ''),
       ...(r.count !== undefined ? { count: Number(r.count) } : {}),
-      ...(r.verified !== undefined ? { verified: Boolean(r.verified) } : {}),
     })),
   };
+}
+
+/** A change that did not (yet) reach SharePoint is a failure for the CLI's exit code. */
+export function editNeedsAttention(report: EditReport): boolean {
+  return report.server?.status === 'pending';
 }
 
 export function describeEditResults(report: EditReport, dryRun?: boolean): string {
   const lines: string[] = [];
   for (const r of report.results) {
     const where = r.slide ? `slide ${r.slide}` : 'all slides';
-    const check = r.verified === undefined ? '' : r.verified ? ' ✓ verified on SharePoint' : ' ✗ NOT found after reopening';
+    const check = r.verified === undefined ? '' : r.verified ? ' ✓ on SharePoint' : ' ✗ not on SharePoint yet';
     if (r.target === 'find') {
       lines.push(`${where}: "${r.before}" → "${r.after}" (${r.count} time(s))${check}`);
       continue;
@@ -256,9 +293,19 @@ export function describeEditResults(report: EditReport, dryRun?: boolean): strin
     for (const l of r.before.split('\n')) lines.push(`  - ${l}`);
     for (const l of r.after.split('\n')) lines.push(`  + ${l}`);
   }
-  if (dryRun) lines.push('Dry run: nothing changed.');
-  else if (report.wasOpen) lines.push(`Changed in your open PowerPoint window and saved; AutoSave syncs it to SharePoint (${report.fullName}).`);
-  else if (report.results.every((r) => r.verified)) lines.push(`Saved to SharePoint and verified by reopening (${report.fullName}).`);
-  else lines.push(`Saved, but not every change was found after reopening: check the deck (${report.fullName}).`);
+  if (dryRun || !report.server) {
+    lines.push('Dry run: nothing changed.');
+    return lines.join('\n');
+  }
+  const where = report.wasOpen ? 'in your open PowerPoint window' : 'in PowerPoint (the deck stays open there)';
+  const s = report.server;
+  if (s.status === 'verified') lines.push(`Saved ${where}; SharePoint has every change (version ${s.version}, ${s.modified}).`);
+  else if (s.status === 'pending')
+    lines.push(
+      `Saved ${where}, but after ${s.waitedSeconds} s SharePoint does not have every change (server version ${s.version ?? '?'}, ${s.modified ?? '?'}). ` +
+        'Keep PowerPoint open so it can finish uploading, then check the deck in the browser.'
+    );
+  else lines.push(`Saved ${where}; the upload to SharePoint was not checked (${s.message}). Keep PowerPoint open until it has uploaded.`);
+  lines.push(report.fullName);
   return lines.join('\n');
 }

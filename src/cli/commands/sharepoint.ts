@@ -16,7 +16,7 @@ import {
   searchSharePoint,
 } from '../../lib/sharepoint.js';
 import { exportOfficeDocument, extractOfficeDocument, parseOfficeLink, renderOfficeDocument, type OfficeLink } from '../../lib/sharepointOffice.js';
-import { describeEditResults, editPowerPoint, validateEdits, type SlideEdit } from '../../lib/sharepointOfficeEdit.js';
+import { describeEditResults, editNeedsAttention, editPowerPoint, validateEdits, type SlideEdit } from '../../lib/sharepointOfficeEdit.js';
 import { readFileSync } from 'node:fs';
 import { printJson } from '../jsonOutput.js';
 
@@ -106,7 +106,7 @@ export async function runSharePointEdit(url: string, opts: SharePointEditOptions
     return;
   }
   console.log(describeEditResults(report, opts.dryRun));
-  if (!opts.dryRun && !report.wasOpen && report.results.some((r) => r.verified === false)) process.exitCode = 1;
+  if (editNeedsAttention(report)) process.exitCode = 1;
 }
 
 export type SharePointSearchOptions = { site?: string; documents?: boolean; max?: string; json?: boolean };
