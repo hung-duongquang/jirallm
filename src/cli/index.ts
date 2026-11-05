@@ -1755,10 +1755,12 @@ shape or text fails the whole run with nothing changed. Each paragraph keeps its
 (bullet, size, colour); added paragraphs take the format of the last one. Text colour is not
 changed, so a grey template placeholder stays grey.
 
-PowerPoint opens the deck in a window (like double-clicking it), so its own save uploads to
-SharePoint; a deck you already have open is edited in that window and AutoSave syncs it. After
-saving, the deck is opened again and every change is read back: each edit says "verified on
-SharePoint", and the exit code is 1 when a change is missing.
+PowerPoint opens the deck in a window and saves. A save through PowerPoint only reaches the
+Office cache, so the deck is closed and opened again (that pushes the upload) and left open.
+Then SharePoint itself is checked (needs \`jirallm sharepoint:auth\`): its copy must hold every
+changed line within 120 s, else the edit is reported "not on SharePoint yet" with exit code 1.
+--find/--replace works on slide text only, not on speaker notes (use --notes for those). A deck
+you already have open is edited and saved in that window, not closed.
 
 Examples:
   $ jirallm sharepoint <deck-url>          # shape names appear as <!-- TextBox 18 -->

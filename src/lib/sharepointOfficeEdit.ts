@@ -161,9 +161,15 @@ try {
     }
     if (-not $DryRun) { $p.Save() }
   } finally {
-    # After a real save the deck stays open in its window: PowerPoint uploads to SharePoint in the
-    # background, and closing or quitting right away can leave the upload stuck in the Office cache.
     if (($DryRun -or -not $applied) -and -not $wasOpen) { $p.Close() }
+  }
+  # Save() through COM only reaches the Office Document Cache; staying open, closing, or quitting
+  # did not upload it (seen 2026-11-05: still on the old server version after 5 minutes). Opening
+  # the document again does: PowerPoint reconciles its cache with SharePoint on open. So close, open
+  # again in a window, and leave it open; the caller then checks SharePoint itself.
+  if ($applied -and -not $DryRun -and -not $wasOpen) {
+    $p.Close()
+    $p = $app.Presentations.Open($fullName, 0, 0, -1)
   }
 } finally { if (-not $running -and $app.Presentations.Count -eq 0) { $app.Quit() } }
 $report = @{ wasOpen = $wasOpen; fullName = $fullName; results = @($results) }
@@ -303,7 +309,7 @@ export function describeEditResults(report: EditReport, dryRun?: boolean): strin
   else if (s.status === 'pending')
     lines.push(
       `Saved ${where}, but after ${s.waitedSeconds} s SharePoint does not have every change (server version ${s.version ?? '?'}, ${s.modified ?? '?'}). ` +
-        'Keep PowerPoint open so it can finish uploading, then check the deck in the browser.'
+        'PowerPoint uploads a stuck change when the deck is opened again: close the deck, open it from SharePoint, then check the browser.'
     );
   else lines.push(`Saved ${where}; the upload to SharePoint was not checked (${s.message}). Keep PowerPoint open until it has uploaded.`);
   lines.push(report.fullName);

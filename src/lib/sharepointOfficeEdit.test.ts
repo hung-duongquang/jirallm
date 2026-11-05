@@ -104,7 +104,7 @@ describe('editPowerPoint with the server check', () => {
     expect(report.results[0].verified).toBe(false);
     expect(editNeedsAttention(report)).toBe(true);
     expect(describeEditResults(report)).toContain('✗ not on SharePoint yet');
-    expect(describeEditResults(report)).toContain('Keep PowerPoint open so it can finish uploading');
+    expect(describeEditResults(report)).toContain('close the deck, open it from SharePoint');
   });
 
   it('says the upload was not checked when there is no SharePoint session', async () => {
