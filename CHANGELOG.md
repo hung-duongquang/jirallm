@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `jirallm prune [--dry-run] [--done-for <days>] [--keep <keys>] [--yes] [--json]`: removes the exports of
+  tickets in the Done status category and the Confluence pages only they reach, so `watch`, searches and
+  Claude stop wading through finished work. Own files in those folders (context.md, test reports) stay;
+  standalone pages and Slack/SharePoint exports are not touched.
+
 ### Fixed
 
 - `jirallm sharepoint:edit` could report "verified" while SharePoint still had the old deck: a save through

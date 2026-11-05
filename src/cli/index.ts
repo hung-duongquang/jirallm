@@ -60,6 +60,7 @@ import {
 import { runLink, runLinkRemove } from './commands/link.js';
 import { runAttach, runAttachRemove } from './commands/attach.js';
 import { runWatchers } from './commands/watchers.js';
+import { runPrune, type PruneOptions } from './commands/prune.js';
 import { runUpgrade } from './commands/upgrade.js';
 import {
   deriveSelectorMode,
@@ -1844,6 +1845,32 @@ Examples:
 `)
   .action(async (opts: WatchOptions) => {
     try { await runWatch(opts); } catch (err) { exitOnError(err); }
+  });
+
+program
+  .command('prune')
+  .description('Remove exports of finished (Done/Resolved/Rejected) tickets and the Confluence pages only they link to; your own files stay')
+  .option('-o, --org <name>', 'Organization whose credentials to use')
+  .option('--output-dir <path>', 'Export directory', './jira-export')
+  .option('--done-for <days>', 'Only tickets finished at least N days ago (default 0)')
+  .option('--keep <keys...>', 'Ticket keys to keep even when finished')
+  .option('--dry-run', 'Only list what would be removed')
+  .option('-y, --yes', 'Remove without asking')
+  .option('--json', 'Print the plan as JSON (removes only with --yes)')
+  .addHelpText('after', `
+Asks Jira which exported tickets are in the Done status category. For those it removes task.md,
+.task.previous.md and attachments/; other files in the folder (context.md, test reports, notes)
+are kept. Confluence pages are removed only when no remaining ticket links to them, directly or
+through another page; pages no ticket links to (exported on their own) are kept. Slack and
+SharePoint exports are not touched. Everything removed comes back with \`jirallm <KEY>\`.
+
+Examples:
+  $ jirallm prune --dry-run
+  $ jirallm prune --done-for 14 --keep ZOD-3794 --yes
+  $ jirallm prune --dry-run --json
+`)
+  .action(async (opts: PruneOptions) => {
+    try { await runPrune(opts); } catch (err) { exitOnError(err); }
   });
 
 program
