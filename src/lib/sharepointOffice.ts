@@ -308,11 +308,14 @@ function renderSlides(doc: Extract<OfficeDocument, { kind: 'powerpoint' }>): str
   const lines: string[] = [];
   for (const s of doc.slides) {
     const title = s.title || s.shapes[0]?.paragraphs.join(' ') || '';
-    lines.push(`## Slide ${s.index}${title ? `: ${title}` : ''}${s.hidden ? ' (hidden)' : ''}`, '');
+    // Shape names (hidden when rendered) are what `jirallm sharepoint:edit --shape` takes.
+    const headingShape = !s.title && s.shapes[0] ? ` <!-- ${s.shapes[0].name} -->` : '';
+    lines.push(`## Slide ${s.index}${title ? `: ${title}` : ''}${s.hidden ? ' (hidden)' : ''}${headingShape}`, '');
     const shapes = s.title ? s.shapes : s.shapes.slice(1);
     for (const sh of shapes) {
-      if (sh.paragraphs.length === 1) lines.push(`- ${sh.paragraphs[0]}`);
-      else if (sh.paragraphs.length > 1) lines.push(`- ${sh.paragraphs[0]}`, ...sh.paragraphs.slice(1).map((p) => `  - ${p}`));
+      const ref = sh.name ? ` <!-- ${sh.name} -->` : '';
+      if (sh.paragraphs.length === 1) lines.push(`- ${sh.paragraphs[0]}${ref}`);
+      else if (sh.paragraphs.length > 1) lines.push(`- ${sh.paragraphs[0]}${ref}`, ...sh.paragraphs.slice(1).map((p) => `  - ${p}`));
     }
     if (shapes.length) lines.push('');
     for (const t of s.tables) lines.push(...markdownTable(t), '');

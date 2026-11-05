@@ -16,6 +16,8 @@ import {
   searchSharePoint,
 } from '../../lib/sharepoint.js';
 import { exportOfficeDocument, extractOfficeDocument, parseOfficeLink, renderOfficeDocument, type OfficeLink } from '../../lib/sharepointOffice.js';
+import { describeEditResults, editPowerPoint, validateEdits, type SlideEdit } from '../../lib/sharepointOfficeEdit.js';
+import { readFileSync } from 'node:fs';
 import { printJson } from '../jsonOutput.js';
 
 export type SharePointOptions = { outputDir?: string; images?: boolean; copy?: boolean; json?: boolean };
@@ -56,6 +58,55 @@ async function runSharePointOffice(url: string, link: OfficeLink, opts: SharePoi
     return;
   }
   process.stdout.write(renderOfficeDocument(url, doc));
+}
+
+export type SharePointEditOptions = {
+  slide?: string;
+  shape?: string;
+  text?: string;
+  notes?: string;
+  find?: string;
+  replace?: string;
+  edits?: string;
+  dryRun?: boolean;
+  json?: boolean;
+};
+
+/** `@path` reads the value from a file (UTF-8), so multi-line text needs no shell quoting. */
+function valueOf(v: string): string {
+  return v.startsWith('@') ? readFileSync(v.slice(1), 'utf8').replace(/^﻿/, '').replace(/\r\n/g, '\n').replace(/\n$/, '') : v;
+}
+
+export function editsFromOptions(opts: SharePointEditOptions): SlideEdit[] {
+  const raw: unknown[] = [];
+  if (opts.edits) {
+    const parsed = JSON.parse(valueOf(opts.edits.startsWith('@') ? opts.edits : `@${opts.edits}`));
+    raw.push(...(Array.isArray(parsed) ? parsed : [parsed]));
+  }
+  const slide = opts.slide !== undefined ? Number(opts.slide) : undefined;
+  if (opts.shape !== undefined || opts.text !== undefined) {
+    if (opts.shape === undefined || opts.text === undefined) throw new Error('--shape and --text go together.');
+    raw.push({ slide, shape: opts.shape, text: valueOf(opts.text) });
+  }
+  if (opts.notes !== undefined) raw.push({ slide, notes: valueOf(opts.notes) });
+  if (opts.find !== undefined || opts.replace !== undefined) {
+    if (opts.find === undefined || opts.replace === undefined) throw new Error('--find and --replace go together.');
+    raw.push({ slide, find: valueOf(opts.find), replace: valueOf(opts.replace) });
+  }
+  if (!raw.length) throw new Error('Nothing to change: give --shape/--text, --notes, --find/--replace or --edits <file.json>.');
+  return validateEdits(raw);
+}
+
+/** Edits a PowerPoint deck on SharePoint in place (through local PowerPoint) and prints before/after. */
+export async function runSharePointEdit(url: string, opts: SharePointEditOptions): Promise<void> {
+  const edits = editsFromOptions(opts);
+  const report = await editPowerPoint(url, edits, { dryRun: opts.dryRun });
+  if (opts.json) {
+    printJson({ dryRun: Boolean(opts.dryRun), ...report });
+    return;
+  }
+  console.log(describeEditResults(report, opts.dryRun));
+  if (!opts.dryRun && !report.wasOpen && report.results.some((r) => r.verified === false)) process.exitCode = 1;
 }
 
 export type SharePointSearchOptions = { site?: string; documents?: boolean; max?: string; json?: boolean };

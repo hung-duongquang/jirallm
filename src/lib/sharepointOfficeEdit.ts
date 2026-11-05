@@ -1,0 +1,253 @@
+import { execFile } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { OFFICE_NOT_SUPPORTED, parseOfficeLink } from './sharepointOffice.js';
+
+/**
+ * Edits a PowerPoint deck on SharePoint in place through PowerPoint (COM), with the user's own
+ * Office sign-in. Formatting is kept: text is replaced paragraph by paragraph, so each paragraph
+ * keeps its bullet, size and colour, and added paragraphs take the format of the last one.
+ */
+
+export type SlideEdit =
+  /** Replace all text of a shape (found by name, as `jirallm sharepoint` shows it); lines become paragraphs. */
+  | { slide: number; shape: string; text: string }
+  /** Replace the speaker notes of a slide. */
+  | { slide: number; notes: string }
+  /** Replace every occurrence of `find` in the text of a slide (or of every slide without `slide`). */
+  | { slide?: number; find: string; replace: string };
+
+export type EditResult = { slide: number | null; target: string; before: string; after: string; count?: number; verified?: boolean };
+
+export function validateEdits(input: unknown): SlideEdit[] {
+  const list = Array.isArray(input) ? input : [input];
+  if (!list.length) throw new Error('No edits given.');
+  return list.map((e: any, i) => {
+    const where = `edit ${i + 1}`;
+    const slide = e?.slide === undefined || e?.slide === null ? undefined : Number(e.slide);
+    if (slide !== undefined && (!Number.isInteger(slide) || slide < 1)) throw new Error(`${where}: slide must be a slide number (1, 2, …)`);
+    if (typeof e?.find === 'string') {
+      if (!e.find) throw new Error(`${where}: find is empty`);
+      if (typeof e.replace !== 'string') throw new Error(`${where}: find needs replace (a string, may be empty)`);
+      return { slide, find: e.find, replace: e.replace };
+    }
+    if (slide === undefined) throw new Error(`${where}: shape and notes edits need a slide number`);
+    if (typeof e?.shape === 'string') {
+      if (typeof e.text !== 'string') throw new Error(`${where}: shape needs text`);
+      return { slide, shape: e.shape, text: e.text };
+    }
+    if (typeof e?.notes === 'string') return { slide, notes: e.notes };
+    throw new Error(`${where}: expected {slide, shape, text}, {slide, notes} or {slide?, find, replace}`);
+  });
+}
+
+/**
+ * -Edits: JSON list of edits. -Out: JSON results. Every target is resolved first; one that is not
+ * found fails the whole run before anything changes. With -DryRun nothing is changed at all
+ * (cloud files AutoSave, so "change and do not save" is not safe).
+ */
+export const OFFICE_EDIT_PS1 = String.raw`
+param([string]$Url, [string]$Edits, [string]$Out, [switch]$DryRun)
+$ErrorActionPreference = 'Stop'
+$CR = [string][char]13
+$LF = [string][char]10
+function Clean($s) { if ($null -eq $s) { '' } else { ([string]$s) -replace "\v", $LF } }
+function AllShapes($slide) {
+  $q = New-Object System.Collections.Queue; $all = @()
+  foreach ($sh in $slide.Shapes) { $q.Enqueue($sh) }
+  while ($q.Count -gt 0) { $sh = $q.Dequeue(); if ($sh.Type -eq 6) { foreach ($g in $sh.GroupItems) { $q.Enqueue($g) } } else { $all += $sh } }
+  ,$all
+}
+function NotesShape($slide) { foreach ($n in $slide.NotesPage.Shapes) { try { if ($n.Type -eq 14 -and $n.PlaceholderFormat.Type -eq 2) { return $n } } catch {} }; $null }
+function SetParas($tr, [string]$text) {
+  $new = @($text -replace "\r\n", $LF -split $LF)
+  $oldText = [string]$tr.Text
+  $oldN = if ($oldText.Length -eq 0) { 0 } else { @($oldText -split $CR).Count }
+  if ($oldN -eq 0) { $tr.Text = ($new -join $CR); return }
+  $common = [Math]::Min($oldN, $new.Count)
+  for ($i = 1; $i -le $common; $i++) {
+    $p = $tr.Paragraphs($i, 1)
+    $len = $p.Length
+    if ($p.Text.EndsWith($CR)) { $len-- }
+    if ($len -gt 0) { $p.Characters(1, $len).Text = $new[$i - 1] } elseif ($new[$i - 1]) { $p.InsertBefore($new[$i - 1]) | Out-Null }
+  }
+  if ($new.Count -gt $oldN) { $tr.InsertAfter($CR + ($new[$oldN..($new.Count - 1)] -join $CR)) | Out-Null }
+  elseif ($new.Count -lt $oldN) { $s = $tr.Paragraphs($new.Count + 1, 1).Start; $tr.Characters($s - 1, $tr.Length - $s + 2).Delete() }
+}
+function CountOf([string]$hay, [string]$needle) { $n = 0; $i = 0; while (($i = $hay.IndexOf($needle, $i, [StringComparison]::Ordinal)) -ge 0) { $n++; $i += $needle.Length }; $n }
+
+# Windows PowerShell's ConvertFrom-Json emits an array as one object; piping it again unrolls it.
+$list = @((Get-Content -Raw -Encoding UTF8 $Edits | ConvertFrom-Json) | ForEach-Object { $_ })
+$running = @(Get-Process POWERPNT -ErrorAction SilentlyContinue).Count -gt 0
+$app = New-Object -ComObject PowerPoint.Application
+$results = @()
+$wasOpen = $false
+try {
+  $before = @(foreach ($q in $app.Presentations) { $q.FullName })
+  # A real, visible open (like double-clicking the file), so PowerPoint's own save uploads to SharePoint.
+  # ReadOnly = false, Untitled = false, WithWindow = true
+  $p = $app.Presentations.Open($Url, 0, 0, -1)
+  $fullName = $p.FullName
+  if ($before -contains $fullName) {
+    # Already open in the user's PowerPoint: edit that window, so the change shows there and AutoSave carries it.
+    $wasOpen = $true
+    $editable = @(foreach ($q in $app.Presentations) { if ($q.FullName -eq $fullName -and -not $q.ReadOnly) { $q } })
+    if ($p.ReadOnly -and $editable.Count) { $p.Close(); $p = $editable[0] }
+  }
+  try {
+    if ($p.ReadOnly) { throw 'The deck opened read-only (no edit rights, or it is checked out / locked by someone else).' }
+    $count = $p.Slides.Count
+    # 1. Resolve every target before changing anything.
+    $plan = @()
+    foreach ($e in $list) {
+      if ($null -ne $e.slide -and ($e.slide -lt 1 -or $e.slide -gt $count)) { throw "Slide $($e.slide) does not exist (the deck has $count slides)." }
+      if ($null -ne $e.find) {
+        $slides = if ($null -ne $e.slide) { @($p.Slides.Item([int]$e.slide)) } else { @($p.Slides) }
+        $hits = @(); $total = 0
+        foreach ($s in $slides) { foreach ($sh in (AllShapes $s)) { if ($sh.HasTextFrame -and $sh.TextFrame.HasText) { $c = CountOf ([string]$sh.TextFrame.TextRange.Text) $e.find; if ($c) { $hits += $sh; $total += $c } } } }
+        if ($total -eq 0) { throw "Text not found$(if ($null -ne $e.slide) { " on slide $($e.slide)" }): $($e.find)" }
+        $plan += @{ e = $e; kind = 'find'; shapes = $hits; count = $total }
+        continue
+      }
+      $slide = $p.Slides.Item([int]$e.slide)
+      if ($null -ne $e.notes) {
+        $n = NotesShape $slide
+        if ($null -eq $n) { throw "Slide $($e.slide) has no notes placeholder." }
+        $plan += @{ e = $e; kind = 'notes'; shape = $n; before = (Clean $n.TextFrame.TextRange.Text) -replace $CR, $LF }
+        continue
+      }
+      $match = @((AllShapes $slide) | Where-Object { $_.Name -eq $e.shape })
+      if ($match.Count -eq 0) { throw "Slide $($e.slide) has no shape named '$($e.shape)'. Names: $(((AllShapes $slide) | Where-Object { $_.HasTextFrame } | ForEach-Object { $_.Name }) -join ', ')" }
+      if ($match.Count -gt 1) { throw "Slide $($e.slide) has $($match.Count) shapes named '$($e.shape)'." }
+      if (-not $match[0].HasTextFrame) { throw "Shape '$($e.shape)' on slide $($e.slide) holds no text." }
+      $plan += @{ e = $e; kind = 'shape'; shape = $match[0]; before = (Clean $match[0].TextFrame.TextRange.Text) -replace $CR, $LF }
+    }
+    # 2. Apply.
+    foreach ($x in $plan) {
+      $e = $x.e
+      if ($x.kind -eq 'find') {
+        if (-not $DryRun) {
+          foreach ($sh in $x.shapes) {
+            $tr = $sh.TextFrame.TextRange; $guard = 0; $after = 0
+            while ($guard -lt 200) {
+              $r = $tr.Replace($e.find, $e.replace, $after)
+              if ($null -eq $r) { break }
+              $after = $r.Start - 1 + $r.Length; $guard++
+            }
+          }
+        }
+        $results += @{ slide = $e.slide; target = 'find'; before = $e.find; after = $e.replace; count = $x.count }
+        continue
+      }
+      $text = if ($x.kind -eq 'notes') { [string]$e.notes } else { [string]$e.text }
+      if (-not $DryRun) { SetParas $x.shape.TextFrame.TextRange $text }
+      $results += @{ slide = $e.slide; target = $(if ($x.kind -eq 'notes') { 'notes' } else { "shape:$($e.shape)" }); before = $x.before; after = ($text -replace "\r\n", $LF) }
+    }
+    if (-not $DryRun) { $p.Save() }
+  } finally { if (-not $wasOpen) { $p.Close() } }
+  # 3. Verify: Close waits for the upload; open the saved deck again and read each target back.
+  if (-not $DryRun -and -not $wasOpen) {
+    $v = $app.Presentations.Open($fullName, -1, 0, 0)
+    try {
+      foreach ($r in $results) {
+        if ($r.target -eq 'find') {
+          $all = ''
+          $slides = if ($null -ne $r.slide) { @($v.Slides.Item([int]$r.slide)) } else { @($v.Slides) }
+          foreach ($s in $slides) { foreach ($sh in (AllShapes $s)) { if ($sh.HasTextFrame -and $sh.TextFrame.HasText) { $all += [string]$sh.TextFrame.TextRange.Text + $LF } } }
+          $r.verified = ([string]$r.after).Contains([string]$r.before) -or ((CountOf $all ([string]$r.before)) -eq 0)
+          continue
+        }
+        $s = $v.Slides.Item([int]$r.slide)
+        $sh = if ($r.target -eq 'notes') { NotesShape $s } else { @((AllShapes $s) | Where-Object { $_.Name -eq $r.target.Substring(6) })[0] }
+        $now = if ($null -eq $sh) { '' } else { ((Clean $sh.TextFrame.TextRange.Text) -replace $CR, $LF).Trim() }
+        $r.verified = $now -eq ([string]$r.after).Trim()
+      }
+    } finally { $v.Close() }
+  }
+} finally { if (-not $running -and $app.Presentations.Count -eq 0) { $app.Quit() } }
+$report = @{ wasOpen = $wasOpen; fullName = $fullName; results = @($results) }
+[IO.File]::WriteAllText($Out, (ConvertTo-Json $report -Depth 6 -Compress), (New-Object System.Text.UTF8Encoding $false))
+`;
+
+export type EditReport = {
+  /** The deck was already open in the user's PowerPoint; the edit went into that window (AutoSave syncs it). */
+  wasOpen: boolean;
+  /** The document's own URL on SharePoint (not the sharing link). */
+  fullName: string;
+  results: EditResult[];
+};
+
+/**
+ * Applies the edits in a visible PowerPoint window and saves to SharePoint, then reopens the deck
+ * and reads every target back (`verified`). With `dryRun`, only checks the targets.
+ */
+export async function editPowerPoint(url: string, edits: SlideEdit[], opts: { dryRun?: boolean; timeoutMs?: number } = {}): Promise<EditReport> {
+  const link = parseOfficeLink(url);
+  if (!link) throw new Error(`Not a SharePoint Office document link: ${url}`);
+  if (link.kind !== 'powerpoint') throw new Error(`Only PowerPoint decks can be edited (this link is ${link.kind}).`);
+  if (process.platform !== 'win32') throw new Error(OFFICE_NOT_SUPPORTED);
+  const temp = mkdtempSync(join(tmpdir(), 'jirallm-office-edit-'));
+  try {
+    const script = join(temp, 'edit.ps1');
+    const editsPath = join(temp, 'edits.json');
+    const out = join(temp, 'out.json');
+    writeFileSync(script, '﻿' + OFFICE_EDIT_PS1);
+    writeFileSync(editsPath, JSON.stringify(edits));
+    const args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, '-Url', url, '-Edits', editsPath, '-Out', out];
+    if (opts.dryRun) args.push('-DryRun');
+    await new Promise<void>((resolve, reject) => {
+      execFile('powershell.exe', args, { timeout: opts.timeoutMs ?? 240_000, windowsHide: true, maxBuffer: 10 * 1024 * 1024 }, (err, _stdout, stderr) => {
+        if (!err) return resolve();
+        const detail = stderr.replace(/\s+/g, ' ').trim();
+        // PowerShell wraps a thrown string in its error record; keep the message itself.
+        const message = /^(.*?) At .*?\.ps1:\d+/.exec(detail)?.[1] ?? detail.slice(0, 600);
+        if (/80040154|Class not registered|COM class factory/i.test(detail)) return reject(new Error(OFFICE_NOT_SUPPORTED));
+        reject(new Error(`Edit failed (check the deck in PowerPoint before retrying): ${message || err.message}`));
+      });
+    });
+    return parseEditReport(JSON.parse(readFileSync(out, 'utf8').replace(/^﻿/, '')));
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+}
+
+export function parseEditReport(raw: any): EditReport {
+  const list = raw?.results === undefined || raw?.results === null ? [] : Array.isArray(raw.results) ? raw.results : [raw.results];
+  return {
+    wasOpen: Boolean(raw?.wasOpen),
+    fullName: String(raw?.fullName ?? ''),
+    results: list.map((r: any) => ({
+      slide: r.slide ?? null,
+      target: String(r.target),
+      before: String(r.before ?? ''),
+      after: String(r.after ?? ''),
+      ...(r.count !== undefined ? { count: Number(r.count) } : {}),
+      ...(r.verified !== undefined ? { verified: Boolean(r.verified) } : {}),
+    })),
+  };
+}
+
+export function describeEditResults(report: EditReport, dryRun?: boolean): string {
+  const lines: string[] = [];
+  for (const r of report.results) {
+    const where = r.slide ? `slide ${r.slide}` : 'all slides';
+    const check = r.verified === undefined ? '' : r.verified ? ' ✓ verified on SharePoint' : ' ✗ NOT found after reopening';
+    if (r.target === 'find') {
+      lines.push(`${where}: "${r.before}" → "${r.after}" (${r.count} time(s))${check}`);
+      continue;
+    }
+    lines.push(`${where} ${r.target === 'notes' ? 'notes' : r.target.replace(/^shape:/, '')}:${check}`);
+    if (r.before === r.after) {
+      lines.push('  (unchanged)');
+      continue;
+    }
+    for (const l of r.before.split('\n')) lines.push(`  - ${l}`);
+    for (const l of r.after.split('\n')) lines.push(`  + ${l}`);
+  }
+  if (dryRun) lines.push('Dry run: nothing changed.');
+  else if (report.wasOpen) lines.push(`Changed in your open PowerPoint window and saved; AutoSave syncs it to SharePoint (${report.fullName}).`);
+  else if (report.results.every((r) => r.verified)) lines.push(`Saved to SharePoint and verified by reopening (${report.fullName}).`);
+  else lines.push(`Saved, but not every change was found after reopening: check the deck (${report.fullName}).`);
+  return lines.join('\n');
+}

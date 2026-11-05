@@ -67,9 +67,10 @@ describe('renderOfficeDocument', () => {
     const md = renderOfficeDocument('https://x.sharepoint.com/:p:/s/a/b', deck);
     expect(md).toContain('# Update.pptx\n\n2 slide(s) · [Open in SharePoint](https://x.sharepoint.com/:p:/s/a/b)');
     // No title placeholder: the first text box becomes the heading.
-    expect(md).toContain('## Slide 1: MONTHLY UPDATE\n\n- 5th November\n');
+    // Shape names ride along as hidden comments for `sharepoint:edit --shape`.
+    expect(md).toContain('## Slide 1: MONTHLY UPDATE <!-- TextBox 1 -->\n\n- 5th November <!-- TextBox 2 -->\n');
     expect(md).toContain('_1 picture(s)/chart(s) not exported as text_');
-    expect(md).toContain('## Slide 2: Team | Vietnam (hidden)\n\n- Past month\n  - RHO\n  - GLI\n');
+    expect(md).toContain('## Slide 2: Team | Vietnam (hidden)\n\n- Past month <!-- TextBox 3 -->\n  - RHO\n  - GLI\n');
     expect(md).toContain('| Who | What |\n| --- | --- |\n| Hung | slides \\| notes |');
     expect(md).toContain('**Notes:**\n\n> Line one\n> Line two\n');
   });
