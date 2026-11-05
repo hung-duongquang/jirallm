@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- `jirallm sharepoint:edit` could report "verified" while SharePoint still had the old deck: a save through
+  PowerPoint only reaches the Office cache, and the check reopened that cache. Now the deck is closed and
+  opened again after saving (which uploads it) and left open, and SharePoint's own copy is checked over REST
+  (needs `jirallm sharepoint:auth`) until it holds every change; otherwise "not on SharePoint yet", exit code 1.
+
 ### Added
 
 - `jirallm sharepoint:edit <url>` changes text in a PowerPoint deck on SharePoint: a shape (`--shape`/`--text`),
