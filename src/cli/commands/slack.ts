@@ -19,6 +19,10 @@ import { printJson } from '../jsonOutput.js';
 export type SlackOptions = {
   outputDir?: string;
   files?: boolean;
+  /** false (--no-channel): leave out channel messages posted outside the thread. */
+  channel?: boolean;
+  /** false (--no-frames): keep videos but skip extracting their frames. */
+  frames?: boolean;
   json?: boolean;
 };
 
@@ -28,17 +32,19 @@ export type SlackOptions = {
  */
 export async function runSlack(url: string, opts: SlackOptions): Promise<void> {
   if (opts.outputDir && !opts.json) {
-    const thread = await exportSlackThread(url, { outputDir: opts.outputDir, files: opts.files });
+    const thread = await exportSlackThread(url, { outputDir: opts.outputDir, files: opts.files, channel: opts.channel, frames: opts.frames });
     for (const err of thread.fileErrors) console.error(`# ${err}`);
     console.log(thread.path);
     return;
   }
-  const { link, url: messageUrl, channelName, messages, names } = await loadSlackThread(url);
+  const { link, url: messageUrl, channelName, messages, channelMessages, names } = await loadSlackThread(url, undefined, {
+    channel: opts.channel,
+  });
   if (opts.json) {
-    printJson({ link, channelName, users: Object.fromEntries(names), messages });
+    printJson({ link, channelName, users: Object.fromEntries(names), messages, channelMessages });
     return;
   }
-  process.stdout.write(renderThread({ url: messageUrl, channelName, messages, linkedTs: link.ts, names }));
+  process.stdout.write(renderThread({ url: messageUrl, channelName, messages, channelMessages, linkedTs: link.ts, names }));
 }
 
 export type SlackSearchOptions = {

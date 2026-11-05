@@ -1635,9 +1635,16 @@ program
   .description('Read a Slack message link (or an image/file link, resolved to the message that shares it) with its whole thread as Markdown (needs `jirallm slack:auth`)')
   .option('--output-dir <path>', 'Write <dir>/slack/<channel>-<ts>/thread.md and download the thread\'s files instead of printing')
   .option('--no-files', 'With --output-dir: skip downloading files')
+  .option('--no-channel', 'Leave out channel messages posted outside the thread')
+  .option('--no-frames', 'With --output-dir: download videos but skip extracting their frames (needs ffmpeg)')
   .option('--json', 'Print the raw Slack messages and resolved user names as JSON')
   .addHelpText('after', `
 A link to a reply shows the whole thread; the linked message is marked.
+People often answer in the channel instead of the thread, so top-level channel messages
+posted after the thread started (until 12 h after its last reply, at most 15) follow in
+an "In the channel, outside the thread" section; --no-channel leaves them out.
+With --output-dir, images are embedded and videos get up to 10 frames (JPEG) in
+<file>-frames/ next to them, so an agent can see a screen recording.
 
 Examples:
   $ jirallm slack https://acme.slack.com/archives/C0123ABCD/p1793370497363139

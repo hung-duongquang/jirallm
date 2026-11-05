@@ -5,6 +5,7 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 import {
   SlackClient,
   exportSlackThread,
+  loadSlackThread,
   mrkdwnToMarkdown,
   parseSlackFileUrl,
   parseSlackUrl,
@@ -154,6 +155,43 @@ describe('SlackClient.thread', () => {
   });
 });
 
+describe('channel messages outside the thread', () => {
+  const url = 'https://x.slack.com/archives/C1/p1000000000000000';
+  const parent = { ts: '1000000000.000000', thread_ts: '1000000000.000000', reply_count: 1, user: 'U1', text: 'question' };
+  const reply = { ts: '1000000060.000000', thread_ts: parent.ts, user: 'U1', text: 'in thread' };
+  const history: SlackMessage[] = [
+    { ts: '1000000300.000000', user: 'U1', text: 'answered in channel' },
+    { ts: '1000000200.000000', thread_ts: parent.ts, subtype: 'thread_broadcast', user: 'U1', text: 'also sent to channel' },
+    { ts: '1000000100.000000', subtype: 'channel_join', user: 'U2', text: 'joined' },
+    { ts: '1000000400.000000', thread_ts: '1000000400.000000', reply_count: 3, user: 'U1', text: 'other topic' },
+  ];
+  const calls: Record<string, string>[] = [];
+  const client = new SlackClient({ token: 'xoxp-1' }, (async (u: string, init: { body: string }) => {
+    if (u.endsWith('conversations.history')) {
+      calls.push(Object.fromEntries(new URLSearchParams(init.body)));
+      return new Response(JSON.stringify({ ok: true, messages: history }));
+    }
+    if (u.endsWith('conversations.replies')) return new Response(JSON.stringify({ ok: true, messages: [parent, reply] }));
+    return new Response(JSON.stringify({ ok: true, channel: { name: 'dev' }, user: { real_name: 'Linh' } }));
+  }) as unknown as typeof fetch);
+
+  it('reads top-level channel messages after the thread, oldest first, without joins and broadcasts', async () => {
+    const loaded = await loadSlackThread(url, client);
+    expect(calls[0]).toMatchObject({ channel: 'C1', oldest: parent.ts, latest: String(1000000060 + 12 * 3600), inclusive: 'false' });
+    expect(loaded.channelMessages.map((m) => m.text)).toEqual(['answered in channel', 'other topic']);
+    const md = renderThread({ ...loaded, linkedTs: loaded.link.ts });
+    expect(md).toContain('(1 + 1 replies)');
+    expect(md).toMatch(/# In the channel, outside the thread\n[\s\S]*answered in channel[\s\S]*\(own thread, 3 replies\)/);
+  });
+
+  it('skips them with channel: false', async () => {
+    calls.length = 0;
+    const loaded = await loadSlackThread(url, client, { channel: false });
+    expect(calls).toHaveLength(0);
+    expect(renderThread({ ...loaded, linkedTs: loaded.link.ts })).not.toContain('outside the thread');
+  });
+});
+
 describe('renderThread', () => {
   it('renders authors, the linked message, attachments and files', () => {
     const md = renderThread({
@@ -173,9 +211,27 @@ describe('renderThread', () => {
     expect(md).toMatch(/## CI · .*\(linked message\)/);
     expect(md).toContain('![shot.png](./F1-shot.png)');
   });
+
+  it('links the extracted frames of a video', () => {
+    const md = renderThread({
+      url: 'https://x.slack.com/archives/C1/p1000000000000000',
+      linkedTs: '1.0',
+      names: new Map(),
+      messages: [{ ts: '1.0', text: '', files: [{ id: 'F2', name: 'rec.mp4', mimetype: 'video/mp4' }] }],
+      localFiles: new Map([['F2', './F2-rec.mp4']]),
+      localFrames: new Map([['F2', { dir: './F2-rec.mp4-frames/', count: 7 }]]),
+    });
+    expect(md).toContain('- File: [rec.mp4](./F2-rec.mp4)\n- Video frames: [7 extracted frames](./F2-rec.mp4-frames/)');
+  });
 });
 
 describe('threadTitle', () => {
+  it('uses the file title for a message that is only a file', () => {
+    expect(threadTitle([{ ts: '1.0', text: '', files: [{ id: 'F1', name: 'rec.mp4', title: 'Screen recording' }] }], new Map())).toBe(
+      '[file] Screen recording'
+    );
+  });
+
   it('skips a first line that is only a link', () => {
     const messages = [{ ts: '1.0', text: '<https://acme.atlassian.net/browse/ZOD-1|acme.atlassian.net/browse/ZOD-1>\nPlease check the totals' }];
     expect(threadTitle(messages, new Map())).toBe('Please check the totals');
