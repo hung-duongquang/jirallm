@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `jirallm sharepoint <url>` reads Office documents (PowerPoint, Word, Excel) from sharing links, file paths
+  and Doc.aspx links through the local Office apps with your own sign-in (Windows + Microsoft 365, no cookie).
+  `--output-dir` writes `document.md` and the original file (`--no-copy` skips it).
+
 ### Changed
 
 - Own repository (hung-duongquang/jirallm, no longer a fork). The daily update check and `jirallm upgrade`
