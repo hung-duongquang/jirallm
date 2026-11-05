@@ -1684,19 +1684,27 @@ channels:history, groups:history, im:history, mpim:history, users:read and searc
 
 program
   .command('sharepoint <url>')
-  .description('Read a SharePoint page (…/SitePages/<page>.aspx) as Markdown (needs `jirallm sharepoint:auth`)')
-  .option('--output-dir <path>', 'Write <dir>/sharepoint/<site>-<page>/page.md and download its images instead of printing')
+  .description('Read a SharePoint page (…/SitePages/<page>.aspx, needs `jirallm sharepoint:auth`) or an Office document (PowerPoint, Word, Excel; Windows + Office) as Markdown')
+  .option('--output-dir <path>', 'Write <dir>/sharepoint/<site>-<page>/page.md (images downloaded) or …/document.md (original file saved) instead of printing')
   .option('--no-images', 'With --output-dir: skip downloading images')
-  .option('--json', 'Print the raw page item (CanvasContent1 and metadata) as JSON')
+  .option('--no-copy', 'With --output-dir, for an Office document: skip saving the original file')
+  .option('--json', 'Print the raw page item (CanvasContent1 and metadata), or the extracted document, as JSON')
   .addHelpText('after', `
 Text sections become Markdown (tables included); web parts with stored content (quick links,
 people, call-to-action tiles, images, files, embeds) become lists and links. Web parts that fill
 themselves when viewed (news feeds, events, FAQ search) are named but have no content to export.
 A changed page keeps the previous copy as .page.previous.md.
 
+Office documents (sharing links such as /:p:/s/<site>/<token>, paths ending in .pptx/.docx/.xlsx,
+Doc.aspx viewer links) are opened read-only by the local PowerPoint, Word or Excel with your own
+Office sign-in, so no SharePoint cookie is needed (Windows with Microsoft 365 only). Slides give
+their text, tables and speaker notes; Word gives headings, lists and tables; Excel gives one table
+per sheet. With --output-dir the original file is saved next to document.md.
+
 Examples:
   $ jirallm sharepoint https://contoso.sharepoint.com/sites/Intranet/SitePages/Expenses.aspx
   $ jirallm sharepoint <url> --output-dir ./jira-export
+  $ jirallm sharepoint https://contoso.sharepoint.com/:p:/s/Team/IQAMXj9B… --output-dir ./jira-export
 `)
   .action(async (url: string, opts: SharePointOptions) => {
     try { await runSharePoint(url, opts); } catch (err) { exitOnError(err); }

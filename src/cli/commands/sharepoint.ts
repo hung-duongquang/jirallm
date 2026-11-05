@@ -15,15 +15,18 @@ import {
   renderSharePointPage,
   searchSharePoint,
 } from '../../lib/sharepoint.js';
+import { exportOfficeDocument, extractOfficeDocument, parseOfficeLink, renderOfficeDocument, type OfficeLink } from '../../lib/sharepointOffice.js';
 import { printJson } from '../jsonOutput.js';
 
-export type SharePointOptions = { outputDir?: string; images?: boolean; json?: boolean };
+export type SharePointOptions = { outputDir?: string; images?: boolean; copy?: boolean; json?: boolean };
 
 /**
  * Prints a SharePoint page as Markdown, or with --output-dir writes
  * <dir>/sharepoint/<site>-<page>/page.md and downloads its images next to it.
  */
 export async function runSharePoint(url: string, opts: SharePointOptions): Promise<void> {
+  const office = parseOfficeLink(url);
+  if (office) return runSharePointOffice(url, office, opts);
   if (opts.outputDir && !opts.json) {
     const page = await exportSharePointPage(url, { outputDir: opts.outputDir, images: opts.images });
     for (const err of page.imageErrors) console.error(`# ${err}`);
@@ -38,6 +41,21 @@ export async function runSharePoint(url: string, opts: SharePointOptions): Promi
     return;
   }
   process.stdout.write(renderSharePointPage(url, link, item).markdown);
+}
+
+/** Office documents open in the local Office app with the user's own sign-in (no cookie needed). */
+async function runSharePointOffice(url: string, link: OfficeLink, opts: SharePointOptions): Promise<void> {
+  if (opts.outputDir && !opts.json) {
+    const doc = await exportOfficeDocument(url, { outputDir: opts.outputDir, copy: opts.copy });
+    console.log(`✓ ${doc.title}: ${doc.path} (${doc.changed ? 'updated' : 'unchanged'}${doc.copy ? `, copy ${doc.copy}` : ''})`);
+    return;
+  }
+  const doc = await extractOfficeDocument(link);
+  if (opts.json) {
+    printJson({ link, doc });
+    return;
+  }
+  process.stdout.write(renderOfficeDocument(url, doc));
 }
 
 export type SharePointSearchOptions = { site?: string; documents?: boolean; max?: string; json?: boolean };
