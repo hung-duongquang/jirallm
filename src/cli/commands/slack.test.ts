@@ -6,7 +6,15 @@ vi.mock('../../lib/credentials.js', () => ({
   removeSecret: vi.fn(),
 }));
 
-import { runSlackSearch } from './slack.js';
+import { runSlackSearch, slackTitleLine } from './slack.js';
+
+describe('slackTitleLine', () => {
+  it('puts the thread title first and the channel last', () => {
+    expect(slackTitleLine('healthcare-claim-invoicing', 'ZOD-3165 export')).toBe('ZOD-3165 export · #healthcare-claim-invoicing');
+    expect(slackTitleLine('direct message', 'hi')).toBe('hi · DM');
+    expect(slackTitleLine(undefined, 'hi')).toBe('hi');
+  });
+});
 
 describe('slack:search without a token', () => {
   afterEach(() => vi.restoreAllMocks());

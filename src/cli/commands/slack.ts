@@ -13,6 +13,7 @@ import {
   renderThread,
   searchHits,
   slackSearchQueries,
+  threadTitle,
 } from '../../lib/slack.js';
 import { printJson } from '../jsonOutput.js';
 
@@ -24,13 +25,26 @@ export type SlackOptions = {
   /** false (--no-frames): keep videos but skip extracting their frames. */
   frames?: boolean;
   json?: boolean;
+  /** Print only `<thread title> · #channel` (the plugin's prompt hook names Claude Code sessions with it). */
+  title?: boolean;
 };
+
+/** One line naming the thread, most telling part first: `<first line of its first message> · #channel`. */
+export function slackTitleLine(channelName: string | undefined, title: string): string {
+  const where = !channelName ? '' : channelName === 'direct message' ? ' · DM' : ` · #${channelName}`;
+  return `${title}${where}`;
+}
 
 /**
  * Prints a Slack message with its whole thread as Markdown, or with --output-dir writes
  * <dir>/slack/<channel>-<ts>/thread.md and downloads the thread's files next to it.
  */
 export async function runSlack(url: string, opts: SlackOptions): Promise<void> {
+  if (opts.title) {
+    const { channelName, messages, names } = await loadSlackThread(url, undefined, { channel: false });
+    console.log(slackTitleLine(channelName, threadTitle(messages, names)));
+    return;
+  }
   if (opts.outputDir && !opts.json) {
     const thread = await exportSlackThread(url, { outputDir: opts.outputDir, files: opts.files, channel: opts.channel, frames: opts.frames });
     for (const err of thread.fileErrors) console.error(`# ${err}`);

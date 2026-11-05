@@ -1638,6 +1638,7 @@ program
   .option('--no-files', 'With --output-dir: skip downloading files')
   .option('--no-channel', 'Leave out channel messages posted outside the thread')
   .option('--no-frames', 'With --output-dir: download videos but skip extracting their frames (needs ffmpeg)')
+  .option('--title', 'Print only a one-line title "<first line of the thread> · #channel" (names Claude Code sessions)')
   .option('--json', 'Print the raw Slack messages and resolved user names as JSON')
   .addHelpText('after', `
 A link to a reply shows the whole thread; the linked message is marked.
