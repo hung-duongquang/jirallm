@@ -48,7 +48,7 @@ import { runAgentGuide, type AgentGuideOptions } from './commands/agentGuide.js'
 import { runPage, type PageOptions } from './commands/page.js';
 import { runPageSearch, type PageSearchOptions } from './commands/pageSearch.js';
 import { runSlack, runSlackAuth, runSlackSearch, type SlackOptions, type SlackSearchOptions } from './commands/slack.js';
-import { runSharePoint, runSharePointAuth, runSharePointSearch, type SharePointOptions, type SharePointSearchOptions } from './commands/sharepoint.js';
+import { runSharePoint, runSharePointAuth, runSharePointEdit, runSharePointSearch, type SharePointEditOptions, type SharePointOptions, type SharePointSearchOptions } from './commands/sharepoint.js';
 import { runChanges, runWatch, type ChangesOptions, type WatchOptions } from './commands/watch.js';
 import { runPrContext, type PrContextOptions } from './commands/prContext.js';
 import { runPrStatus, type PrStatusOptions } from './commands/prStatus.js';
@@ -1734,6 +1734,40 @@ Examples:
 `)
   .action(async (query: string, opts: SharePointSearchOptions) => {
     try { await runSharePointSearch(query, opts); } catch (err) { exitOnError(err); }
+  });
+
+program
+  .command('sharepoint:edit <url>')
+  .description('Change text in a PowerPoint deck on SharePoint in place (local PowerPoint, your own sign-in; Windows + Office); formatting is kept')
+  .option('--slide <n>', 'Slide number (needed for --shape and --notes; limits --find to one slide)')
+  .option('--shape <name>', 'Shape to rewrite, by the name `jirallm sharepoint` shows as <!-- name --> (needs --text)')
+  .option('--text <text>', 'New text for --shape; one line per paragraph; @file reads it from a file')
+  .option('--notes <text>', 'New speaker notes for --slide; @file reads them from a file')
+  .option('--find <text>', 'Text to replace (every occurrence, on --slide or on all slides; needs --replace)')
+  .option('--replace <text>', 'Replacement for --find (may be empty)')
+  .option('--edits <file.json>', 'Several edits at once: [{"slide":10,"shape":"TextBox 18","text":"…"}, {"slide":10,"notes":"…"}, {"find":"…","replace":"…"}]')
+  .option('--dry-run', 'Check the targets and show what would change, change nothing')
+  .option('--json', 'Print the results (before/after per edit) as JSON')
+  .addHelpText('after', `
+This changes a shared document (saved straight to SharePoint), so confirm with its owner first
+and use --dry-run to check. Every target is checked before anything changes: an unknown slide,
+shape or text fails the whole run with nothing changed. Each paragraph keeps its own formatting
+(bullet, size, colour); added paragraphs take the format of the last one. Text colour is not
+changed, so a grey template placeholder stays grey.
+
+PowerPoint opens the deck in a window (like double-clicking it), so its own save uploads to
+SharePoint; a deck you already have open is edited in that window and AutoSave syncs it. After
+saving, the deck is opened again and every change is read back: each edit says "verified on
+SharePoint", and the exit code is 1 when a change is missing.
+
+Examples:
+  $ jirallm sharepoint <deck-url>          # shape names appear as <!-- TextBox 18 -->
+  $ jirallm sharepoint:edit <deck-url> --slide 10 --shape "TextBox 18" --text @coming.txt --dry-run
+  $ jirallm sharepoint:edit <deck-url> --slide 10 --notes @notes.md
+  $ jirallm sharepoint:edit <deck-url> --slide 10 --find "3 GLI PRs" --replace "2 GLI PRs"
+`)
+  .action(async (url: string, opts: SharePointEditOptions) => {
+    try { await runSharePointEdit(url, opts); } catch (err) { exitOnError(err); }
   });
 
 program
