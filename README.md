@@ -456,7 +456,7 @@ Native binaries (via [`@napi-rs/keyring`](https://www.npmjs.com/package/@napi-rs
 
 You run this on a machine that has your Jira token and probably more, so read it first. This section says what it installs, which programs it starts and where to look in the code.
 
-**Install.** `npm install -g github:hung-duongquang/jirallm#release` installs the built `release` branch. The package has no `preinstall`/`install`/`postinstall` scripts. It has nine runtime dependencies (see `package.json`). The only native one is `@napi-rs/keyring`, which ships prebuilt binaries. To run exactly the code you reviewed, install a commit instead of the branch:
+**Install.** `npm install -g github:hung-duongquang/jirallm#release` installs the built `release` branch. jirallm itself has no `preinstall`/`install`/`postinstall` scripts. It has nine runtime dependencies (see `package.json`). Two packages under `framewise` (video frames) do have install scripts: `ffmpeg-static` downloads an ffmpeg binary and `sharp` checks its prebuilt image library. Recent npm versions skip them unless you approve them (`npm approve-scripts`). Without them, jirallm still works and uses the `ffmpeg` on your `PATH`. `@napi-rs/keyring` (OS keychain) ships prebuilt binaries. To run exactly the code you reviewed, install a commit instead of the branch:
 
 ```bash
 git ls-remote https://github.com/hung-duongquang/jirallm refs/heads/release   # → <sha>
