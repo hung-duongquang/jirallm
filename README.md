@@ -452,6 +452,42 @@ Native binaries (via [`@napi-rs/keyring`](https://www.npmjs.com/package/@napi-rs
 - **Windows** (x64, arm64, ia32) — fully supported. Tokens stored in Windows Credential Manager. `ffmpeg` must be on `PATH` for video frame extraction.
 - **FreeBSD** (x64) — keychain works; other features untested.
 
+## Checking it before you install
+
+You run this on a machine that has your Jira token and probably more, so read it first. This section says what it installs, which programs it starts and where to look in the code.
+
+**Install.** `npm install -g github:hung-duongquang/jirallm#release` installs the built `release` branch. The package has no `preinstall`/`install`/`postinstall` scripts. It has nine runtime dependencies (see `package.json`). The only native one is `@napi-rs/keyring`, which ships prebuilt binaries. To run exactly the code you reviewed, install a commit instead of the branch:
+
+```bash
+git ls-remote https://github.com/hung-duongquang/jirallm refs/heads/release   # → <sha>
+npm install -g github:hung-duongquang/jirallm#<sha>
+```
+
+Each `release` commit is titled `release: built from <main sha>`, so you can compare it with the source on `main`. jirallm never updates itself: the daily check only prints a notice, and you run `jirallm upgrade` yourself.
+
+**Programs it starts.** All of them are fixed program names; nothing from Jira, Slack or the browser is run as a command.
+
+| Program | Only when |
+| --- | --- |
+| `git` | `start`, `pr-context`, PR-stack export |
+| `gh` (your GitHub CLI login) | `pr-status`, `watch --prs`, PR-stack export |
+| `ffmpeg` | exporting video attachments (frames) |
+| `powershell.exe` | `sharepoint` on Office files (opens them in your own Office app), `watch --notify` (Windows toast) |
+| `schtasks` / crontab line | only `watch --install` / `--uninstall`. Nothing is scheduled otherwise |
+| `explorer.exe` / `open` / `xdg-open` | the UI's "open folder" buttons (folders only) |
+| `npm` / `pnpm` / `yarn` | only `upgrade` (reinstalls from the `release` branch) and `setup --bundled` (installs `ffmpeg-static`) |
+| `node` (detached) | the daily update check (a single GET to the `release` branch on GitHub) |
+
+**Writes.** Exporting is read-only. Jira and Confluence change only through the write commands (`start`, `assign`, `transition`, `comment`, `worklog`, `edit`, `page:publish`, `qa publish`), and only when you run one. The Claude Code skill tells Claude to ask you before it runs one. Every write command has `--dry-run`. On disk, jirallm writes only to the output folder, its config folder (`~/.config/jirallm`) and the OS keychain.
+
+**Local helper (`jirallm ui`).** It listens on `127.0.0.1` only, while you keep it running. It refuses browser requests from any origin other than itself and the hosted page. Its API can export tickets, read and write files in the output folder, publish test reports, and open folders. It cannot run arbitrary commands.
+
+**Claude Code plugin.** It adds the skill (a Markdown guide) and two hooks (`hooks/*.mjs`, short and readable). On session start and on each prompt, they read `jira-export/CHANGES.md` and add unseen changes to Claude's context. When the first prompt of a session holds a Slack link, they fetch that thread's title once to name the session. They never block or change a prompt.
+
+**Trying it with less.** You can skip the plugin and `watch --install` and use only the CLI, e.g. `jirallm fetch ZOD-1234`. You can revoke the Jira token at any time on id.atlassian.com.
+
+**Where to look in the code.** Network: `src/lib/jiraClient.ts`, `confluence.ts`, `slack.ts`, `sharepoint.ts`, `src/cli/updateCheckWorker.ts`. Processes: search for `child_process`. Local helper: `ui/server.mjs` (routes in `handle`, origin check in `applyCors`). Hooks: `hooks/`.
+
 ## Privacy and network traffic
 
 jirallm runs on your own machine. It has no server, account or telemetry.

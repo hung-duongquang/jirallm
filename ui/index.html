@@ -1091,6 +1091,8 @@ function renderSetup(problem, offline) {
       ${problem ? `<p class="problem">${esc(problem)}</p>` : ''}
       <p>This page runs exports through a small helper on your own machine. Your Jira token is stored
         in your OS keychain by the helper and is never sent to this website.</p>
+      <p class="hint">Want to check it first? <a href="https://github.com/hung-duongquang/jirallm#checking-it-before-you-install" target="_blank" rel="noopener">What it installs, which programs it starts and what it can write</a>,
+        with the files to read and how to install a pinned commit.</p>
       <ol>
         <li class="${offline ? '' : 'done'}"><b>Install the helper</b> (once; needs Node.js 20+):${code(INSTALL_CMD)}
           <span class="hint">To update later, run the same command again. <code>jirallm upgrade</code> does the same.</span></li>

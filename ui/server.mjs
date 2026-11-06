@@ -14,7 +14,7 @@ import { randomUUID } from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, realpathSync, statSync } from 'node:fs';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -530,6 +530,8 @@ async function handle(req, res) {
         const outputDir = resolveOutputDir(body.dir);
         const target = body.kind ? itemDirFor(outputDir, body.kind, body.id).dir : body.key ? taskDirFor(outputDir, body.key) : outputDir;
         if (!existsSync(target)) throw new HttpError(404, 'Folder does not exist yet');
+        // Folders only: explorer.exe / open / xdg-open start a program or open a file when given its path.
+        if (!statSync(target).isDirectory()) throw new HttpError(400, 'Not a folder');
         openInExplorer(target);
         sendJson(res, 200, { ok: true });
         return;

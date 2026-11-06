@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- `jirallm ui`: `POST /api/open` only opens folders. It checked only that the path existed, so a path to a
+  program would have been started by `explorer.exe` / `open` / `xdg-open`.
+
+### Docs
+
+- README "Checking it before you install": install scripts, pinned-commit install, programs started, writes,
+  local helper, plugin hooks and where to read the code. Linked from the setup page.
+
 ### Added
 
 - `jirallm prune [--dry-run] [--done-for <days>] [--keep <keys>] [--yes] [--json]`: removes the exports of
