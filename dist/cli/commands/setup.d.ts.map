@@ -1,0 +1,1 @@
+{"version":3,"file":"setup.d.ts","sourceRoot":"","sources":["../../../src/cli/commands/setup.ts"],"names":[],"mappings":"AAaA,KAAK,SAAS,GAAG;IAAE,OAAO,CAAC,EAAE,OAAO,CAAC;IAAC,GAAG,CAAC,EAAE,OAAO,CAAC;IAAC,SAAS,CAAC,EAAE,OAAO,CAAC;IAAC,MAAM,CAAC,EAAE,OAAO,CAAA;CAAE,CAAC;AAwH7F,wBAAsB,QAAQ,CAAC,IAAI,GAAE,SAAc,GAAG,OAAO,CAAC,IAAI,CAAC,CA8DlE"}
