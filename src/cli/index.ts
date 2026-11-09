@@ -50,6 +50,7 @@ import { runPageSearch, type PageSearchOptions } from './commands/pageSearch.js'
 import { runSlack, runSlackAuth, runSlackSearch, type SlackOptions, type SlackSearchOptions } from './commands/slack.js';
 import { runSharePoint, runSharePointAuth, runSharePointEdit, runSharePointSearch, type SharePointEditOptions, type SharePointOptions, type SharePointSearchOptions } from './commands/sharepoint.js';
 import { runChanges, runWatch, type ChangesOptions, type WatchOptions } from './commands/watch.js';
+import { runStatusLine, type StatusLineOptions } from './commands/statusLine.js';
 import { runPrContext, type PrContextOptions } from './commands/prContext.js';
 import { runPrStatus, type PrStatusOptions } from './commands/prStatus.js';
 import { runPageChildren, runPagePublish, type PageChildrenOptions, type PagePublishOptions } from './commands/pagePublish.js';
@@ -1881,13 +1882,27 @@ program
   .option('--unseen', 'Only entries not printed by an earlier --unseen call (prints nothing when none; for session-start hooks)')
   .option('--max <n>', 'Line cap (default 20)')
   .option('--follow [seconds]', "Keep running: every N seconds (default 30) print what `watch` logged since, as --unseen does (for an agent's background monitor)")
+  .option('--session <id>', 'Claude Code session id: --unseen/--follow keep a marker per session, so every open session hears about every change')
   .addHelpText('after', `
 Examples:
   $ jirallm changes --unseen
-  $ jirallm changes --follow   # Claude Code: run it under the Monitor tool; each change becomes an event
+  $ jirallm changes --follow --session <id>   # Claude Code: run it under the Monitor tool; each change becomes an event
 `)
   .action(async (opts: ChangesOptions) => {
     try { await runChanges(opts); } catch (err) { exitOnError(err); }
+  });
+
+program
+  .command('status-line')
+  .description("Claude Code status line: last `watch` run (or how long it has been idle) and the changes this session has not been given yet")
+  .option('--output-dir <path>', 'Export directory (default: <project dir from stdin>/jira-export)')
+  .addHelpText('after', `
+In ~/.claude/settings.json:
+  "statusLine": { "type": "command", "command": "jirallm status-line" }
+Prints e.g. "jirallm ✓ 11:32 · 2 new for Claude" or "jirallm ⚠ watch idle 25m · Claude up to date".
+`)
+  .action((opts: StatusLineOptions) => {
+    try { runStatusLine(opts); } catch { /* a status line never fails */ }
   });
 
 program

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { listOrgs, loadProfile, type ResolvedProfile } from '../../lib/config.js';
 import { ConfluenceClient, exportConfluencePage } from '../../lib/confluence.js';
@@ -28,6 +28,13 @@ export type WatchOptions = {
 
 const MINE_JQL = 'assignee = currentUser() AND statusCategory != Done';
 const CHANGES_FILE = 'CHANGES.md';
+/** Newest entry stamp any session has seen: the starting point of a session without its own marker. */
+const SEEN_MARKER = '.changes.seen';
+/** One marker per Claude Code session, so every open session hears about every change. */
+const SESSION_SEEN_DIR = '.changes.seen.d';
+/** ISO time of the last finished `watch` run, plus an error count (the status line shows whether the watcher is alive). */
+export const WATCH_AT_MARKER = '.watch.at';
+const SESSION_MARKER_DAYS = 30;
 const TASK_NAME = 'jirallm watch';
 const PRS_FILE = '.prs.json';
 const JIRA_MARKER = '.watch.jira-at';
@@ -313,7 +320,53 @@ export async function slackChanges(
   return changes;
 }
 
-export type ChangesOptions = { outputDir?: string; unseen?: boolean; max?: string; follow?: string | boolean };
+export type ChangesOptions = { outputDir?: string; unseen?: boolean; max?: string; follow?: string | boolean; session?: string };
+
+/** Path of the seen marker for a session (validated id), or of the shared one without a session. */
+export function seenMarkerPath(outputDir: string, session?: string): string {
+  if (!session) return path.join(outputDir, SEEN_MARKER);
+  if (!/^[\w-]{1,100}$/.test(session)) throw new Error('--session takes a Claude Code session id (letters, digits, - and _).');
+  return path.join(outputDir, SESSION_SEEN_DIR, session);
+}
+
+/** The stamp a session has seen up to: its own marker, else the shared one (what earlier sessions saw). */
+export function seenStamp(outputDir: string, session?: string): string {
+  const files = session ? [seenMarkerPath(outputDir, session), seenMarkerPath(outputDir)] : [seenMarkerPath(outputDir)];
+  for (const file of files) {
+    if (existsSync(file)) return readFileSync(file, 'utf-8').trim();
+  }
+  return '';
+}
+
+/** Marks `stamp` seen for the session, moves the shared marker forward, and clears session markers idle for 30 days. */
+function markSeen(outputDir: string, stamp: string, session?: string): void {
+  const shared = seenMarkerPath(outputDir);
+  if (!existsSync(shared) || readFileSync(shared, 'utf-8').trim() < stamp) writeFileSync(shared, stamp);
+  if (!session) return;
+  const dir = path.join(outputDir, SESSION_SEEN_DIR);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(seenMarkerPath(outputDir, session), stamp);
+  const cutoff = Date.now() - SESSION_MARKER_DAYS * 24 * 3600 * 1000;
+  for (const f of readdirSync(dir)) {
+    try {
+      if (statSync(path.join(dir, f)).mtimeMs < cutoff) unlinkSync(path.join(dir, f));
+    } catch {
+      // Another session may be clearing too.
+    }
+  }
+}
+
+/** Number of change lines (latest state per item) the session has not seen yet; nothing is marked. */
+export function unseenCount(outputDir: string, session?: string): number {
+  const file = path.join(outputDir, CHANGES_FILE);
+  if (!existsSync(file)) return 0;
+  const seen = seenStamp(outputDir, session);
+  const items = new Set<string>();
+  for (const e of changeEntries(readFileSync(file, 'utf-8'))) {
+    if (e.stamp > seen) for (const l of e.lines) items.add(l.slice(2).split(':')[0]);
+  }
+  return items.size;
+}
 
 /** Splits CHANGES.md into its `## <stamp>` entries, oldest first. */
 export function changeEntries(md: string): { stamp: string; lines: string[] }[] {
@@ -335,14 +388,14 @@ export async function runChanges(opts: ChangesOptions): Promise<void> {
   const max = opts.max === undefined ? 20 : Number(opts.max);
   if (!Number.isInteger(max) || max < 1) throw new Error('--max must be a positive integer.');
   if (opts.follow === undefined || opts.follow === false) {
-    const report = changesReport(outputDir, !!opts.unseen, max);
+    const report = changesReport(outputDir, !!opts.unseen, max, opts.session);
     if (report) console.log(report);
     return;
   }
   const seconds = opts.follow === true ? 30 : Number(opts.follow);
   if (!(seconds >= 1)) throw new Error('--follow takes a number of seconds.');
   for (;;) {
-    const report = changesReport(outputDir, true, max);
+    const report = changesReport(outputDir, true, max, opts.session);
     if (report) console.log(report);
     await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
   }
@@ -350,17 +403,22 @@ export async function runChanges(opts: ChangesOptions): Promise<void> {
 
 /**
  * The compact change report (header, then one line per item with the latest state), or null when
- * there is nothing to show. With `unseen` only entries after the `.changes.seen` marker count, and
- * the marker moves past them.
+ * there is nothing to show. With `unseen` only entries after the seen marker count, and the marker
+ * moves past them: the session's own marker when `session` is given (so each Claude Code session
+ * hears about every change, not only the first one to look), else the shared `.changes.seen`.
  */
-export function changesReport(outputDir: string, unseen: boolean, max: number): string | null {
+export function changesReport(outputDir: string, unseen: boolean, max: number, session?: string): string | null {
   const file = path.join(outputDir, CHANGES_FILE);
   if (!existsSync(file)) return null;
-  const marker = path.join(outputDir, '.changes.seen');
-  const seen = unseen && existsSync(marker) ? readFileSync(marker, 'utf-8').trim() : '';
+  const seen = unseen ? seenStamp(outputDir, session) : '';
+  if (unseen && session && !existsSync(seenMarkerPath(outputDir, session))) {
+    // Pin the session's starting point now, or other sessions moving the shared marker would hide changes from it.
+    mkdirSync(path.join(outputDir, SESSION_SEEN_DIR), { recursive: true });
+    writeFileSync(seenMarkerPath(outputDir, session), seen);
+  }
   const entries = changeEntries(readFileSync(file, 'utf-8')).filter((e) => e.stamp > seen);
   if (entries.length === 0) return null;
-  if (unseen) writeFileSync(marker, entries[entries.length - 1].stamp);
+  if (unseen) markSeen(outputDir, entries[entries.length - 1].stamp, session);
 
   // One line per item, latest state wins: a ticket that changed twice is listed once.
   const latest = new Map<string, string>();
@@ -478,6 +536,10 @@ export async function runWatch(opts: WatchOptions): Promise<void> {
         appendFileSync(path.join(outputDir, CHANGES_FILE), `\n## ${stamp}\n\n${lines.map((l) => `- ${l}`).join('\n')}\n`);
         if (opts.notify) toast(lines.length === 1 ? 'jirallm' : `jirallm: ${lines.length} changes`, lines, real.find((c) => c.url)?.url);
       }
+    }
+    if (!opts.dryRun) {
+      mkdirSync(outputDir, { recursive: true });
+      writeFileSync(path.join(outputDir, WATCH_AT_MARKER), `${new Date().toISOString()}${errors.length ? ` ${errors.length} error(s)` : ''}`);
     }
     if (every === undefined) return;
     await new Promise((resolve) => setTimeout(resolve, every * 60_000));

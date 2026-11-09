@@ -1,41 +1,21 @@
 // UserPromptSubmit hook of the jirallm Claude Code plugin. Two jobs, neither ever blocks the prompt:
-// 1. When the background `jirallm watch` logged something since Claude last saw CHANGES.md, the
-//    unseen changes are added to the prompt's context. Usually only two stat calls (no CLI start).
+// 1. When the background `jirallm watch` logged something this session has not been given yet, the
+//    unseen changes are added to the prompt's context, and the user sees a one-line "📥 jirallm: …"
+//    message saying so. Each session keeps its own seen marker, so every open session gets every
+//    change. Usually only two stat calls (no CLI start).
 // 2. When the FIRST prompt of a session holds a Slack link, the session is named after the thread
 //    ("ZOD-1234 first line of the thread · #channel") instead of the generic title Claude would
 //    derive from a pasted thread, so sessions can be told apart in /resume. Costs one Slack fetch,
 //    once per session.
-import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { changesMessage, jirallm, unseenChanges } from './changes.mjs';
 
-const outputDir = path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), 'jira-export');
-const changes = path.join(outputDir, 'CHANGES.md');
-const seen = path.join(outputDir, '.changes.seen');
 const sessionsDir = path.join(os.tmpdir(), 'jirallm-sessions');
 const SLACK_URL = /https:\/\/[\w-]+\.slack\.com\/(?:archives|files)\/[^\s<>)"'\]]+/;
 const ISSUE_KEY = /\b[A-Z][A-Z0-9]+-\d+\b/;
 const MAX_TITLE = 80;
-
-function jirallm(args, timeout) {
-  const r =
-    process.platform === 'win32'
-      ? spawnSync(['jirallm', ...args].map((a) => (/[\s"&|<>^]/.test(a) ? `"${a}"` : a)).join(' '), { encoding: 'utf8', shell: true, timeout })
-      : spawnSync('jirallm', args, { encoding: 'utf8', timeout });
-  return r.status === 0 ? r.stdout.trim() : '';
-}
-
-function unseenChanges() {
-  try {
-    if (existsSync(changes) && (!existsSync(seen) || statSync(changes).mtimeMs > statSync(seen).mtimeMs)) {
-      return jirallm(['changes', '--unseen', '--output-dir', outputDir], 10000);
-    }
-  } catch {
-    // Context is a bonus; never fail the prompt.
-  }
-  return '';
-}
 
 /** True only for the first prompt of this session (a marker file per session id; old ones are cleared). */
 function isFirstPrompt(sessionId) {
@@ -82,13 +62,17 @@ try {
   // A title is a bonus too.
 }
 
-const context = unseenChanges();
-if (title) {
+const context = unseenChanges(input.session_id, true);
+const message = context ? changesMessage(context) : '';
+if (title || context) {
   process.stdout.write(
     JSON.stringify({
-      hookSpecificOutput: { hookEventName: 'UserPromptSubmit', sessionTitle: title, ...(context && { additionalContext: context }) },
+      ...(message && { systemMessage: message }),
+      hookSpecificOutput: {
+        hookEventName: 'UserPromptSubmit',
+        ...(title && { sessionTitle: title }),
+        ...(context && { additionalContext: context }),
+      },
     })
   );
-} else if (context) {
-  process.stdout.write(context);
 }

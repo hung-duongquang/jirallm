@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { changeEntries, changesReport, commentsChangedSince, describeChange, frontmatter, prChanges, slackChanges } from './watch.js';
+import { changeEntries, changesReport, commentsChangedSince, describeChange, frontmatter, prChanges, slackChanges, unseenCount } from './watch.js';
 import type { SlackClient } from '../../lib/slack.js';
 
 const task = (status: string, comments: string) =>
@@ -175,5 +175,36 @@ describe('changesReport', () => {
     expect(next).toContain('- #12 ZOD-2: CI failed (2026-11-04 10:05)');
     expect(next).not.toContain('ZOD-1');
     expect(changesReport(dir, false, 20)).toContain('ZOD-1');
+  });
+});
+
+describe('changesReport per session', () => {
+  const entry = (stamp: string, line: string) => `\n## ${stamp}\n\n- ${line}\n`;
+
+  it('gives every session every change, not only the first one to look', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'changes-session-'));
+    const file = path.join(dir, 'CHANGES.md');
+    writeFileSync(file, entry('2026-11-09 10:00', 'ZOD-1: status: To Do → In Progress'));
+    // Both sessions start after the first entry was seen by an earlier session.
+    expect(changesReport(dir, true, 20)).toContain('ZOD-1');
+    expect(changesReport(dir, true, 20, 'session-a')).toBeNull();
+    expect(changesReport(dir, true, 20, 'session-b')).toBeNull();
+
+    writeFileSync(file, entry('2026-11-09 10:00', 'ZOD-1: status: To Do → In Progress') + entry('2026-11-09 11:30', 'ZOD-2: Comments changed'));
+    expect(unseenCount(dir, 'session-a')).toBe(1);
+    expect(changesReport(dir, true, 20, 'session-a')).toContain('ZOD-2');
+    expect(changesReport(dir, true, 20, 'session-a')).toBeNull();
+    expect(unseenCount(dir, 'session-a')).toBe(0);
+    // Session A moved the shared marker, yet B still gets the change.
+    expect(unseenCount(dir, 'session-b')).toBe(1);
+    expect(changesReport(dir, true, 20, 'session-b')).toContain('ZOD-2');
+    // A new session starts from what the latest session saw.
+    expect(changesReport(dir, true, 20, 'session-c')).toBeNull();
+  });
+
+  it('refuses a session id that could leave the marker folder', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'changes-session-'));
+    writeFileSync(path.join(dir, 'CHANGES.md'), entry('2026-11-09 10:00', 'ZOD-1: x'));
+    expect(() => changesReport(dir, true, 20, '../evil')).toThrow(/--session/);
   });
 });
