@@ -71,7 +71,7 @@ function makeExporter(
   // @ts-expect-error injecting fake client
   exporter.client = {
     fetchIssueDetails: vi.fn(async () => task),
-    fetchIssueSubtasks: vi.fn(async () => []),
+    fetchIssueSubtasks: vi.fn(async () => task.subtasks ?? []),
     downloadAttachment: vi.fn(async () => {}),
     ...clientOverride,
   };
@@ -162,6 +162,30 @@ describe('JiraExporter.exportIssue frontmatter', () => {
     const content = readFileSync(join(tmpDir, 'proj-1', 'task.md'), 'utf-8');
     expect(content).toMatch(/subtasks:\n\s+- key: "PROJ-2"/);
     expect(content).toMatch(/issueLinks:\n\s+- id: "10501"\n\s+type: "blocks"/);
+  });
+
+  it('fetches sub-tasks by default and lists them with their assignee', async () => {
+    const fetchIssueSubtasks = vi.fn(async () => [
+      { key: 'PROJ-7', title: 'FE part', status: 'In Progress', assignee: 'Thong' },
+    ]);
+    const exporter = makeExporter({ ...FULL_TASK, subtasks: undefined }, { fetchIssueSubtasks });
+    await exporter.exportIssue('PROJ-1', { outputDir: tmpDir });
+    const content = readFileSync(join(tmpDir, 'proj-1', 'task.md'), 'utf-8');
+    expect(fetchIssueSubtasks).toHaveBeenCalledWith('PROJ-1');
+    expect(content).toMatch(
+      /subtasks:\n\s+- key: "PROJ-7"\n\s+title: "FE part"\n\s+status: "In Progress"\n\s+assignee: "Thong"/
+    );
+  });
+
+  it('skips the sub-task request when includeSubtasks is false or subtasks is not selected', async () => {
+    const fetchIssueSubtasks = vi.fn(async () => []);
+    const exporter = makeExporter({ ...FULL_TASK, subtasks: undefined }, { fetchIssueSubtasks });
+    await exporter.exportIssue('PROJ-1', { outputDir: tmpDir, includeSubtasks: false });
+    await exporter.exportIssue('PROJ-1', {
+      outputDir: tmpDir,
+      fieldSelector: { preset: 'default', exclude: ['subtasks'] },
+    });
+    expect(fetchIssueSubtasks).not.toHaveBeenCalled();
   });
 
   it('serializes timetracking as a nested mapping', async () => {
@@ -832,6 +856,15 @@ describe('JiraExporter.exportIssues includeLinked', () => {
     const root = readFileSync(join(tmpDir, 'proj-1', 'task.md'), 'utf-8');
     expect(root).toContain('[PROJ-3](../proj-3/task.md)');
     expect(root).toContain('[OTHER-1](https://other.atlassian.net/browse/OTHER-1)');
+  });
+
+  it('also exports sub-tasks of a requested issue', async () => {
+    const root = issue('PROJ-1', { subtasks: [{ key: 'PROJ-5', title: 'FE', status: 'To Do' }] });
+    const exporter = makeExporter(root, {
+      fetchIssueDetails: vi.fn(async (key: string) => (key === 'PROJ-1' ? root : issue(key, { subtasks: [] }))),
+    });
+    const result = await exporter.exportIssues(['PROJ-1'], { outputDir: tmpDir, includeLinked: true });
+    expect(result.imported.map((i) => i.key)).toEqual(['PROJ-1', 'PROJ-5']);
   });
 
   it('skips an inaccessible linked issue and points its link back at Jira', async () => {

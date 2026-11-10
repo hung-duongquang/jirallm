@@ -276,6 +276,7 @@ type SubtaskSummary = {
   key: string;
   title: string;
   status: string;
+  assignee?: string;
 };
 
 export type IssueLinkSummary = {
@@ -1090,13 +1091,18 @@ export class JiraClient {
     try {
       const response = await this.makeRequest<{ issues: JiraIssue[] }>(`/search/jql`, {
         method: 'POST',
-        body: JSON.stringify({ jql, fields: ['summary', 'status'] }),
+        body: JSON.stringify({ jql, fields: ['summary', 'status', 'assignee'] }),
       });
-      return response.issues.map((issue) => ({
-        key: issue.key,
-        title: issue.fields.summary,
-        status: issue.fields.status?.name || 'Unknown',
-      }));
+      return response.issues.map((issue) => {
+        const assignee = (issue.fields as { assignee?: { displayName?: string } | null }).assignee
+          ?.displayName;
+        return {
+          key: issue.key,
+          title: issue.fields.summary,
+          status: issue.fields.status?.name || 'Unknown',
+          ...(assignee ? { assignee } : {}),
+        };
+      });
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.warn(`Failed to fetch subtasks for ${parentKey}: ${errorMessage}`);

@@ -168,7 +168,7 @@ async function runOnce(profile: ResolvedProfile, opts: WatchOptions, outputDir: 
     const exporter = new JiraExporter(profile.config, profile.apiToken);
     const result = await exporter.exportIssues([...stale], {
       outputDir,
-      includeSubtasks: org.includeSubtasks,
+      includeSubtasks: org.includeSubtasks ?? true,
       fieldSelector: org.export?.fieldSelector,
       customFieldDefs: org.export?.customFieldDefs,
       confluenceSites: org.confluenceUrls,

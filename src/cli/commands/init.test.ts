@@ -256,7 +256,7 @@ describe('runInit (interactive wizard)', () => {
       name: 'acme',
       baseUrl: 'https://acme.atlassian.net',
       userEmail: 'me@acme.com',
-      includeSubtasks: undefined,
+      includeSubtasks: false,
       videoFrames: { enabled: false },
       projects: {},
     });

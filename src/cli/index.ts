@@ -173,7 +173,7 @@ async function runExport(rawArgs: string[], flags: ExportFlags, program: Command
   let projectKey = flags.project;
   let apiToken = flags.apiToken;
   let outputDir = flags.outputDir ?? './jira-export';
-  let includeSubtasks = flags.includeSubtasks ?? false;
+  let includeSubtasks = flags.includeSubtasks ?? true;
   const includeParent = flags.includeParent ?? false;
   let videoEnabled = flags.videoFrames;
   let fps = flags.fps ? parseInt(flags.fps, 10) : 5;
@@ -359,7 +359,8 @@ function addExportOptions(cmd: Command): Command {
     .option('--no-video-frames', 'Disable video frame extraction')
     .option('--fps <n>', 'Frame extraction FPS')
     .option('--max-frames <n>', 'Max frames kept per video')
-    .option('--include-subtasks', 'Fetch subtask metadata (may already be enabled via org config).')
+    .option('--include-subtasks', 'List sub-tasks in the frontmatter (default; include_subtasks = false in the org config turns it off)')
+    .option('--no-include-subtasks', 'Leave sub-tasks out (saves one request per issue)')
     .option(
       '--include-parent',
       'Also export the parent issue as its own bundle, walking the whole ancestor chain (without this, the parent only appears as a `parent:` frontmatter line).'

@@ -336,7 +336,10 @@ function linkedIssueKeys(task: JiraTaskData, baseUrl: string): string[] {
       return '';
     }
   })();
-  const keys = (task.issueLinks ?? []).map((link) => link.key.toUpperCase());
+  const keys = [
+    ...(task.issueLinks ?? []).map((link) => link.key.toUpperCase()),
+    ...(task.subtasks ?? []).map((subtask) => subtask.key.toUpperCase()),
+  ];
   const texts = [task.description ?? '', ...task.history.map((entry) => entry.content)];
   for (const url of texts.join('\n').match(/https?:\/\/[^\s)\]]+/g) ?? []) {
     const key = jiraIssueKeyFromUrl(url);
@@ -517,6 +520,7 @@ function buildFrontmatterBlock(task: JiraTaskData, selectedKeys: Set<string>): s
       key: s.key,
       title: s.title,
       status: s.status,
+      ...(s.assignee ? { assignee: s.assignee } : {}),
     }));
   }
   if (selectedKeys.has('issueLinks') && task.issueLinks?.length) {
@@ -636,7 +640,9 @@ export class JiraExporter {
       includeWorklog: options.withWorklog ?? false,
     });
 
-    if (options.includeSubtasks) {
+    // On unless switched off: a sub-task (e.g. the FE part of a BE story) is not an
+    // issue link, so without this it is missing from the export entirely.
+    if (options.includeSubtasks !== false && resolved.friendlyKeys.includes('subtasks')) {
       task.subtasks = await this.client.fetchIssueSubtasks(task.key);
     }
 

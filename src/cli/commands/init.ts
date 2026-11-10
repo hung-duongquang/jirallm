@@ -108,8 +108,8 @@ async function promptOrgFields(name: string): Promise<{
   const includeSubtasks = exitIfCancelled(
     await confirm({
       message:
-        'Include subtasks by default?\n\x1b[2mIf enabled, exports also include child subtasks of each issue.\x1b[22m',
-      initialValue: false,
+        'Include subtasks by default?\n\x1b[2mIf enabled, exports also list the child subtasks of each issue.\x1b[22m',
+      initialValue: true,
     })
   );
 
@@ -160,7 +160,7 @@ async function promptOrgFields(name: string): Promise<{
     name,
     baseUrl,
     userEmail,
-    includeSubtasks: includeSubtasks || undefined,
+    includeSubtasks: includeSubtasks ? undefined : false,
     videoFrames,
     projects: {},
   };

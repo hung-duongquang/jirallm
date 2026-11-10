@@ -989,7 +989,10 @@ describe('JiraClient.fetchIssueSubtasks', () => {
           statusText: 'OK',
           json: async () => ({
             issues: [
-              { key: 'PROJ-2', fields: { summary: 'Sub A', status: { name: 'To Do' } } },
+              {
+                key: 'PROJ-2',
+                fields: { summary: 'Sub A', status: { name: 'To Do' }, assignee: { displayName: 'Thong' } },
+              },
               { key: 'PROJ-3', fields: { summary: 'Sub B' } },
             ],
           }),
@@ -1001,7 +1004,7 @@ describe('JiraClient.fetchIssueSubtasks', () => {
     expect(calls[0].url).toContain('/search/jql');
     expect(JSON.parse(calls[0].body!).jql).toBe('parent = PROJ-1 ORDER BY key ASC');
     expect(subtasks).toEqual([
-      { key: 'PROJ-2', title: 'Sub A', status: 'To Do' },
+      { key: 'PROJ-2', title: 'Sub A', status: 'To Do', assignee: 'Thong' },
       { key: 'PROJ-3', title: 'Sub B', status: 'Unknown' },
     ]);
   });

@@ -202,7 +202,7 @@ async function exportIssues(body, res) {
 
   const exportOptions = {
     outputDir,
-    includeSubtasks: o.subtasks ?? org.includeSubtasks ?? false,
+    includeSubtasks: o.subtasks ?? org.includeSubtasks ?? true,
     includeParent: o.parent ?? false,
     includeLinked: o.linked ?? false,
     fieldSelector: org.export?.fieldSelector,
@@ -441,7 +441,7 @@ async function handle(req, res) {
           userEmail: config.userEmail,
           outputDir: defaultOutputDir,
           repo: args.repo,
-          includeSubtasks: org.includeSubtasks ?? false,
+          includeSubtasks: org.includeSubtasks ?? true,
         });
         return;
       }
