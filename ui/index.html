@@ -730,6 +730,14 @@ function resolveItemFiles(root) {
   root.querySelectorAll('img[src]').forEach((img) => { if (local(img.getAttribute('src'))) img.src = fileUrl(img.getAttribute('src')); });
   root.querySelectorAll('a[href]').forEach((a) => { if (local(a.getAttribute('href'))) a.href = fileUrl(a.getAttribute('href')); });
 }
+/** Relative images of a ticket's task.md or local docs (attachments/…, context images) point into its folder. */
+function resolveTaskImages(root, key) {
+  const q = `key=${encodeURIComponent(key)}&dir=${encodeURIComponent(outDir())}`;
+  root.querySelectorAll('img[src]').forEach((img) => {
+    const src = img.getAttribute('src');
+    if (src && !/^([a-z]+:|#|\/)/i.test(src)) img.src = `${apiBase()}/api/task/file?${q}&name=${encodeURIComponent(decodeURIComponent(src.replace(/^\.\//, '')))}`;
+  });
+}
 async function openTask(key, { fromLink = false, as } = {}) {
   try {
     const q = `key=${encodeURIComponent(key)}&dir=${encodeURIComponent(outDir())}`;
@@ -794,6 +802,7 @@ function renderPreview() {
   // A page or thread keeps its frontmatter out of the way: the header already names it.
   $('previewBody').innerHTML = renderMarkdown(currentItem ? [] : fm, body.replace(/^\s*# .+\n+/, ''));
   if (currentItem) resolveItemFiles($('previewBody'));
+  else if (current) resolveTaskImages($('previewBody'), current);
   if (currentItem?.kind === 'slack') {
     $('previewBody').querySelectorAll('.md h2').forEach((h) => { if (/\(new\)$/.test(h.textContent.trim())) h.classList.add('new-reply'); });
   }
@@ -840,6 +849,7 @@ async function renderDoc(name) {
     if (view !== `doc:${name}`) return;
     const { fm, body } = splitFrontmatter(docText[name]);
     $('previewBody').innerHTML = renderMarkdown(fm, body);
+    resolveTaskImages($('previewBody'), key);
     renderMermaid($('previewBody'));
   } catch (err) {
     $('previewBody').innerHTML = `<div class="empty">${esc(err.message)}</div>`;

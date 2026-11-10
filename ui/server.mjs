@@ -512,6 +512,15 @@ async function handle(req, res) {
         sendJson(res, 200, { markdown: await readFile(path, 'utf8'), path });
         return;
       }
+      case 'GET /api/task/file': {
+        const dir = taskDirFor(resolveOutputDir(url.searchParams.get('dir')), url.searchParams.get('key'));
+        // Only a file inside the ticket's folder (attachments and images task.md / context.md link to).
+        const target = resolve(dir, url.searchParams.get('name') ?? '');
+        if (!target.startsWith(dir + sep) || !existsSync(target)) throw new HttpError(404, 'No such file');
+        res.writeHead(200, { 'content-type': FILE_TYPES[target.split('.').pop().toLowerCase()] ?? 'application/octet-stream' });
+        res.end(await readFile(target));
+        return;
+      }
       case 'GET /api/item/file': {
         const { dir } = itemDirFor(resolveOutputDir(url.searchParams.get('dir')), url.searchParams.get('kind'), url.searchParams.get('id'));
         // Only a file inside the item's folder (images and attachments its markdown links to).
