@@ -53,6 +53,8 @@ import { runChanges, runWatch, type ChangesOptions, type WatchOptions } from './
 import { runStatusLine, type StatusLineOptions } from './commands/statusLine.js';
 import { runPrContext, type PrContextOptions } from './commands/prContext.js';
 import { runPrStatus, type PrStatusOptions } from './commands/prStatus.js';
+import { runNote, runState, type NoteOptions, type StateOptions } from './commands/state.js';
+import { runReviewHistory, type ReviewHistoryOptions } from './commands/reviewHistory.js';
 import { runPageChildren, runPagePublish, type PageChildrenOptions, type PagePublishOptions } from './commands/pagePublish.js';
 import {
   runQaImport, runQaInit, runQaPublish, runQaResult,
@@ -1941,6 +1943,48 @@ Examples:
 `)
   .action(async (pr: string | undefined, opts: PrStatusOptions) => {
     try { await runPrStatus(pr, opts); } catch (err) { exitOnError(err); }
+  });
+
+program
+  .command('state <issue-keys...>')
+  .description('Local card per ticket: exported Jira status, my open PRs (watch state), worktrees, own files and notes. No network calls.')
+  .option('--output-dir <path>', 'Export directory', './jira-export')
+  .option('--repo <path>', 'Git repository whose worktrees to list (default: the one `watch --prs` follows)')
+  .option('--notes', 'Only print tickets that have a local folder (used by the prompt hook)')
+  .addHelpText('after', `
+Examples:
+  $ jirallm state ZOD-3943
+  $ jirallm state ZOD-3943 ZOD-3966 --repo ./zorgdeclaraties
+`)
+  .action((keys: string[], opts: StateOptions) => {
+    try { runState(keys, opts); } catch (err) { exitOnError(err); }
+  });
+
+program
+  .command('note <issue-key> <text...>')
+  .description('Append a dated line to jira-export/<key>/notes.md: facts to keep about a ticket (decisions, settled review points, where it is deployed). Local only.')
+  .option('--output-dir <path>', 'Export directory', './jira-export')
+  .addHelpText('after', `
+Examples:
+  $ jirallm note ZOD-3943 "PR #3017: retour code on sub's RHO invoice settled with Trang, don't re-raise"
+  $ jirallm note ZOD-3966 on Feature4 for testing (3.18.1-prerelease.10)
+`)
+  .action((key: string, words: string[], opts: NoteOptions) => {
+    try { runNote(key, words, opts); } catch (err) { exitOnError(err); }
+  });
+
+program
+  .command('review-history <pr>')
+  .description('Before a re-review: my earlier reviews and threads on a PR grouped by outcome (resolved / answered / waiting), commits and files since my last review, and the ticket notes (uses gh)')
+  .option('--repo <path>', 'Git repository of the PR', '.')
+  .option('--output-dir <path>', 'Export directory (the report is also saved as <key>/review-<pr>.md)', './jira-export')
+  .option('--no-write', 'Only print, do not save review-<pr>.md')
+  .addHelpText('after', `
+Examples:
+  $ jirallm review-history 3093 --repo ./zorgdeclaraties
+`)
+  .action((pr: string, opts: ReviewHistoryOptions) => {
+    try { runReviewHistory(pr, opts); } catch (err) { exitOnError(err); }
   });
 
 program

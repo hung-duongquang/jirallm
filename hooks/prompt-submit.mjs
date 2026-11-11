@@ -1,4 +1,4 @@
-// UserPromptSubmit hook of the jirallm Claude Code plugin. Two jobs, neither ever blocks the prompt:
+// UserPromptSubmit hook of the jirallm Claude Code plugin. Three jobs, none ever blocks the prompt:
 // 1. When the background `jirallm watch` logged something this session has not been given yet, the
 //    unseen changes are added to the prompt's context, and the user sees a one-line "📥 jirallm: …"
 //    message saying so. Each session keeps its own seen marker, so every open session gets every
@@ -7,15 +7,34 @@
 //    ("ZOD-1234 first line of the thread · #channel") instead of the generic title Claude would
 //    derive from a pasted thread, so sessions can be told apart in /resume. Costs one Slack fetch,
 //    once per session.
+// 3. The first time a prompt names a ticket key that has a local folder in jira-export, its state
+//    card (`jirallm state --notes`: Jira status, my PRs, worktree, own files, notes) is added, once
+//    per key per session, so ticket facts live with the ticket instead of in a memory index.
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { changesMessage, jirallm, unseenChanges } from './changes.mjs';
+import { changesMessage, jirallm, outputDir, unseenChanges } from './changes.mjs';
 
 const sessionsDir = path.join(os.tmpdir(), 'jirallm-sessions');
 const SLACK_URL = /https:\/\/[\w-]+\.slack\.com\/(?:archives|files)\/[^\s<>)"'\]]+/;
 const ISSUE_KEY = /\b[A-Z][A-Z0-9]+-\d+\b/;
 const MAX_TITLE = 80;
+const MAX_STATE_KEYS = 3;
+
+/** Keys in the prompt with a local ticket folder that this session has not had a card for yet. */
+function newTicketKeys(prompt, sessionId) {
+  if (!sessionId || !/^[\w-]+$/.test(sessionId)) return [];
+  const keys = [...new Set(prompt.match(new RegExp(ISSUE_KEY, 'g')) ?? [])].filter((k) =>
+    existsSync(path.join(outputDir, k.toLowerCase()))
+  );
+  if (!keys.length) return [];
+  mkdirSync(sessionsDir, { recursive: true });
+  const marker = path.join(sessionsDir, `${sessionId}.keys`);
+  const seen = existsSync(marker) ? readFileSync(marker, 'utf8').split('\n').filter(Boolean) : [];
+  const fresh = keys.filter((k) => !seen.includes(k)).slice(0, MAX_STATE_KEYS);
+  if (fresh.length) writeFileSync(marker, [...seen, ...fresh].join('\n'));
+  return fresh;
+}
 
 /** True only for the first prompt of this session (a marker file per session id; old ones are cleared). */
 function isFirstPrompt(sessionId) {
@@ -62,8 +81,22 @@ try {
   // A title is a bonus too.
 }
 
-const context = unseenChanges(input.session_id, true);
-const message = context ? changesMessage(context) : '';
+let cards = '';
+let cardKeys = [];
+try {
+  if (typeof input.prompt === 'string') {
+    cardKeys = newTicketKeys(input.prompt, input.session_id);
+    if (cardKeys.length) cards = jirallm(['state', ...cardKeys, '--notes', '--output-dir', outputDir], 10000);
+  }
+} catch {
+  // The card is a bonus too.
+}
+
+const changes = unseenChanges(input.session_id, true);
+const context = [cards && `jirallm ticket state (local):\n\n${cards}`, changes].filter(Boolean).join('\n\n');
+const message = [changes && changesMessage(changes), cards && `🗂 jirallm: state of ${cardKeys.join(', ')} added`]
+  .filter(Boolean)
+  .join(' · ');
 if (title || context) {
   process.stdout.write(
     JSON.stringify({

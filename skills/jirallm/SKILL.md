@@ -15,6 +15,8 @@ Output switches to JSON when stdout is piped. Prefer the compact forms below: th
 | Full ticket as markdown (description, AC, comments, attachments, linked Confluence pages) | `jirallm PROJ-1 --no-status-changes --output-dir ./jira-export` then read `jira-export/proj-1/task.md` |
 | Ticket plus its parent chain / linked issues and sub-tasks | add `--include-parent` / `--include-linked` (sub-tasks are listed under `subtasks:` in the frontmatter and exported with `--include-linked`; a story's FE part is often a sub-task, not a link) |
 | Quick look, no files | `jirallm fetch PROJ-1` |
+| Where a ticket stands locally (status, my PRs, worktree, notes), no network | `jirallm state PROJ-1 [PROJ-2]`; keep facts with `jirallm note PROJ-1 "<text>"` |
+| Before re-reviewing a PR: what I already raised and what changed since | `jirallm review-history <pr> --repo <repo>` |
 | Exact field values the markdown lacks or renders wrong (custom fields, link metadata, IDs) | `jirallm fetch PROJ-1 --raw --fields <jira field ids>` (e.g. `issuelinks,customfield_10050`); avoid bare `--raw`, it returns every field |
 | One Confluence page by URL (e.g. a test report) | `jirallm page <url>` → `jira-export/confluence/<id>-<slug>/page.md` |
 | Find Confluence pages (plain words or CQL) | `jirallm page:search "<words>" [--space KEY] --format tsv`, then `jirallm page <url>` on a hit |
@@ -89,7 +91,15 @@ Before reviewing the code:
 2. (Slack, optional) `jirallm slack:search "<key> OR <parent key> OR pull/<pr>" --after <ticket created, YYYY-MM-DD>` and open the threads that look relevant with `jirallm slack <url>`.
 3. Review the diff against the acceptance criteria plus what was decided in any such threads; name the thread when a finding rests on it, and don't flag behaviour a thread explicitly agreed to.
 
-Re-review (the author pushed fixes): with Slack set up, repeat step 2 with `--after <date of my last review>` and re-read the threads found before (`jirallm slack <url>` shows new replies), since answers to review points are often given in Slack rather than on the PR.
+Re-review (the author pushed fixes):
+1. `jirallm review-history <pr> --repo <repo>` first: my earlier reviews, every thread I took part in grouped as resolved (settled: never raise again), answered by the author (check the reply), or still waiting on the author, my conversation comments with replies, the commits and files changed since my last review, and the ticket's notes. It is saved as `jira-export/<key>/review-<pr>.md`. Review only the changes since my last review, plus whatever the open threads point at.
+2. With Slack set up, repeat step 2 above with `--after <date of my last review>` and re-read the threads found before (`jirallm slack <url>` shows new replies), since answers to review points are often given in Slack rather than on the PR.
+3. When the user settles a point outside GitHub (accepted as is, non-blocking, agreed in Slack), keep it with `jirallm note <key> "PR #<pr>: <point> settled: <why>"` so the next re-review skips it.
+
+## Ticket state and notes (instead of a separate memory)
+
+`jirallm state <key>...` prints a local card per ticket (no network calls): exported status and assignee, my open PRs for it from the `watch` state (CI, reviews, threads awaiting me), its worktrees with uncommitted/unpushed counts, my own files next to the export (context.md, test report, review history) and its notes. The plugin's prompt hook adds this card automatically the first time a prompt names a ticket that has a folder in `jira-export`.
+Keep per-ticket facts that are not in Jira or git with `jirallm note <key> "<text>"` (appends a dated line to `jira-export/<key>/notes.md`, local only): PR and worktree for others' tickets, which environment it is deployed on, decisions from calls or Slack, settled review points, what is blocked on whom. Prefer this over writing such facts to an assistant memory file: notes load only when the ticket comes up. Keep each note one line and edit `notes.md` directly to drop stale lines.
 
 ## Testing a ticket (tester workflow)
 

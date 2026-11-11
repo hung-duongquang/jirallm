@@ -213,7 +213,7 @@ async function runOnce(profile: ResolvedProfile, opts: WatchOptions, outputDir: 
 
 /** A change line for CHANGES.md, with the page a notification should open; `error` lines are only printed. */
 export type PrChange = { line: string; url?: string; error?: boolean };
-type PrsState = { meta?: { lastModified?: string; checkedAt?: string; repo?: string }; prs: Record<string, PrSnapshot> };
+type PrsState = { meta?: { lastModified?: string; checkedAt?: string; repo?: string; repoPath?: string }; prs: Record<string, PrSnapshot> };
 
 /**
  * CI and review changes on my open PRs in the repo at `repo` since the last run (state in .prs.json):
@@ -259,7 +259,7 @@ export function prChanges(repo: string, outputDir: string, dryRun: boolean | und
       try { pr = (JSON.parse(gh(cwd, ['pr', 'view', n, '--json', 'state'])) as { state: string }).state.toLowerCase(); } catch { /* keep "closed" */ }
       changes.push({ line: `PR #${n}${old.key ? ` (${old.key})` : ''}: ${pr}`, url: old.url });
     }
-    meta = { repo: slug, lastModified: notified.lastModified, checkedAt: startedAt };
+    meta = { repo: slug, repoPath: cwd, lastModified: notified.lastModified, checkedAt: startedAt };
   } catch (err) {
     return [{ line: `PRs: gh failed (${firstLine(err)})`, error: true }];
   }
