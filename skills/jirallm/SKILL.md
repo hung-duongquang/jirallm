@@ -8,6 +8,17 @@ model: sonnet
 
 Output switches to JSON when stdout is piped. Prefer the compact forms below: they cost far fewer tokens.
 
+## Workflows: read the file before starting that kind of task
+
+The steps for each workflow live next to this file, so they only cost context when needed:
+- Writing a ticket context / how-to-test / design note and publishing it to Confluence → read `references/documents.md`
+- Implementing a ticket, opening a PR for it, then following its CI and code review → read `references/implement.md`
+- Reviewing or re-reviewing someone else's PR (also one named only by its number) → read `references/review.md`
+- Where a ticket stands, and keeping per-ticket facts (`state`, `note`) → read `references/notes.md`
+- Testing a ticket and writing or publishing its test report → read `references/test.md`
+- Ticket, PR and Slack changes (`watch`, `changes`, the monitor), keeping jira-export lean (`prune`) → read `references/staying-current.md`
+- SharePoint pages and Office documents, editing a PowerPoint deck, intranet search → read `references/sharepoint.md`
+
 ## Read (safe, no side effects)
 
 | Need | Command |
@@ -21,10 +32,7 @@ Output switches to JSON when stdout is piped. Prefer the compact forms below: th
 | One Confluence page by URL (e.g. a test report) | `jirallm page <url>` → `jira-export/confluence/<id>-<slug>/page.md` |
 | Find Confluence pages (plain words or CQL) | `jirallm page:search "<words>" [--space KEY] --format tsv`, then `jirallm page <url>` on a hit |
 | A Slack message link (`https://<ws>.slack.com/archives/<channel>/p<id>`) or image/file link (`…/files/<user>/<F…>/<name>`, resolved to the message that shares it), with its thread | `jirallm slack <url>` prints Markdown, plus a section with channel messages posted after the thread started (people often answer in the channel instead of the thread; they can be unrelated, `--no-channel` drops them); `--output-dir ./jira-export` also saves images and extracts frames from videos (`<file>-frames/`, read them to see a screen recording). `--title` prints one line (`<first line> · #channel`; the plugin hook names a session after the Slack link in its first prompt). No token → ask the user to run `jirallm slack:auth` |
-| A SharePoint page link (`https://<tenant>.sharepoint.com/sites/<site>/SitePages/<page>.aspx`), e.g. an intranet page | `jirallm sharepoint <url>` prints Markdown; `--output-dir ./jira-export` writes `jira-export/sharepoint/<site>-<page>/page.md` with its images. No session → ask the user to run `jirallm sharepoint:auth` |
-| A SharePoint Office document link (PowerPoint/Word/Excel: `https://<tenant>.sharepoint.com/:p:/s/<site>/<token>`, `:w:`, `:x:`, or a path ending in .pptx/.docx/.xlsx), e.g. a slide deck | `jirallm sharepoint <url> --output-dir ./jira-export` writes `jira-export/sharepoint/<site>-<file>/document.md` (slide text and speaker notes, Word headings and tables, Excel sheets) and the original file. The local Office app opens it with the user's own sign-in, so no cookie is needed. Windows + Microsoft 365 only; don't download Office files with the SharePoint cookie |
-| Change text in a PowerPoint deck on SharePoint (a team slide, speaker notes, a typo) | Confirm with the user first (it saves straight to the shared deck). Read it with `jirallm sharepoint <url>` (shape names show as `<!-- TextBox 18 -->`), then `jirallm sharepoint:edit <url> --slide <n> --shape "<name>" --text @file` (one line per paragraph), `--notes @file`, or `--find <old> --replace <new>`; several at once with `--edits edits.json`. Run with `--dry-run` first. Formatting per paragraph is kept; nothing changes if a target is not found. Trust only "SharePoint has every change": a COM save alone stays in the Office cache. "not on SharePoint yet" means it did not upload (tell the user). `--find` covers slide text, not notes. Don't script PowerPoint COM by hand |
-| Find SharePoint / intranet pages (company policies, how-tos, who to ask) | `jirallm sharepoint:search '<words>'` (KQL; `--site <url>`, `--documents`): one TSV row per hit, open one with `jirallm sharepoint <url>`; prints "SharePoint not set up" when there is no session |
+| SharePoint pages, Office documents (read; change a deck), intranet search | read `references/sharepoint.md` first |
 | Slack discussions of a ticket or PR (decisions not written in Jira) | `jirallm slack:search "PROJ-1 OR PROJ-0 OR pull/123" --after <ticket created>`: one TSV row per thread with its permalink; open the relevant ones with `jirallm slack <url>` |
 | Child pages of a Confluence page (find where a new page goes) | `jirallm page:children <id or url> --format tsv` |
 | List issues (compact) | `jirallm search --org <org> '<JQL>' --fields key,summary,status,assignee --format tsv --all` |
@@ -51,67 +59,11 @@ jirallm or the Atlassian MCP server: use jirallm for ticket context (files on di
 | Set fix / affects versions | `jirallm edit PROJ-1 --fix-versions <name> [--fix-versions <name>]` (replaces the whole set; `''` clears it; names from `versions`) |
 | Publish a markdown file as a Confluence page (create, then update) | `jirallm page:publish <file.md> --space KEY --parent <id> --link PROJ-1 --dry-run` |
 
-## Documents for the team
-
-Write-ups for a ticket (business and technical context, how to test, a design note) start as local markdown next to the ticket, not in a chat-only or private doc tool, unless the user asks for that tool. Every other `.md` in `jira-export/<key>/` shows as its own tab in `jirallm ui` (mermaid blocks render there), so the user can read it without publishing. Publish to Confluence (steps 2–3) only when the user asks:
-1. Write the markdown to `jira-export/<key>/context.md` (`# Title` first; images next to it, linked relatively, become attachments; mermaid is fine locally, but turn diagrams into images before publishing, since Confluence does not render mermaid).
-2. Find the parent page: the user's choice, or `page:search` / `page:children` under the space's feature or sprint pages. Ask when unsure.
-3. `jirallm page:publish jira-export/<key>/context.md --space KEY --parent <id> --link <key> --dry-run`, show the plan, and publish after the user confirms (a **write**). Later runs update the same page (the id is kept in `.context.md.confluence.json`); a page with the same title is never overwritten without `--page`.
+With the Claude Code plugin installed, these commands (and `gh pr review/merge/comment`, GitHub API writes) also raise a permission prompt for the user; `--dry-run` runs pass without one. Still tell the user what you are about to write.
 
 ## Slack (optional)
 
 Teams that discuss tickets in Slack often decide things there that never reach Jira. The Slack steps below are optional: when `slack:search` prints "Slack not set up", skip every Slack step for the rest of the task without mentioning it.
-
-## Implementing a ticket
-
-After exporting the ticket (or `start`), and before writing code:
-1. (Slack, optional) `jirallm slack:search "<key> OR <parent key>" --after <ticket created, YYYY-MM-DD>` and open the threads that look relevant with `jirallm slack <url>`.
-2. Tell the user when a thread decided something the acceptance criteria don't say, or contradicts them, and ask which one wins before building on it.
-3. Implement against the acceptance criteria plus those decisions; name the thread in the PR description when the code follows it.
-
-## Before opening a PR
-
-Run `jirallm pr-context --repo <worktree>` (key taken from the branch name) before `gh pr create`. It re-exports the ticket and prints what changed in Jira since work started (first branch commit): requirement and description edits as line diffs, new comments, status and assignee changes, plus the branch commits and diffstat. Then:
-- tell the user about requirement changes or comments that the branch does not cover yet, before opening the PR;
-- check the diff against the acceptance criteria in the re-exported `task.md`;
-- write the PR description from it (what was built per acceptance criterion, anything left out and why).
-
-## After opening a PR (CI and code review)
-
-`jirallm pr-status [<pr>] --repo <worktree>` (needs `gh`; the PR defaults to the worktree's branch) prints one compact view: checks (failed, pending, passed), and for each failed GitHub Actions job the relevant log lines (errors and failed tests, ANSI and echoed script lines stripped), the latest review per reviewer, unresolved review threads whose last comment is not mine (path:line, first and last comment, link), and conversation comments since the last commit. Use it instead of `gh pr checks` plus raw `gh run view --log-failed`, which costs far more tokens.
-- Right after `gh pr create` or a push, run `jirallm pr-status --repo <worktree> --wait` in the background (Claude Code: `run_in_background`). It polls every 60 s until no check is pending (`--timeout 90` min), prints the result and exits 1 when a check failed, so you are notified when CI settles.
-- A failed check: read the digest, reproduce locally, fix and push (ask before pushing unless the user asked for it); only open the full log (`gh run view --job <id> --log-failed`) when the digest is not enough. Report infra failures (missing secrets, cache, runner) to the user instead of changing code for them.
-- Review threads awaiting me: fix or answer each one, then tell the user what you changed. Replying on GitHub and resolving threads are **writes**: confirm first.
-- `jirallm watch --prs <repo>` tracks all my open PRs between sessions: new CI failures, CI back to green, new reviews, threads awaiting me, new comments and merged/closed PRs are added to `CHANGES.md` (state in `jira-export/.prs.json`), so they show up at session start with `jirallm changes --unseen`. It is cheap enough to run every minute (one `gh pr list` plus a GitHub notifications poll that is a free 304 when nothing happened); a PR is only read in full when its checks changed or it got a notification. Recommended schedule: `jirallm watch --install 1 --jira-every 5 --prs <repo>` (PRs every minute, Jira/Confluence every 5 minutes; changes reach Claude through the hooks). Add `--notify` only if the user wants a Windows toast for each change.
-
-## Reviewing someone else's PR for a ticket
-
-Before reviewing the code:
-1. Export the ticket (`--include-parent` when it is a sub-task) and find its PR (`gh pr list --search "<key>" --state all`), or, given only a PR number, take the key from its title or branch (`gh pr view <pr> --json title,headRefName`).
-2. (Slack, optional) `jirallm slack:search "<key> OR <parent key> OR pull/<pr>" --after <ticket created, YYYY-MM-DD>` and open the threads that look relevant with `jirallm slack <url>`.
-3. Review the diff against the acceptance criteria plus what was decided in any such threads; name the thread when a finding rests on it, and don't flag behaviour a thread explicitly agreed to.
-
-Re-review (the author pushed fixes):
-1. `jirallm review-history <pr> --repo <repo>` first: my earlier reviews, every thread I took part in grouped as resolved (settled: never raise again), answered by the author (check the reply), or still waiting on the author, my conversation comments with replies, the commits and files changed since my last review, and the ticket's notes. It is saved as `jira-export/<key>/review-<pr>.md`. Review only the changes since my last review, plus whatever the open threads point at.
-2. With Slack set up, repeat step 2 above with `--after <date of my last review>` (inclusive: same-day replies count) and re-read the threads found before with `jirallm slack <url> --since "<my last review, YYYY-MM-DD HH:MM>"`, since answers to review points are often given in Slack rather than on the PR, in replies that do not repeat the key and so never match a search. The search rows' `replies` / `last reply` columns show which threads moved. Never cut `jirallm slack` output with `head`/`Select-Object -First`: the newest replies are at the end (its header names the last reply, so check you saw it); use `--since` to shorten it.
-3. When the user settles a point outside GitHub (accepted as is, non-blocking, agreed in Slack), keep it with `jirallm note <key> "PR #<pr>: <point> settled: <why>"` so the next re-review skips it.
-
-## Ticket state and notes (instead of a separate memory)
-
-`jirallm state <key>...` prints a local card per ticket (no network calls): exported status and assignee, my open PRs for it from the `watch` state (CI, reviews, threads awaiting me), its worktrees with uncommitted/unpushed counts, my own files next to the export (context.md, test report, review history) and its notes. The plugin's prompt hook adds this card automatically the first time a prompt names a ticket that has a folder in `jira-export`.
-Keep per-ticket facts that are not in Jira or git with `jirallm note <key> "<text>"` (appends a dated line to `jira-export/<key>/notes.md`, local only): PR and worktree for others' tickets, which environment it is deployed on, decisions from calls or Slack, settled review points, what is blocked on whom. Prefer this over writing such facts to an assistant memory file: notes load only when the ticket comes up. Keep each note one line and edit `notes.md` directly to drop stale lines.
-The plugin keeps this going on its own: before a compaction it asks the summary to keep the keys, PRs and worktrees and to list decisions not yet noted; after compaction it re-adds the state cards of the session's tickets; and when a turn submitted a review, merged, pushed, opened a PR or changed a ticket without writing a note, a stop hook asks once whether something should be noted. If nothing is worth keeping, just end the turn.
-
-## Testing a ticket (tester workflow)
-
-1. `jirallm PROJ-1 --no-status-changes`, then `jirallm qa init PROJ-1 --env <url> [--template api|matrix] [--api <endpoint>]`: writes `jira-export/proj-1/test-report.md` with one test case (TC-01…) per acceptance-criteria scenario. Edit it to add steps, expected results and preconditions. Keep the table shape. Pick the layout by ticket: `default`; `api` for backend tickets driven by API calls or messages (a shared base message, a read-back section, and a Test Data column so each case lists only what it changes); `matrix` when the outcome depends on a combination such as insurer result × action (columns Situation, Action, Expected Result, Side effects, and an Also-check list for invariants).
-2. After running each case: `jirallm qa result PROJ-1 TC-03 pass|fail|blocked --note "<observed>" --evidence shot.png resp.json`. Evidence is copied next to the report and the Results line is recounted.
-   Automated instead: run the Playwright tests with the JSON reporter, then `jirallm qa import PROJ-1 <results.json> [--grep <describe or title>] [--layer "API (Playwright)"]`. Each test becomes a case (re-runs update the same case, matched on title) with its `test.step` titles as steps, its verdict, the failure message as note, and its image attachments as evidence. Untouched placeholder cases are dropped. A test that covers acceptance-criteria cases names them with an annotation `{ type: "qa-case", description: "GP-1, GP-5" }` (case ids or the scenario label a title starts with): its result then goes on those cases, whose written steps are kept.
-3. `jirallm qa publish PROJ-1 --space <KEY> [--parent <pageId>] --dry-run`, then run it without `--dry-run` (a **write**). It creates the page, or updates it on later runs, uploads the evidence and links the page from the issue.
-
-People who prefer a screen use the same files through `jirallm ui`: pick a ticket, then **Test report** (edit cases, Pass/Fail/Blocked with pasted screenshots, Preview, Publish). A report title must be unique in the space; an existing page is never overwritten.
-
-Every write command accepts `--dry-run`: use it when unsure. `start` runs git before touching Jira, so a failed worktree leaves the issue unchanged.
 
 ## Gotchas
 
@@ -119,10 +71,3 @@ Every write command accepts `--dry-run`: use it when unsure. `start` runs git be
 - `openSprints()` can cover several boards' sprints; narrow with `sprint = "<name>"` or a board query.
 - Exports overwrite `task.md` and keep the previous copy as `.task.previous.md`, so diff the two to see what changed.
 
-## Staying current
-
-`jirallm watch` re-exports exported tickets and Confluence pages that changed since their local copy, plus open tickets assigned to me that are not exported yet and exported Slack threads with new replies (when Slack is set up; every 5 minutes at most, threads quiet for 14 days are skipped), and appends one line per change to `jira-export/CHANGES.md` (e.g. `ZOD-1: status: To Do → In Progress; Comments changed`). `jirallm changes` prints them compactly (one line per ticket, latest state); `--dry-run` on `watch` only lists what would be re-exported. A session-start hook running `jirallm changes --unseen --session <id>` puts new changes in context automatically, and a prompt hook does the same on each user message when `watch` logged something since; each Claude Code session keeps its own seen marker (`jira-export/.changes.seen.d/<id>`), so every open session gets every change, and the user sees a "📥 jirallm: N changes added to Claude's context" line when they arrive. `jirallm status-line` (set as Claude Code's `statusLine` command) shows the last `watch` run and how many changes this session has not been given yet. `--install 15` runs it every 15 minutes in the background (`--uninstall` removes it).
-
-Keeping `jira-export` lean: `watch` re-checks every exported ticket and page, so finished tickets are dead weight there and in searches. `jirallm prune --dry-run` lists the exports of tickets in the Done status category (Resolved, Rejected, …) and the Confluence pages only they link to, with sizes; `jirallm prune --yes` removes them. The user's own files in those folders (context.md, test reports, notes) are always kept. Pages exported on their own and Slack/SharePoint exports are not touched, and anything removed comes back with `jirallm <KEY>`. Use `--done-for <days>` to keep recently finished tickets and `--keep <keys>` for ones still being discussed. Suggest it when the folder grows large or many exported tickets are finished, and ask before running it with `--yes`.
-
-Mid-session changes (CI failed or went green, a review or thread awaiting me, a ticket or Slack thread moved) arrive as notifications from the Claude Code plugin's background monitor "jirallm-changes", which starts with every interactive session (not with `-p`): it learns the session id from the session-start hook and every 30 s delivers what the scheduled `watch` appended to `CHANGES.md`, marked seen for this session only, so the prompt hook does not repeat it and other sessions still get it. Without the plugin (or if the monitor reports no handshake), start `jirallm changes --follow --session <id> --output-dir <workspace>/jira-export` under the **Monitor** tool instead (`timeout_ms` 1800000, re-arm on expiry); the session-start context gives the exact command. Always pass `--session`: without it the shared marker is used. On an event: CI failure on my PR → `jirallm pr-status --repo <worktree>` and fix it (ask before pushing); review/thread awaiting me → read and propose fixes or answers; Jira/Slack changes → mention briefly when they touch the current work. Not useful without the scheduled `watch` (check with `schtasks /Query /TN "jirallm watch"`).

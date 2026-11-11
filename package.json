@@ -1,6 +1,6 @@
 {
   "name": "jirallm",
-  "version": "0.28.0",
+  "version": "0.29.0",
   "description": "Export Jira issues as LLM-ready context bundles — markdown, attachments, video frames",
   "type": "module",
   "main": "dist/index.js",
@@ -36,6 +36,7 @@
     ".claude-plugin",
     "hooks",
     "monitors",
+    "commands",
     "skills"
   ],
   "scripts": {

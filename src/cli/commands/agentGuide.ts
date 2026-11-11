@@ -58,6 +58,8 @@ jirallm or the Atlassian MCP server: use jirallm for ticket context (files on di
 | Set fix / affects versions | \`jirallm edit PROJ-1 --fix-versions <name> [--fix-versions <name>]\` (replaces the whole set; \`''\` clears it; names from \`versions\`) |
 | Publish a markdown file as a Confluence page (create, then update) | \`jirallm page:publish <file.md> --space KEY --parent <id> --link PROJ-1 --dry-run\` |
 
+With the Claude Code plugin installed, these commands (and \`gh pr review/merge/comment\`, GitHub API writes) also raise a permission prompt for the user; \`--dry-run\` runs pass without one. Still tell the user what you are about to write.
+
 ## Documents for the team
 
 Write-ups for a ticket (business and technical context, how to test, a design note) start as local markdown next to the ticket, not in a chat-only or private doc tool, unless the user asks for that tool. Every other \`.md\` in \`jira-export/<key>/\` shows as its own tab in \`jirallm ui\` (mermaid blocks render there), so the user can read it without publishing. Publish to Confluence (steps 2–3) only when the user asks:
@@ -134,6 +136,67 @@ Keeping \`jira-export\` lean: \`watch\` re-checks every exported ticket and page
 
 Mid-session changes (CI failed or went green, a review or thread awaiting me, a ticket or Slack thread moved) arrive as notifications from the Claude Code plugin's background monitor "jirallm-changes", which starts with every interactive session (not with \`-p\`): it learns the session id from the session-start hook and every 30 s delivers what the scheduled \`watch\` appended to \`CHANGES.md\`, marked seen for this session only, so the prompt hook does not repeat it and other sessions still get it. Without the plugin (or if the monitor reports no handshake), start \`jirallm changes --follow --session <id> --output-dir <workspace>/jira-export\` under the **Monitor** tool instead (\`timeout_ms\` 1800000, re-arm on expiry); the session-start context gives the exact command. Always pass \`--session\`: without it the shared marker is used. On an event: CI failure on my PR → \`jirallm pr-status --repo <worktree>\` and fix it (ask before pushing); review/thread awaiting me → read and propose fixes or answers; Jira/Slack changes → mention briefly when they touch the current work. Not useful without the scheduled \`watch\` (check with \`schtasks /Query /TN "jirallm watch"\`).
 `;
+
+/**
+ * Where each section of AGENT_GUIDE goes in the Claude Code plugin skill. The skill's SKILL.md is
+ * loaded in full whenever it triggers, so it keeps only what nearly every task needs (read/write
+ * tables, gotchas) plus an index; each workflow is a file under references/ that Claude reads when
+ * that kind of task starts (progressive disclosure). Matched on the heading's start; a heading
+ * missing here fails the build, so no section is dropped silently.
+ */
+const SKILL_LAYOUT: Array<{ heading: string; file?: string; when?: string }> = [
+  { heading: 'Read' },
+  { heading: 'Write' },
+  { heading: 'Slack (optional)' },
+  { heading: 'Implementing a ticket', file: 'implement.md', when: 'Implementing a ticket, opening a PR for it, then following its CI and code review' },
+  { heading: 'Before opening a PR', file: 'implement.md' },
+  { heading: 'After opening a PR', file: 'implement.md' },
+  { heading: 'Reviewing someone else', file: 'review.md', when: "Reviewing or re-reviewing someone else's PR (also one named only by its number)" },
+  { heading: 'Ticket state and notes', file: 'notes.md', when: 'Where a ticket stands, and keeping per-ticket facts (`state`, `note`)' },
+  { heading: 'Testing a ticket', file: 'test.md', when: 'Testing a ticket and writing or publishing its test report' },
+  { heading: 'Documents for the team', file: 'documents.md', when: 'Writing a ticket context / how-to-test / design note and publishing it to Confluence' },
+  { heading: 'Staying current', file: 'staying-current.md', when: 'Ticket, PR and Slack changes (`watch`, `changes`, the monitor), keeping jira-export lean (`prune`)' },
+  { heading: 'Gotchas' },
+];
+const SHAREPOINT_ROW = /^\| (A SharePoint|Change text in a PowerPoint|Find SharePoint)/;
+
+/** The plugin skill as files relative to skills/jirallm/: SKILL.md plus references/*.md. */
+export function pluginSkillFiles(guide = AGENT_GUIDE): Record<string, string> {
+  const [head = '', ...chunks] = guide.split(/^(?=## )/m);
+  const core: string[] = [];
+  const refs = new Map<string, string[]>();
+  const index: string[] = [];
+  for (const chunk of chunks) {
+    const heading = /^## (.+)$/m.exec(chunk)![1]!;
+    const place = SKILL_LAYOUT.find((p) => heading.startsWith(p.heading));
+    if (!place) throw new Error(`agent guide section "${heading}" has no place in SKILL_LAYOUT`);
+    if (!place.file) {
+      core.push(chunk);
+      continue;
+    }
+    if (place.when) index.push(`- ${place.when} → read \`references/${place.file}\``);
+    refs.set(place.file, [...(refs.get(place.file) ?? []), chunk]);
+  }
+  // The SharePoint rows are long and rarely needed: one pointer row in the core table instead.
+  const spRows: string[] = [];
+  const coreText = core
+    .join('')
+    .split('\n')
+    .flatMap((line) => {
+      if (!SHAREPOINT_ROW.test(line)) return [line];
+      spRows.push(line);
+      return spRows.length === 1 ? ['| SharePoint pages, Office documents (read; change a deck), intranet search | read `references/sharepoint.md` first |'] : [];
+    })
+    .join('\n');
+  if (spRows.length) {
+    index.push('- SharePoint pages and Office documents, editing a PowerPoint deck, intranet search → read `references/sharepoint.md`');
+    refs.set('sharepoint.md', ['## SharePoint\n\n| Need | Command |\n|---|---|\n', `${spRows.join('\n')}\n`]);
+  }
+  const workflows = `## Workflows: read the file before starting that kind of task\n\nThe steps for each workflow live next to this file, so they only cost context when needed:\n${index.join('\n')}\n\n`;
+  const files: Record<string, string> = { 'SKILL.md': `${head}${workflows}${coreText}` };
+  for (const [file, parts] of refs) files[`references/${file}`] = `# jirallm: ${file.replace(/\.md$/, '')}\n\n${parts.join('').trimEnd()}\n`;
+  return files;
+}
 
 export type AgentGuideOptions = { install?: string | boolean };
 

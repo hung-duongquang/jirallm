@@ -1,8 +1,8 @@
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { AGENT_GUIDE, runAgentGuide } from './agentGuide.js';
+import { AGENT_GUIDE, pluginSkillFiles, runAgentGuide } from './agentGuide.js';
 import { tsvCell, toTsv } from './search.js';
 
 afterEach(() => vi.restoreAllMocks());
@@ -19,8 +19,27 @@ describe('agent-guide', () => {
     expect(readFileSync(path.join(dir, '.claude', 'skills', 'jirallm', 'SKILL.md'), 'utf8')).toBe(AGENT_GUIDE);
   });
 
-  it('matches the plugin skill (run `pnpm build` to refresh skills/jirallm/SKILL.md)', () => {
-    expect(readFileSync('skills/jirallm/SKILL.md', 'utf8').replace(/\r\n/g, '\n')).toBe(AGENT_GUIDE);
+  it('matches the plugin skill (run `pnpm build` to refresh skills/jirallm/)', () => {
+    const files = pluginSkillFiles();
+    for (const [file, text] of Object.entries(files)) {
+      expect(readFileSync(path.join('skills/jirallm', file), 'utf8').replace(/\r\n/g, '\n'), file).toBe(text);
+    }
+    expect(readdirSync('skills/jirallm/references').map((f) => `references/${f}`).sort()).toEqual(Object.keys(files).filter((f) => f !== 'SKILL.md').sort());
+  });
+
+  it('splits the plugin skill into a short core and references, keeping every section', () => {
+    const files = pluginSkillFiles();
+    expect(files['SKILL.md']).toMatch(/^---\nname: jirallm\n/);
+    expect(files['SKILL.md']!.length).toBeLessThan(AGENT_GUIDE.length / 2);
+    expect(files['SKILL.md']).toContain('read `references/review.md`');
+    const all = Object.values(files).join('\n');
+    for (const heading of AGENT_GUIDE.match(/^## .+$/gm)!) expect(all, heading).toContain(heading);
+    expect(files['references/sharepoint.md']).toContain('sharepoint:edit');
+    expect(files['SKILL.md']).not.toContain('sharepoint:edit');
+  });
+
+  it('refuses a guide section without a place in the skill', () => {
+    expect(() => pluginSkillFiles(`${AGENT_GUIDE}\n## Brand new section\n\ntext\n`)).toThrow(/Brand new section/);
   });
 });
 
