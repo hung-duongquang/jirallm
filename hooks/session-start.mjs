@@ -8,7 +8,7 @@
 // been given, which the summary may have reduced to a mention, and asks Claude to save decisions
 // from the summary as ticket notes.
 // It never fails the session.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { changesMessage, jirallm, outputDir, unseenChanges } from './changes.mjs';
@@ -30,12 +30,56 @@ function sessionKeys() {
   return session && existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean) : [];
 }
 
+const MAX_RECOVERED_KEYS = 10;
+
+/**
+ * A resumed or forked session keeps working on the tickets it was on. A plain resume keeps its id,
+ * so its keys file is still there (its timestamp is refreshed, so the 30-day cleanup spares it). A
+ * fork has a new id, and a session resumed after the cleanup lost the file: then the keys are taken
+ * again from the user prompts in its transcript (only keys with a ticket folder, newest last).
+ */
+function restoreSessionKeys() {
+  if (!session || !['resume', 'fork'].includes(input.source)) return;
+  const file = path.join(sessionsDir, `${session}.keys`);
+  try {
+    mkdirSync(sessionsDir, { recursive: true });
+    if (existsSync(file)) {
+      utimesSync(file, new Date(), new Date());
+      return;
+    }
+    if (typeof input.transcript_path !== 'string' || !existsSync(input.transcript_path)) return;
+    const keys = [];
+    for (const line of readFileSync(input.transcript_path, 'utf8').split('\n')) {
+      if (!line.includes('"type":"user"')) continue;
+      let entry;
+      try {
+        entry = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const content = entry.message?.content;
+      const text = typeof content === 'string' ? content : Array.isArray(content) && !content.some((c) => c.type === 'tool_result') ? content.filter((c) => c.type === 'text').map((c) => c.text).join('\n') : '';
+      // Hook output injected into prompts names other tickets too; only the user's own words count.
+      for (const k of text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').match(/\b[A-Z][A-Z0-9]+-\d+\b/g) ?? []) {
+        if (!existsSync(path.join(outputDir, k.toLowerCase()))) continue;
+        const i = keys.indexOf(k);
+        if (i >= 0) keys.splice(i, 1);
+        keys.push(k);
+      }
+    }
+    if (keys.length) writeFileSync(file, keys.slice(-MAX_RECOVERED_KEYS).join('\n'));
+  } catch {
+    // Without keys the session just gets other tickets' changes as one line.
+  }
+}
+
 if (!jirallm(['--version'], 15000)) {
   console.log(
     'jirallm plugin: the jirallm CLI is not installed. Ask the user to run ' +
       '`npm install -g github:hung-duongquang/jirallm#release` and then `jirallm init` (their own Jira API token).'
   );
 } else if (existsSync(outputDir)) {
+  restoreSessionKeys();
   const changes = unseenChanges(session, false);
   const parts = [];
   if (changes) parts.push(changes);
