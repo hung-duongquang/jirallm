@@ -6,7 +6,9 @@
 // Monitors get no session id, but changes are delivered per session (each session has its own seen
 // marker, shared with the prompt hook so nothing arrives twice). The SessionStart hook therefore
 // leaves a handshake file (<tmp>/jirallm-sessions/<id>.start holding the project dir); this monitor
-// claims the newest unclaimed one for its project, then polls every 30 s. It only starts the CLI
+// claims the newest unclaimed one for its project, then polls every 30 s. Only changes to the
+// session's own tickets (the keys its prompts named) are pushed; a session not on a ticket yet is
+// never interrupted, and other tickets' changes wait for the next prompt as one line. It only starts the CLI
 // when CHANGES.md changed after the session's marker, and every CLI run is short-lived, so nothing
 // is left running when Claude Code stops the monitor.
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
@@ -15,7 +17,7 @@ import path from 'node:path';
 
 const projectDir = path.resolve(process.argv[2] || process.cwd());
 process.env.CLAUDE_PROJECT_DIR = projectDir;
-const { outputDir, unseenChanges } = await import('./changes.mjs');
+const { outputDir, pushChanges } = await import('./changes.mjs');
 
 const sessionsDir = path.join(os.tmpdir(), 'jirallm-sessions');
 const POLL_MS = 30_000;
@@ -66,12 +68,12 @@ while (!session && Date.now() - startedAt < HANDSHAKE_WAIT_MS) {
   if (!session) await sleep(2000);
 }
 if (!session) {
-  console.log('jirallm monitor: no session handshake from the SessionStart hook; changes still arrive with each prompt.');
+  // Quietly: a notification about plumbing is noise. Changes still arrive with each prompt.
   process.exit(0);
 }
 
 for (;;) {
-  const report = unseenChanges(session, true);
+  const report = pushChanges(session);
   if (report) console.log(report);
   await sleep(POLL_MS);
 }

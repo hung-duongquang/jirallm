@@ -320,7 +320,7 @@ export async function slackChanges(
   return changes;
 }
 
-export type ChangesOptions = { outputDir?: string; unseen?: boolean; max?: string; follow?: string | boolean; session?: string };
+export type ChangesOptions = { outputDir?: string; unseen?: boolean; max?: string; follow?: string | boolean; session?: string; keys?: string; pushOnly?: boolean };
 
 /** Path of the seen marker for a session (validated id), or of the shared one without a session. */
 export function seenMarkerPath(outputDir: string, session?: string): string {
@@ -387,15 +387,18 @@ export async function runChanges(opts: ChangesOptions): Promise<void> {
   const outputDir = opts.outputDir ?? './jira-export';
   const max = opts.max === undefined ? 20 : Number(opts.max);
   if (!Number.isInteger(max) || max < 1) throw new Error('--max must be a positive integer.');
+  const keys = opts.keys === undefined ? undefined : opts.keys.split(',').map((k) => k.trim().toUpperCase()).filter(Boolean);
+  if ((keys || opts.pushOnly) && !opts.session) throw new Error('--keys and --push-only need --session.');
+  const focus: ChangeFocus | undefined = keys || opts.pushOnly ? { keys: keys ?? [], pushOnly: opts.pushOnly } : undefined;
   if (opts.follow === undefined || opts.follow === false) {
-    const report = changesReport(outputDir, !!opts.unseen, max, opts.session);
+    const report = changesReport(outputDir, !!opts.unseen || !!focus, max, opts.session, focus);
     if (report) console.log(report);
     return;
   }
   const seconds = opts.follow === true ? 30 : Number(opts.follow);
   if (!(seconds >= 1)) throw new Error('--follow takes a number of seconds.');
   for (;;) {
-    const report = changesReport(outputDir, true, max, opts.session);
+    const report = changesReport(outputDir, true, max, opts.session, focus);
     if (report) console.log(report);
     await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
   }
@@ -407,7 +410,8 @@ export async function runChanges(opts: ChangesOptions): Promise<void> {
  * moves past them: the session's own marker when `session` is given (so each Claude Code session
  * hears about every change, not only the first one to look), else the shared `.changes.seen`.
  */
-export function changesReport(outputDir: string, unseen: boolean, max: number, session?: string): string | null {
+export function changesReport(outputDir: string, unseen: boolean, max: number, session?: string, focus?: ChangeFocus): string | null {
+  if (focus && session) return focusedReport(outputDir, session, focus);
   const file = path.join(outputDir, CHANGES_FILE);
   if (!existsSync(file)) return null;
   const seen = unseen ? seenStamp(outputDir, session) : '';
@@ -436,6 +440,74 @@ export function changesReport(outputDir: string, unseen: boolean, max: number, s
   if (shown.length < lines.length) out.push(`- … ${lines.length - shown.length} older line(s) in ${file}`);
   out.push(...shown);
   return out.join('\n');
+}
+
+/**
+ * Which changes concern a session: the tickets it works on (`keys`). With `pushOnly` (the background
+ * monitor) only those are printed and the session's seen marker is left alone; a separate
+ * "pushed" marker remembers how far the monitor got, so the next prompt does not repeat them.
+ */
+export type ChangeFocus = { keys: string[]; pushOnly?: boolean };
+
+const pushedMarkerPath = (outputDir: string, session: string) => `${seenMarkerPath(outputDir, session)}.pushed`;
+const readStamp = (file: string) => (existsSync(file) ? readFileSync(file, 'utf-8').trim() : '');
+
+/** True when a change line names one of the keys (a ticket, its PR "(KEY)", a Slack thread title). */
+export function concerns(line: string, keys: string[]): boolean {
+  return keys.some((k) => new RegExp(`(^|[^A-Z0-9-])${k}(?![0-9])`, 'i').test(line));
+}
+
+/**
+ * The change report for one Claude Code session, focused on its tickets. Changes to other tickets
+ * do not interrupt it: the monitor (pushOnly) skips them, and a prompt or session start lists them
+ * as one short line of names. Changes to its own tickets come in full, once.
+ */
+function focusedReport(outputDir: string, session: string, focus: ChangeFocus): string | null {
+  const file = path.join(outputDir, CHANGES_FILE);
+  if (!existsSync(file)) return null;
+  const seen = seenStamp(outputDir, session);
+  if (!existsSync(seenMarkerPath(outputDir, session))) {
+    mkdirSync(path.join(outputDir, SESSION_SEEN_DIR), { recursive: true });
+    writeFileSync(seenMarkerPath(outputDir, session), seen);
+  }
+  const pushedFile = pushedMarkerPath(outputDir, session);
+  const pushed = readStamp(pushedFile);
+  const from = focus.pushOnly && pushed > seen ? pushed : seen;
+  const entries = changeEntries(readFileSync(file, 'utf-8')).filter((e) => e.stamp > from);
+  if (entries.length === 0) return null;
+  const last = entries[entries.length - 1]!.stamp;
+
+  const mine = new Map<string, string>();
+  const others = new Map<string, true>();
+  for (const e of entries) {
+    for (const l of e.lines) {
+      const item = l.slice(2).split(':')[0]!;
+      if (concerns(l, focus.keys)) {
+        // Already pushed by the monitor: the prompt does not repeat it.
+        if (!focus.pushOnly && e.stamp <= pushed) continue;
+        mine.delete(item);
+        mine.set(item, `${l} (${e.stamp})`);
+      } else if (!focus.pushOnly) {
+        others.delete(item);
+        others.set(item, true);
+      }
+    }
+  }
+  if (focus.pushOnly) {
+    mkdirSync(path.dirname(pushedFile), { recursive: true });
+    writeFileSync(pushedFile, last);
+  } else {
+    markSeen(outputDir, last, session);
+  }
+  const out: string[] = [];
+  if (mine.size) out.push(`Changes to this session's tickets (${focus.keys.join(', ')}; re-exported to ${outputDir}):`, ...mine.values());
+  if (others.size) {
+    const names = [...others.keys()].map((n) => (n.startsWith('slack/') ? 'a Slack thread' : n.replace(/ \([^)]*\)$/, '')));
+    const unique = [...new Set(names)];
+    const shown = unique.slice(-8).join(', ') + (unique.length > 8 ? `, +${unique.length - 8} more` : '');
+    out.push(`Other changes, not this session's tickets (only on request: \`jirallm changes\`): ${shown}`);
+  }
+  return out.length ? out.join('\n') : null;
 }
 
 /** Windows Task Scheduler entry running `jirallm watch` every N minutes from this directory, without a console window. */

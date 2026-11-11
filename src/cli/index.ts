@@ -1889,6 +1889,8 @@ program
   .option('--max <n>', 'Line cap (default 20)')
   .option('--follow [seconds]', "Keep running: every N seconds (default 30) print what `watch` logged since, as --unseen does (for an agent's background monitor)")
   .option('--session <id>', 'Claude Code session id: --unseen/--follow keep a marker per session, so every open session hears about every change')
+  .option('--keys <keys>', "With --session: the session's tickets (comma-separated, may be empty); their changes print in full, others as one line of names")
+  .option('--push-only', "With --session: print only the session's tickets' changes and keep them for the monitor (does not mark others seen)")
   .addHelpText('after', `
 Examples:
   $ jirallm changes --unseen

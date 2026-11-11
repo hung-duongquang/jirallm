@@ -1,7 +1,8 @@
 // Shared by the jirallm plugin hooks: run the CLI, read this session's unseen changes, and turn
 // them into a one-line message the user sees in Claude Code (so they know Claude got them).
 import { spawnSync } from 'node:child_process';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 export const outputDir = path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), 'jira-export');
@@ -24,21 +25,51 @@ function markerOf(sessionId) {
   return path.join(outputDir, '.changes.seen');
 }
 
+/** Tickets this session works on: the keys its prompts named (written by the prompt hook). */
+export function sessionKeys(sessionId) {
+  const file = path.join(os.tmpdir(), 'jirallm-sessions', `${sessionId}.keys`);
+  try {
+    return sessionId && SESSION_ID.test(sessionId) && existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
+const newerThan = (file, marker) => !existsSync(marker) || statSync(file).mtimeMs > statSync(marker).mtimeMs;
+
 /**
- * This session's unseen changes as printed by `jirallm changes --unseen --session <id>` (which marks
- * them seen for this session only), or ''. With `quick`, the CLI is only started when CHANGES.md
- * changed after the session's marker: usually two stat calls per prompt.
+ * This session's unseen changes as printed by `jirallm changes --unseen --session <id> --keys …`
+ * (which marks them seen for this session only), or ''. Changes to the session's tickets come in
+ * full; others as one line of names, so a session is not drawn into unrelated work. With `quick`,
+ * the CLI is only started when CHANGES.md changed after the session's marker: usually two stat
+ * calls per prompt.
  */
-export function unseenChanges(sessionId, quick) {
+export function unseenChanges(sessionId, quick, keys = sessionKeys(sessionId)) {
   try {
     if (!existsSync(changesFile)) return '';
-    const marker = markerOf(sessionId);
-    if (quick && existsSync(marker) && statSync(changesFile).mtimeMs <= statSync(marker).mtimeMs) return '';
+    if (quick && !newerThan(changesFile, markerOf(sessionId))) return '';
     const args = ['changes', '--unseen', '--output-dir', outputDir];
-    if (sessionId && SESSION_ID.test(sessionId)) args.push('--session', sessionId);
+    if (sessionId && SESSION_ID.test(sessionId)) args.push('--session', sessionId, `--keys=${keys.join(',')}`);
     return jirallm(args, 10000);
   } catch {
     return ''; // Context is a bonus; never fail the prompt.
+  }
+}
+
+/**
+ * For the background monitor: unseen changes to the session's own tickets only, remembered as
+ * pushed so the next prompt does not repeat them. '' without keys (a session not on a ticket yet
+ * is never interrupted) or when CHANGES.md did not move since the last push.
+ */
+export function pushChanges(sessionId) {
+  try {
+    const keys = sessionKeys(sessionId);
+    if (!keys.length || !existsSync(changesFile)) return '';
+    const own = path.join(outputDir, '.changes.seen.d', sessionId);
+    if (!newerThan(changesFile, `${own}.pushed`) || !newerThan(changesFile, markerOf(sessionId))) return '';
+    return jirallm(['changes', '--output-dir', outputDir, '--session', sessionId, `--keys=${keys.join(',')}`, '--push-only'], 10000);
+  } catch {
+    return '';
   }
 }
 
