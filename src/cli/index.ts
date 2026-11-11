@@ -1642,6 +1642,7 @@ program
   .option('--no-files', 'With --output-dir: skip downloading files')
   .option('--no-channel', 'Leave out channel messages posted outside the thread')
   .option('--no-frames', 'With --output-dir: download videos but skip extracting their frames (needs ffmpeg)')
+  .option('--since <when>', 'Print only replies after this day (YYYY-MM-DD), local time ("YYYY-MM-DD HH:MM") or Slack ts; the first message is always printed')
   .option('--title', 'Print only a one-line title "<first line of the thread> · #channel" (names Claude Code sessions)')
   .option('--json', 'Print the raw Slack messages and resolved user names as JSON')
   .addHelpText('after', `
@@ -1655,6 +1656,7 @@ With --output-dir, images are embedded and videos get up to 10 frames (JPEG) in
 Examples:
   $ jirallm slack https://acme.slack.com/archives/C0123ABCD/p1793370497363139
   $ jirallm slack <url> --output-dir ./jira-export
+  $ jirallm slack <url> --since "2026-11-10 13:12"   # only replies since my last review
 `)
   .action(async (url: string, opts: SlackOptions) => {
     try { await runSlack(url, opts); } catch (err) { exitOnError(err); }
@@ -1663,8 +1665,9 @@ Examples:
 program
   .command('slack:search <query>')
   .description('Search Slack messages; one TSV row per thread (newest match first), open a hit with `slack <url>`')
-  .option('--after <date>', 'Only messages after this day (YYYY-MM-DD, exclusive)')
+  .option('--after <date>', 'Only messages on or after this day (YYYY-MM-DD, inclusive)')
   .option('--max <n>', 'Most matching messages to read (default 20, max 500)')
+  .option('--no-threads', 'Skip the replies / last reply columns (one extra Slack call per thread)')
   .option('--json', 'Print the hits as JSON')
   .addHelpText('after', `
 The query uses Slack search syntax ("phrases", in:#channel, from:@user, before:/after:). Slack's

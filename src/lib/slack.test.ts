@@ -8,6 +8,7 @@ import {
   loadSlackThread,
   mrkdwnToMarkdown,
   parseSlackFileUrl,
+  parseSince,
   parseSlackUrl,
   renderThread,
   searchHits,
@@ -24,7 +25,8 @@ describe('slackSearchQueries', () => {
   });
 
   it('adds after: to each and refuses a malformed date', () => {
-    expect(slackSearchQueries('ZOD-1 OR ZOD-2', '2026-10-28')).toEqual(['"ZOD-1" after:2026-10-28', '"ZOD-2" after:2026-10-28']);
+    expect(slackSearchQueries('ZOD-1 OR ZOD-2', '2026-10-28')).toEqual(['"ZOD-1" after:2026-10-27', '"ZOD-2" after:2026-10-27']);
+    expect(slackSearchQueries('x', '2026-11-01')).toEqual(['x after:2026-10-31']);
     expect(() => slackSearchQueries('ZOD-1', '28-10-2026')).toThrow('YYYY-MM-DD');
   });
 });
@@ -307,5 +309,40 @@ describe('Slack file links', () => {
     } finally {
       rmSync(outputDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('renderThread --since and last reply', () => {
+  const base = {
+    url: 'https://x.slack.com/archives/C1/p1000000000000000',
+    linkedTs: '1000000000.000000',
+    names: new Map([['U1', 'Linh'], ['U2', 'Jason']]),
+    messages: [
+      { ts: '1000000000.000000', user: 'U1', text: 'question' },
+      { ts: '1000000060.000000', user: 'U1', text: 'old reply' },
+      { ts: '1000000120.000000', user: 'U2', text: 'the answer' },
+    ] as SlackMessage[],
+  };
+
+  it('names the newest reply in the header, so a cut output is noticeable', () => {
+    expect(renderThread(base)).toMatch(/- Messages: 3 \(1 \+ 2 replies\) · last reply .* by Jason/);
+  });
+
+  it('prints the parent and only the replies after --since', () => {
+    const md = renderThread({ ...base, since: '1000000060.000000' });
+    expect(md).toContain('question');
+    expect(md).not.toContain('old reply');
+    expect(md).toContain('the answer');
+    expect(md).toContain('Showing replies after');
+    expect(md).toContain(': 1 of 2 (earlier ones left out');
+  });
+});
+
+describe('parseSince', () => {
+  it('takes a Slack ts, a day or a local time', () => {
+    expect(parseSince('1794297958.760439')).toBe('1794297958.760439');
+    expect(parseSince('2026-11-10')).toBe(String(new Date(2026, 10, 10).getTime() / 1000));
+    expect(parseSince('2026-11-10 15:22')).toBe(String(new Date(2026, 10, 10, 15, 22).getTime() / 1000));
+    expect(() => parseSince('yesterday')).toThrow(/--since/);
   });
 });

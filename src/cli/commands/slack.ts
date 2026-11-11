@@ -9,7 +9,9 @@ import {
   hasSlackToken,
   loadSlackAuth,
   loadSlackThread,
+  formatTs,
   mentionedUsers,
+  parseSince,
   renderThread,
   searchHits,
   slackSearchQueries,
@@ -25,6 +27,8 @@ export type SlackOptions = {
   /** false (--no-frames): keep videos but skip extracting their frames. */
   frames?: boolean;
   json?: boolean;
+  /** Only print replies after this day/time/ts (the parent is always printed). */
+  since?: string;
   /** Print only `<thread title> · #channel` (the plugin's prompt hook names Claude Code sessions with it). */
   title?: boolean;
 };
@@ -58,13 +62,16 @@ export async function runSlack(url: string, opts: SlackOptions): Promise<void> {
     printJson({ link, channelName, users: Object.fromEntries(names), messages, channelMessages });
     return;
   }
-  process.stdout.write(renderThread({ url: messageUrl, channelName, messages, channelMessages, linkedTs: link.ts, names }));
+  const since = opts.since ? parseSince(opts.since) : undefined;
+  process.stdout.write(renderThread({ url: messageUrl, channelName, messages, channelMessages, linkedTs: link.ts, names, since }));
 }
 
 export type SlackSearchOptions = {
   after?: string;
   max?: string;
   json?: boolean;
+  /** false (--no-threads): skip looking up each hit thread's reply count and newest reply. */
+  threads?: boolean;
 };
 
 /**
@@ -94,6 +101,19 @@ export async function runSlackSearch(query: string, opts: SlackSearchOptions): P
   const names = new Map<string, string>();
   for (const id of ids) names.set(id, await client.userName(id));
   const hits = searchHits(matches, names);
+  // Replies rarely repeat the key, so a thread's newest activity is shown even when it did not match.
+  if (opts.threads !== false) {
+    for (const h of hits.slice(0, MAX_THREAD_INFO)) {
+      if (!h.channelId || !h.threadTs) continue;
+      try {
+        const info = await client.threadInfo(h.channelId, h.threadTs);
+        h.replies = info.replies;
+        h.lastReply = info.latestReply;
+      } catch {
+        // Thread info is a bonus (e.g. a DM the token cannot read).
+      }
+    }
+  }
 
   if (opts.json) {
     printJson({ query: q, total, hits });
@@ -101,11 +121,16 @@ export async function runSlackSearch(query: string, opts: SlackSearchOptions): P
   }
   console.error(`# ${q}: ${total} message(s)${total > matches.length ? `, showing the newest ${matches.length}` : ''}, ${hits.length} thread(s)`);
   if (hits.length === 0) return;
-  console.log(['date', 'channel', 'author', 'matches', 'text', 'url'].join('\t'));
+  console.log(['date', 'channel', 'author', 'matches', 'replies', 'last reply', 'text', 'url'].join('\t'));
   for (const h of hits) {
-    console.log([h.date, h.channel, h.author, String(h.more + 1), h.text.replace(/\t/g, ' '), h.url].join('\t'));
+    const replies = h.replies === undefined ? '' : String(h.replies);
+    const last = h.lastReply ? formatTs(h.lastReply) : '';
+    console.log([h.date, h.channel, h.author, String(h.more + 1), replies, last, h.text.replace(/\t/g, ' '), h.url].join('\t'));
   }
 }
+
+/** Threads whose reply count is looked up (one conversations.replies call each). */
+const MAX_THREAD_INFO = 25;
 
 export async function runSlackAuth(opts: { remove?: boolean; check?: boolean }): Promise<void> {
   if (opts.remove) {

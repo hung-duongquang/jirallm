@@ -97,6 +97,8 @@ export type SlackMessage = {
   edited?: { ts: string };
   subtype?: string;
   reply_count?: number;
+  /** On a thread parent: ts of the newest reply. */
+  latest_reply?: string;
 };
 
 /** Channel messages read after a thread: until this long after its last message, at most CHANNEL_MAX. */
@@ -175,6 +177,13 @@ export class SlackClient {
       messages = await this.replies(link.channel, threadTs);
     }
     return messages;
+  }
+
+  /** Reply count and newest reply ts of the thread whose parent is `ts` (one cheap call). */
+  async threadInfo(channel: string, ts: string): Promise<{ replies: number; latestReply?: string }> {
+    const page = await this.call<{ messages?: SlackMessage[] }>('conversations.replies', { channel, ts, limit: '1' });
+    const parent = page.messages?.[0];
+    return { replies: parent?.reply_count ?? 0, latestReply: parent?.latest_reply };
   }
 
   private async replies(channel: string, ts: string): Promise<SlackMessage[]> {
@@ -364,20 +373,44 @@ export type RenderInput = {
   newSince?: string;
   /** Top-level channel messages posted after the thread started (see SlackClient.channelAfter). */
   channelMessages?: SlackMessage[];
+  /** Only replies (and channel messages) after this Slack ts are printed; the parent always is. */
+  since?: string;
 };
 
+/**
+ * A `--since` value as a Slack ts: a ts itself, a day (YYYY-MM-DD, from its local midnight) or a
+ * local time (YYYY-MM-DD HH:MM or YYYY-MM-DDTHH:MM).
+ */
+export function parseSince(value: string): string {
+  if (/^\d{9,}(\.\d+)?$/.test(value)) return value;
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?$/.exec(value.trim());
+  if (!m) throw new Error(`--since needs YYYY-MM-DD, "YYYY-MM-DD HH:MM" or a Slack ts, got: ${value}`);
+  const [, y, mo, d, h = '0', mi = '0'] = m;
+  return String(new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi)).getTime() / 1000);
+}
+
+const authorOf = (msg: SlackMessage, names: Map<string, string>) =>
+  msg.user ? names.get(msg.user) ?? msg.user : msg.bot_profile?.name ?? msg.username ?? 'unknown';
+
 export function renderThread(input: RenderInput): string {
-  const { messages, names } = input;
+  const { names } = input;
+  const all = input.messages;
+  const after = (m: SlackMessage) => !input.since || Number(m.ts) > Number(input.since);
+  const messages = all.filter((m, i) => i === 0 || after(m));
   const where = input.channelName ? (input.channelName === 'direct message' ? 'direct message' : `#${input.channelName}`) : 'Slack';
+  const last = all.at(-1)!;
+  // The newest reply up front: when the output gets cut, it is still clear the thread goes on.
+  const lastReply = all.length > 1 ? ` · last reply ${formatTs(last.ts)} by ${authorOf(last, names)}` : '';
   const lines: string[] = [
     `# Slack thread in ${where}`,
     '',
     `- Source: ${input.url}`,
-    `- Messages: ${messages.length}${messages.length > 1 ? ` (1 + ${messages.length - 1} replies)` : ''}`,
-    '',
+    `- Messages: ${all.length}${all.length > 1 ? ` (1 + ${all.length - 1} replies)` : ''}${lastReply}`,
   ];
+  if (input.since) lines.push(`- Showing replies after ${formatTs(input.since)}: ${messages.length - 1} of ${all.length - 1} (earlier ones left out; run without --since for all)`);
+  lines.push('');
   const renderMessage = (msg: SlackMessage, inChannel = false) => {
-    const author = msg.user ? names.get(msg.user) ?? msg.user : msg.bot_profile?.name ?? msg.username ?? 'unknown';
+    const author = authorOf(msg, names);
     const marker = msg.ts === input.linkedTs && messages.length > 1 ? ' (linked message)' : '';
     const edited = msg.edited ? ' (edited)' : '';
     const isNew = input.newSince && Number(msg.ts) > Number(input.newSince) ? ' (new)' : '';
@@ -403,7 +436,7 @@ export function renderThread(input: RenderInput): string {
     if (msg.files?.length) lines.push('');
   };
   for (const msg of messages) renderMessage(msg);
-  const channel = input.channelMessages ?? [];
+  const channel = (input.channelMessages ?? []).filter(after);
   if (channel.length) {
     lines.push(
       '# In the channel, outside the thread',
@@ -576,11 +609,13 @@ export async function exportSlackThread(
 /**
  * Builds search.messages queries. Slack's API has no OR (all terms must match), so the query is
  * split on OR (outside quotes) into one query per alternative. Slack splits ZOD-3988 on the hyphen
- * and would match any "ZOD", so bare Jira keys are quoted; `after` (YYYY-MM-DD) becomes the after:
- * modifier (exclusive day) on each.
+ * and would match any "ZOD", so bare Jira keys are quoted; `after` (YYYY-MM-DD) includes that day:
+ * Slack's after: modifier excludes its day, so the day before is passed (a re-review run with the
+ * date of the last review must still see replies from later that day).
  */
 export function slackSearchQueries(query: string, after?: string): string[] {
   if (after && !/^\d{4}-\d{2}-\d{2}$/.test(after)) throw new Error(`--after needs a date as YYYY-MM-DD, got: ${after}`);
+  const slackAfter = after ? new Date(Date.parse(`${after}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10) : undefined;
   const alternatives: string[] = [''];
   for (const [i, part] of query.split(/("[^"]*")/).entries()) {
     if (i % 2 === 1) {
@@ -594,7 +629,7 @@ export function slackSearchQueries(query: string, after?: string): string[] {
   return alternatives
     .map((q) => q.trim())
     .filter(Boolean)
-    .map((q) => (after ? `${q} after:${after}` : q));
+    .map((q) => (slackAfter ? `${q} after:${slackAfter}` : q));
 }
 
 export type SlackSearchHit = {
@@ -605,6 +640,12 @@ export type SlackSearchHit = {
   url: string;
   /** Other matches in the same thread, folded into this (newest) one. */
   more: number;
+  /** Channel id and parent ts of the thread the match belongs to. */
+  channelId?: string;
+  threadTs?: string;
+  /** Filled by slack:search: replies in that thread and when the newest arrived (it may not match). */
+  replies?: number;
+  lastReply?: string;
 };
 
 /** The thread a match belongs to: its permalink's thread_ts, else the message itself. */
@@ -644,6 +685,8 @@ export function searchHits(matches: SlackSearchMatch[], names: Map<string, strin
       text: text.length > width ? `${text.slice(0, width - 1)}…` : text,
       url: m.permalink,
       more: 0,
+      channelId: ch?.id,
+      threadTs: key.slice(key.indexOf(':') + 1),
     });
   }
   return [...byThread.values()];
