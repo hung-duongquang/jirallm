@@ -377,6 +377,13 @@ async function exportLink(body) {
   throw new HttpError(400, `Not a Slack message, Confluence page or SharePoint page link: ${url}`);
 }
 
+/** A session `jirallm ui` lists for this workspace (so only ids it showed can be resumed or changed). */
+function knownSession(outputDir, id) {
+  const session = typeof id === 'string' ? lib.claudeSessions(outputDir).find((s) => s.id === id) : undefined;
+  if (!session) throw new HttpError(404, 'No such Claude session in this workspace');
+  return session;
+}
+
 function openInExplorer(target) {
   const [cmd, cmdArgs] =
     process.platform === 'win32'
@@ -468,6 +475,29 @@ async function handle(req, res) {
       case 'GET /api/sessions': {
         // Claude Code sessions and the jirallm changes handed to each (read receipts from the plugin's Stop hook).
         sendJson(res, 200, lib.claudeSessions(resolveOutputDir(url.searchParams.get('dir'))));
+        return;
+      }
+      case 'POST /api/sessions/reopen': {
+        // Whether `jirallm resume` (and the workspace's VS Code folder-open tasks) bring this session back after a reboot.
+        const body = await readJsonBody(req);
+        const outputDir = resolveOutputDir(body.dir);
+        const session = knownSession(outputDir, body.id);
+        if (body.reopen) {
+          if (!lib.markOpen(session.id)) throw new HttpError(404, 'This session has no start record to reopen it from');
+        } else {
+          lib.forget(session.id);
+        }
+        const tasks = lib.refreshVsCodeTasks(dirname(outputDir));
+        sendJson(res, 200, { ok: true, ...(tasks.error && { warning: tasks.error }) });
+        return;
+      }
+      case 'POST /api/sessions/resume': {
+        // Opens a terminal window running `claude --resume <id>` (VS Code's own terminals cannot be started from here).
+        const body = await readJsonBody(req);
+        const session = knownSession(resolveOutputDir(body.dir), body.id);
+        if (lib.isRunning(session.id)) throw new HttpError(409, 'This session is already running in a terminal');
+        lib.openInTerminal(session.id, session.title || session.id.slice(0, 8));
+        sendJson(res, 200, { ok: true });
         return;
       }
       case 'GET /api/library': {

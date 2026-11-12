@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, w
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { COMPOUND_LABEL, isRunning, openSessions, parseJsonc, TASK_DETAIL, writeVsCodeTasks, type OpenSession } from './resume.js';
+import { COMPOUND_LABEL, isRunning, openSessions, parseJsonc, TASK_DETAIL, terminalCommand, writeVsCodeTasks, type OpenSession } from './resume.js';
 
 let dir: string;
 let sessions: string;
@@ -112,5 +112,23 @@ describe('writeVsCodeTasks', () => {
 describe('parseJsonc', () => {
   it('keeps comment markers and escaped quotes inside strings', () => {
     expect(parseJsonc('{ "a": "x \\" // y", /* c */ "b": [1,], }')).toEqual({ a: 'x " // y', b: [1] });
+  });
+});
+
+describe('terminalCommand', () => {
+  it('opens Windows Terminal when installed, else a console window via start', () => {
+    const wt = terminalCommand('abc', 'C:/my work', 'claude: x', 'win32', true);
+    expect(wt.cmd).toBe('wt.exe');
+    expect(wt.args.slice(0, 5)).toEqual(['new-tab', '--title', 'claude: x', '-d', 'C:/my work']);
+    expect(wt.args.slice(-2)).toEqual(['resume', 'abc']);
+    const start = terminalCommand('abc', 'C:/my work', 'claude: "x"', 'win32', false);
+    expect(start.args.slice(0, 5)).toEqual(['/c', 'start', '"claude: x"', '/D', '"C:/my work"']);
+  });
+
+  it('quotes the folder for a POSIX shell', () => {
+    const t = terminalCommand('abc', "/home/o'neil", 't', 'linux');
+    const line = t.args.at(-1)!;
+    expect(line.startsWith(`cd '/home/o'"'"'neil' && `.replace(`'"'"'`, String.raw`'\''`))).toBe(true);
+    expect(line.endsWith(' resume abc')).toBe(true);
   });
 });

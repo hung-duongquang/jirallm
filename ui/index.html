@@ -1222,6 +1222,10 @@ function renderSessions(list) {
         <span class="pill" title="The plugin's background monitor pushes changes to this session's tickets while it runs; without it they arrive at the next prompt">${s.monitor ? '● monitor on' : '○ monitor off'}</span>
         ${unread ? `<span class="pill blocked">${unread} unread</span>` : ''}
         ${s.waiting ? `<span class="pill blocked" title="Changes to this session's tickets that reach it at the next prompt or monitor poll">${s.waiting} waiting</span>` : ''}
+        <button class="sess-reopen" data-id="${esc(s.id)}" data-reopen="${s.reopen ? '' : '1'}" title="${s.reopen
+          ? 'After a reboot, opening the workspace in VS Code reopens this session in a terminal (jirallm resume). Click to stop that.'
+          : 'Not reopened after a reboot (you ended it, or it was dropped). Click to reopen it after the next reboot.'}">${s.reopen ? '↻ reopens after reboot' : '↻ off'}</button>
+        ${s.running ? '' : `<button class="primary sess-resume" data-id="${esc(s.id)}" title="Opens a terminal window running claude --resume for this session">Resume</button>`}
       </div>
       <div class="meta">${esc(s.id)} · active ${ago(s.lastActivity)}${s.readAt ? ` · last read ${clock(s.readAt)}` : ''}${s.reply ? ` — Claude: “${esc(s.reply)}”` : ''}</div>
       <ul>${items || `<li class="meta">No updates yet${s.keys.length ? '' : ' — updates are sent once a prompt names a ticket or links a Slack thread'}.</li>`}</ul></div>`;
@@ -1231,6 +1235,23 @@ function renderSessions(list) {
     <p class="hint">Changes the scheduled <code>jirallm watch</code> logged, as handed to each Claude Code session (at a prompt, at session start, or by the background monitor). “✓ read” = Claude acted (a tool call or a reply) after it reached its context. Refreshes every 15 s.</p>
     ${body}</div>`;
   $('previewBody').querySelectorAll('.keylink').forEach((b) => b.onclick = (e) => { e.preventDefault(); sessionsOpen = false; openTask(b.dataset.key, { as: 'diff', fromLink: true }); });
+  $('previewBody').querySelectorAll('.sess-reopen').forEach((b) => b.onclick = async () => {
+    b.disabled = true;
+    try {
+      const r = await api('/api/sessions/reopen', { dir: outDir(), id: b.dataset.id, reopen: !!b.dataset.reopen });
+      toast(r.warning || (b.dataset.reopen ? 'Reopens after a reboot' : 'Will not reopen after a reboot'));
+      lastSessionsJson = '';
+      await refreshSessions();
+    } catch (e) { toast(e.message); b.disabled = false; }
+  });
+  $('previewBody').querySelectorAll('.sess-resume').forEach((b) => b.onclick = async () => {
+    b.disabled = true;
+    try {
+      await api('/api/sessions/resume', { dir: outDir(), id: b.dataset.id });
+      toast('Opened a terminal window for this session');
+    } catch (e) { toast(e.message); }
+    setTimeout(() => { b.disabled = false; refreshSessions(); }, 5000);
+  });
 }
 async function refreshSessions() {
   try {

@@ -1,6 +1,7 @@
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { isMarkedOpen, isRunning } from './resume.js';
 import { sessionKeys } from './statusLine.js';
 import { deliveryAckPath, deliveryLogPath, pendingCounts, readAck, readDeliveries, type Delivery } from './watch.js';
 
@@ -14,6 +15,10 @@ export type SessionOverview = {
   monitor: boolean;
   /** The transcript was written in the last two hours, or the monitor runs. */
   live: boolean;
+  /** Claude Code runs it now (its monitor started after this boot). */
+  running: boolean;
+  /** Brought back after a reboot (`jirallm resume`): the plugin marked it open and the user has not ended it. */
+  reopen: boolean;
   lastActivity: string;
   /** Changes to the session's tickets that have not been handed to it yet. */
   waiting: number;
@@ -114,7 +119,8 @@ export function claudeSessions(outputDir: string, days = 7, sessionsDir = path.j
     const last = Math.max(mtime(deliveryLogPath(outputDir, id)), mtime(deliveryAckPath(outputDir, id)), wrote);
     // A session without a transcript (the throwaway one `claude --resume` starts first) is never shown.
     const live = (monitor || now - wrote < LIVE_MS) && (wrote > 0 || log.length > 0);
-    if (!live && (!log.length || last < cutoff)) continue;
+    const reopen = wrote > 0 && isMarkedOpen(id, sessionsDir);
+    if (!live && !reopen && (!log.length || last < cutoff)) continue;
     const keys = sessionKeys(id, sessionsDir);
     const ack = readAck(outputDir, id);
     out.push({
@@ -123,6 +129,8 @@ export function claudeSessions(outputDir: string, days = 7, sessionsDir = path.j
       keys,
       monitor,
       live,
+      running: isRunning(id, sessionsDir),
+      reopen,
       lastActivity: new Date(last).toISOString(),
       waiting: pendingCounts(outputDir, id, keys).waiting,
       ...(ack?.reply && { reply: ack.reply }),

@@ -81,4 +81,5 @@ export type { ExportedSlackThread } from './lib/slack.js';
 export { exportSharePointPage, parseSharePointPageUrl } from './lib/sharepoint.js';
 export type { ExportedSharePointPage } from './lib/sharepoint.js';
 export { claudeSessions } from './cli/commands/sessions.js';
+export { forget, isRunning, markOpen, openInTerminal, refreshVsCodeTasks } from './cli/commands/resume.js';
 export type { SessionOverview, SessionDelivery } from './cli/commands/sessions.js';

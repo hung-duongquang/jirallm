@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { firstPrompt } from './sessions.js';
 
 /**
@@ -185,9 +186,12 @@ export function writeVsCodeTasks(workspace: string, sessions: OpenSession[], cli
   return { file, changed: true, count: sessions.length };
 }
 
-/** This CLI as the task should start it: node and the real path of the entry script (not the .cmd shim). */
-function cliCommand(): { node: string; entry: string } {
-  const entry = process.argv[1] ?? '';
+/**
+ * This CLI as a task or terminal should start it: node and the real path of its entry script (not
+ * the .cmd shim), found from this module so it is right whether the CLI or `jirallm ui` asks.
+ */
+export function cliCommand(): { node: string; entry: string } {
+  const entry = fileURLToPath(new URL('../index.js', import.meta.url));
   let real = entry;
   try {
     real = realpathSync(entry);
@@ -195,6 +199,49 @@ function cliCommand(): { node: string; entry: string } {
     // Keep the path as given.
   }
   return { node: process.execPath, entry: real };
+}
+
+/** Marks a session open again (it is brought back after a reboot), in the folder its start handshake names. */
+export function markOpen(id: string, sessionsDir = defaultSessionsDir()): boolean {
+  if (!SESSION_ID.test(id)) return false;
+  const cwd = read(path.join(sessionsDir, `${id}.start`)).split('\n')[0]?.trim();
+  if (!cwd) return false;
+  writeFileSync(path.join(sessionsDir, `${id}.open`), cwd);
+  return true;
+}
+
+export const isMarkedOpen = (id: string, sessionsDir = defaultSessionsDir()) => SESSION_ID.test(id) && existsSync(path.join(sessionsDir, `${id}.open`));
+
+/** Rewrites `<workspace>/.vscode/tasks.json` from the sessions left open now. */
+export function refreshVsCodeTasks(workspace: string, sessionsDir = defaultSessionsDir()): TasksResult {
+  return writeVsCodeTasks(workspace, openSessions(sessionsDir), cliCommand());
+}
+
+/** The program and arguments that open a new terminal window running `jirallm resume <id>` in `cwd`. */
+export function terminalCommand(id: string, cwd: string, title: string, platform = process.platform, hasWt = false): { cmd: string; args: string[] } {
+  const { node, entry } = cliCommand();
+  if (platform === 'win32') {
+    return hasWt
+      ? { cmd: 'wt.exe', args: ['new-tab', '--title', title, '-d', cwd, node, entry, 'resume', id] }
+      : // Passed verbatim (cmd's own quoting): the first quoted argument of `start` is the window title.
+        { cmd: 'cmd.exe', args: ['/c', 'start', `"${title.replace(/"/g, '')}"`, '/D', `"${cwd}"`, `"${node}"`, `"${entry}"`, 'resume', id] };
+  }
+  const sh = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+  const line = `cd ${sh(cwd)} && ${sh(node)} ${sh(entry)} resume ${id}`;
+  if (platform === 'darwin') return { cmd: 'osascript', args: ['-e', `tell application "Terminal" to do script ${JSON.stringify(line)}`, '-e', 'tell application "Terminal" to activate'] };
+  return { cmd: 'x-terminal-emulator', args: ['-e', 'sh', '-c', line] };
+}
+
+/** Opens a terminal window that resumes the session (Windows Terminal when installed). */
+export function openInTerminal(id: string, title: string, sessionsDir = defaultSessionsDir()): void {
+  if (!SESSION_ID.test(id)) throw new Error(`Not a session id: ${id}`);
+  const saved = read(path.join(sessionsDir, `${id}.open`)) || read(path.join(sessionsDir, `${id}.start`)).split('\n')[0]?.trim() || '';
+  const cwd = saved && existsSync(saved) ? saved : os.homedir();
+  const hasWt = process.platform === 'win32' && !!process.env.LOCALAPPDATA && existsSync(path.join(process.env.LOCALAPPDATA, 'Microsoft', 'WindowsApps', 'wt.exe'));
+  const { cmd, args } = terminalCommand(id, cwd, `claude: ${title.slice(0, 40)}`, process.platform, hasWt);
+  const child = spawn(cmd, args, { detached: true, stdio: 'ignore', windowsVerbatimArguments: cmd === 'cmd.exe' });
+  child.on('error', () => {});
+  child.unref();
 }
 
 export type ResumeOptions = { vscode?: string; forget?: boolean; sessionsDir?: string };
@@ -207,7 +254,7 @@ export async function runResume(id: string | undefined, opts: ResumeOptions): Pr
     console.log(forget(id, sessionsDir) ? `Session ${id} will not be brought back.` : `Session ${id} was not marked open.`);
   }
   if (opts.vscode) {
-    const r = writeVsCodeTasks(path.resolve(opts.vscode), openSessions(sessionsDir), cliCommand());
+    const r = refreshVsCodeTasks(path.resolve(opts.vscode), sessionsDir);
     if (r.error) throw new Error(r.error);
     console.log(r.changed ? `${r.file}: ${r.count} session task(s) written.` : `${r.file}: up to date (${r.count} session(s)).`);
     return;
