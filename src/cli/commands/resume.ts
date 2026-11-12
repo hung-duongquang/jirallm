@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSyn
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { extensionAvailable, installExtension, openUri, resumeUri } from '../../lib/vscodeExtension.js';
 import { firstPrompt } from './sessions.js';
 
 /**
@@ -233,10 +234,27 @@ export function terminalCommand(id: string, cwd: string, title: string, platform
 }
 
 /** Opens a terminal window that resumes the session (Windows Terminal when installed). */
-export function openInTerminal(id: string, title: string, sessionsDir = defaultSessionsDir()): void {
+/**
+ * Brings the session back in a terminal: in VS Code (through the jirallm sessions extension, installed
+ * on first use) when VS Code is there, else in a terminal window of its own. `note` says why VS Code was not used.
+ */
+export function openInTerminal(id: string, title: string, sessionsDir = defaultSessionsDir()): { where: 'vscode' | 'window'; note?: string } {
   if (!SESSION_ID.test(id)) throw new Error(`Not a session id: ${id}`);
   const saved = read(path.join(sessionsDir, `${id}.open`)) || read(path.join(sessionsDir, `${id}.start`)).split('\n')[0]?.trim() || '';
   const cwd = saved && existsSync(saved) ? saved : os.homedir();
+  let note: string | undefined;
+  if (extensionAvailable()) {
+    note = installExtension() || undefined;
+    if (!note) {
+      openUri(resumeUri(id, cwd, title));
+      return { where: 'vscode' };
+    }
+  }
+  openInWindow(id, cwd, title);
+  return { where: 'window', ...(note && { note }) };
+}
+
+function openInWindow(id: string, cwd: string, title: string): void {
   const hasWt = process.platform === 'win32' && !!process.env.LOCALAPPDATA && existsSync(path.join(process.env.LOCALAPPDATA, 'Microsoft', 'WindowsApps', 'wt.exe'));
   const { cmd, args } = terminalCommand(id, cwd, `claude: ${title.slice(0, 40)}`, process.platform, hasWt);
   const child = spawn(cmd, args, { detached: true, stdio: 'ignore', windowsVerbatimArguments: cmd === 'cmd.exe' });

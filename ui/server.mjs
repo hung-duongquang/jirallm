@@ -496,8 +496,8 @@ async function handle(req, res) {
         const body = await readJsonBody(req);
         const session = knownSession(resolveOutputDir(body.dir), body.id);
         if (lib.isRunning(session.id)) throw new HttpError(409, 'This session is already running in a terminal');
-        lib.openInTerminal(session.id, session.title || session.id.slice(0, 8));
-        sendJson(res, 200, { ok: true });
+        const opened = lib.openInTerminal(session.id, session.title || session.id.slice(0, 8));
+        sendJson(res, 200, { ok: true, ...opened });
         return;
       }
       case 'GET /api/library': {
