@@ -94,8 +94,8 @@ if (!jirallm(['--version'], 15000)) {
       `jirallm session id: ${session}. The plugin's background monitor "jirallm-changes" delivers new changes ` +
         `(CI, reviews, Jira, Slack) as notifications during this session; if it is not running, ` +
         `\`jirallm changes --follow --session ${session} --output-dir "${outputDir}"\` under the Monitor tool does the same. ` +
-        `Each change report starts with "[jirallm delivery #N · …]"; when one reaches you, begin your reply with one line ` +
-        `"📥 #N: <what changed> → <what you will do, or nothing>" so the user sees you got it (the status line then shows it as read).`
+        `Change reports start with "[jirallm delivery #N · …]": the number is a read receipt for the user's status line and ` +
+        `\`jirallm ui\`, recorded automatically; no need to mention it or acknowledge it.`
     );
   }
   const keys = input.source === 'compact' ? sessionKeys() : [];

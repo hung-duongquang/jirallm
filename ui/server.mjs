@@ -465,6 +465,11 @@ async function handle(req, res) {
         sendJson(res, 200, { ok: true });
         return;
       }
+      case 'GET /api/sessions': {
+        // Claude Code sessions and the jirallm changes handed to each (read receipts from the plugin's Stop hook).
+        sendJson(res, 200, lib.claudeSessions(resolveOutputDir(url.searchParams.get('dir'))));
+        return;
+      }
       case 'GET /api/library': {
         sendJson(res, 200, await listLibrary(resolveOutputDir(url.searchParams.get('dir'))));
         return;

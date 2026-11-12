@@ -70,13 +70,17 @@ try {
   // No or bad stdin: still report changes.
 }
 
+/** Names the session in `jirallm ui` (Claude sessions): its Slack thread title, else its first prompt. */
+function saveUiTitle(sessionId, text) {
+  const line = text.replace(/\s+/g, ' ').trim();
+  if (line) writeFileSync(path.join(sessionsDir, `${sessionId}.title`), line.length > MAX_TITLE ? `${line.slice(0, MAX_TITLE - 1)}…` : line);
+}
+
 let title = '';
 try {
-  if (typeof input.prompt === 'string' && SLACK_URL.test(input.prompt) && isFirstPrompt(input.session_id)) {
-    title = slackSessionTitle(input.prompt);
-  } else if (input.session_id) {
-    isFirstPrompt(input.session_id);
-  }
+  const first = typeof input.prompt === 'string' && isFirstPrompt(input.session_id);
+  if (first && SLACK_URL.test(input.prompt)) title = slackSessionTitle(input.prompt);
+  if (first) saveUiTitle(input.session_id, title || input.prompt);
 } catch {
   // A title is a bonus too.
 }

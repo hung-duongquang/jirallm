@@ -173,6 +173,18 @@
   .diff tr.add td { background: var(--add-bg); } .diff tr.add mark { background: var(--add-word); color: inherit; border-radius: 2px; }
   .diff tr.del td { background: var(--del-bg); } .diff tr.del mark { background: var(--del-word); color: inherit; border-radius: 2px; }
   .diff tr.hunk td { background: var(--hunk-bg); color: var(--muted); padding-top: 2px; padding-bottom: 2px; }
+  .sessions { max-width: 860px; margin: 4px auto; }
+  .sessions .sess { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin: 10px 0; }
+  .sessions .sess-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  .sessions .sess-title { font-weight: 600; flex: 1; min-width: 200px; overflow-wrap: anywhere; }
+  .sessions .meta { color: var(--muted); font-size: 12px; }
+  .sessions ul { list-style: none; padding: 0; margin: 8px 0 0; }
+  .sessions li { padding: 6px 0; border-top: 1px solid var(--border); }
+  .sessions li summary { cursor: pointer; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  .sessions li pre { white-space: pre-wrap; font-size: 12px; background: var(--code-bg); padding: 8px; border-radius: 6px; margin: 6px 0 0; }
+  .sessions .read { color: var(--ok); } .sessions .unread { color: var(--warn); font-weight: 600; }
+  .sessions .keylink { color: var(--accent); cursor: pointer; text-decoration: underline; background: none; border: 0; padding: 0; font: inherit; }
+  #sessionsBadge:not(:empty) { background: var(--warn); color: var(--accent-text); border-radius: 999px; padding: 0 6px; font-size: 11px; margin-left: 4px; }
   .setup { max-width: 680px; margin: 8px auto; }
   .setup h2 { font-size: 18px; margin: 16px 0 4px; }
   .setup .problem { color: var(--err); margin: 0 0 12px; }
@@ -197,6 +209,7 @@
 <header>
   <h1>jirallm</h1>
   <span class="conn" id="conn">Connecting…</span>
+  <button id="openSessions" title="What each Claude Code session was told about Jira, PR, CI and Slack changes, and whether it has read it">Claude sessions <span id="sessionsBadge"></span></button>
   <button id="openSetup" title="How to install jirallm and the Claude Code plugin">Setup</button>
   <button id="theme" title="Theme: follow the system, light or dark">Theme: Auto</button>
   <div class="outdir">
@@ -1173,13 +1186,66 @@ async function connect() {
   await loadLibrary();
 }
 
-$('openSetup').onclick = () => { current = null; renderSetup('', !info); };
+$('openSetup').onclick = () => { current = null; sessionsOpen = false; renderSetup('', !info); };
+
+// ---- Claude sessions: what each session was handed (jirallm deliveries) and whether a Claude turn read it ----
+let sessionsOpen = false, lastSessionsJson = '';
+const KEY_IN_TEXT = /\b[A-Z][A-Z0-9]+-\d+\b/g;
+const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+function linkKeys(text) {
+  return esc(text).replace(KEY_IN_TEXT, (k) => `<button class="keylink" data-key="${k}" title="Open ${k} (diff with the previous export)">${k}</button>`);
+}
+function renderSessions(list) {
+  $('previewHead').hidden = true;
+  const body = list.length ? list.map((s) => {
+    const unread = s.deliveries.filter((d) => !d.read).length;
+    const items = s.deliveries.map((d) => `
+      <li><details><summary>
+        <b>#${d.n}</b><span class="meta">${clock(d.at)} · ${esc(d.via)}</span>
+        <span style="flex:1">${linkKeys(d.items.join(', ') || '(empty)')}</span>
+        ${d.read ? '<span class="read">✓ read</span>' : '<span class="unread">⏳ not read yet</span>'}
+      </summary><pre>${linkKeys(d.text || '')}</pre></details></li>`).join('');
+    return `<div class="sess">
+      <div class="sess-head">
+        <span class="sess-title">${esc(s.title || s.keys.join(', ') || 'Session ' + s.id.slice(0, 8))}</span>
+        ${s.keys.length ? `<span class="meta">${linkKeys(s.keys.join(', '))}</span>` : ''}
+        <span class="pill" title="The plugin's background monitor pushes changes to this session's tickets while it runs">${s.monitor ? '● monitor on' : '○ monitor off'}</span>
+        ${unread ? `<span class="pill blocked">${unread} unread</span>` : ''}
+        ${s.waiting ? `<span class="pill blocked" title="Changes to this session's tickets that reach it at the next prompt or monitor poll">${s.waiting} waiting</span>` : ''}
+      </div>
+      <div class="meta">${esc(s.id)} · active ${ago(s.lastActivity)}${s.readAt ? ` · last read ${clock(s.readAt)}` : ''}${s.reply ? ` — Claude: “${esc(s.reply)}”` : ''}</div>
+      <ul>${items}</ul></div>`;
+  }).join('') : '<div class="empty">No session has been handed jirallm changes in the last 7 days.</div>';
+  $('previewBody').innerHTML = `<div class="sessions">
+    <h2 class="card-title" style="margin:0">Claude sessions</h2>
+    <p class="hint">Changes the scheduled <code>jirallm watch</code> logged, as handed to each Claude Code session (at a prompt, at session start, or by the background monitor). “✓ read” = a Claude turn with it in context has finished. Refreshes every 15 s.</p>
+    ${body}</div>`;
+  $('previewBody').querySelectorAll('.keylink').forEach((b) => b.onclick = (e) => { e.preventDefault(); sessionsOpen = false; openTask(b.dataset.key, { as: 'diff', fromLink: true }); });
+}
+async function refreshSessions() {
+  try {
+    const list = await api('/api/sessions?dir=' + encodeURIComponent(outDir()));
+    const unread = list.reduce((n, s) => n + s.deliveries.filter((d) => !d.read).length, 0);
+    $('sessionsBadge').textContent = unread ? String(unread) : '';
+    // Re-render only on a change, so expanded deliveries stay open between refreshes.
+    const json = JSON.stringify(list);
+    if (sessionsOpen && (json !== lastSessionsJson || !$('previewBody').querySelector('.sessions'))) renderSessions(list);
+    lastSessionsJson = json;
+  } catch {
+    // Offline or an older helper: the button just shows no badge.
+  }
+}
+$('openSessions').onclick = () => { current = null; currentItem = null; sessionsOpen = true; renderLibrary(); refreshSessions(); };
+document.addEventListener('click', (e) => { if (sessionsOpen && e.target.closest?.('#library')) sessionsOpen = false; }, true);
+setInterval(() => { if (!document.hidden) refreshSessions(); }, 15000);
 
 (async () => {
   selectTab(store.get('tab', 'keys') === 'stack');
   syncOpts(); updateKeyCount();
   if (params.get('repo')) $('repo').value = params.get('repo');
   await connect();
+  refreshSessions();
+  if (params.has('sessions') && info) $('openSessions').click();
   // ?setup opens the guide even when the helper is running: the link to share with colleagues.
   if (params.has('setup') && info) renderSetup('', false);
 })();

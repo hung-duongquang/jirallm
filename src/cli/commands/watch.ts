@@ -424,7 +424,7 @@ export async function runChanges(opts: ChangesOptions): Promise<void> {
 }
 
 /** One report handed to a Claude Code session, as logged in `.changes.seen.d/<id>.log` (JSON lines). */
-export type Delivery = { n: number; at: string; via: string; items: string[] };
+export type Delivery = { n: number; at: string; via: string; items: string[]; text?: string };
 /** Written by the plugin's Stop hook: the highest delivery number a finished Claude turn had in context. */
 export type DeliveryAck = { n: number; at: string; reply?: string };
 
@@ -432,6 +432,7 @@ export const deliveryLogPath = (outputDir: string, session: string) => `${seenMa
 export const deliveryAckPath = (outputDir: string, session: string) => `${seenMarkerPath(outputDir, session)}.acked`;
 const MAX_LOG_LINES = 200;
 export const OTHER_ITEM = 'other tickets (names only)';
+const MAX_TEXT = 4000;
 const hhmm = (iso: string) => new Date(iso).toLocaleTimeString('sv-SE').slice(0, 5);
 
 export function readDeliveries(outputDir: string, session: string): Delivery[] {
@@ -478,7 +479,7 @@ export function tagDelivery(outputDir: string, session: string | undefined, via:
   if (items.every((i) => i === OTHER_ITEM)) return report;
   const log = readDeliveries(outputDir, session);
   const n = (log[log.length - 1]?.n ?? 0) + 1;
-  const entry: Delivery = { n, at: now.toISOString(), via, items };
+  const entry: Delivery = { n, at: now.toISOString(), via, items, text: report.slice(0, MAX_TEXT) };
   const file = deliveryLogPath(outputDir, session);
   mkdirSync(path.dirname(file), { recursive: true });
   if (log.length >= MAX_LOG_LINES) writeFileSync(file, [...log.slice(-MAX_LOG_LINES / 2), entry].map((d) => JSON.stringify(d)).join('\n') + '\n');
