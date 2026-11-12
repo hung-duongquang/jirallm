@@ -1,6 +1,6 @@
 {
   "name": "jirallm",
-  "version": "0.37.0",
+  "version": "0.37.1",
   "description": "Teaches Claude Code to read and update Jira and Confluence with the jirallm CLI; delivers Jira/Confluence/Slack/PR changes at session start, per prompt and through a background monitor, and keeps ticket state across compaction.",
   "author": { "name": "Hung Duong Quang", "url": "https://github.com/hung-duongquang" },
   "homepage": "https://github.com/hung-duongquang/jirallm",
