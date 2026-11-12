@@ -1231,7 +1231,7 @@ function renderSessions(list) {
       <ul>${items || `<li class="meta">No updates yet${s.keys.length ? '' : ' — updates are sent once a prompt names a ticket or links a Slack thread'}.</li>`}</ul></div>`;
   }).join('') : '<div class="empty">No live Claude Code session in this workspace, and none was handed jirallm changes in the last 7 days.</div>';
   $('previewBody').innerHTML = `<div class="sessions">
-    <h2 class="card-title" style="margin:0">Claude sessions</h2>
+    <div class="sess-head"><h2 class="card-title" style="margin:0;flex:1">Claude sessions</h2>${resumeAllButton(list)}</div>
     <p class="hint">Changes the scheduled <code>jirallm watch</code> logged, as handed to each Claude Code session (at a prompt, at session start, or by the background monitor). “✓ read” = Claude acted (a tool call or a reply) after it reached its context. Refreshes every few seconds.</p>
     ${body}</div>`;
   $('previewBody').querySelectorAll('.keylink').forEach((b) => b.onclick = (e) => { e.preventDefault(); sessionsOpen = false; openTask(b.dataset.key, { as: 'diff', fromLink: true }); });
@@ -1244,6 +1244,15 @@ function renderSessions(list) {
       await refreshSessions();
     } catch (e) { toast(e.message); b.disabled = false; }
   });
+  const all = $('resumeAll');
+  if (all) all.onclick = async () => {
+    all.disabled = true;
+    try {
+      const r = await api('/api/sessions/resume-all', { dir: outDir() });
+      toast(`Opening ${r.opened} session${r.opened === 1 ? '' : 's'}${r.where === 'window' ? ' in terminal windows' : ' in VS Code'}${r.skipped ? ` (skipped ${r.skipped} that may still be open)` : ''}`);
+    } catch (e) { toast(e.message); }
+    setTimeout(() => { lastSessionsJson = ''; refreshSessions(); }, 5000);
+  };
   $('previewBody').querySelectorAll('.sess-resume').forEach((b) => b.onclick = async () => {
     // Active since this boot without a monitor: it may still run in a terminal, so a second click confirms.
     if (b.dataset.maybe && !b.dataset.sure) {
@@ -1259,6 +1268,13 @@ function renderSessions(list) {
     } catch (e) { toast(e.message); }
     setTimeout(() => { b.disabled = false; refreshSessions(); }, 5000);
   });
+}
+/** "Resume all (3)": the sessions marked to reopen that are not running (not those active since this boot: they may still be open). */
+function resumeAllButton(list) {
+  const due = list.filter((s) => s.reopen && !s.running && !s.maybeRunning).length;
+  const maybe = list.filter((s) => s.reopen && !s.running && s.maybeRunning).length;
+  if (!due) return maybe ? `<span class="meta" title="Active since this boot without a running monitor: they may still be open, so Resume them one by one">${maybe} may still be open</span>` : '';
+  return `<button class="primary" id="resumeAll" title="Opens a VS Code terminal (else a terminal window) for each session marked to reopen that is not running${maybe ? `; skips ${maybe} active since this boot that may still be open` : ''}">Resume all (${due})</button>`;
 }
 async function refreshSessions() {
   try {

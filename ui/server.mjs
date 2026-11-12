@@ -491,6 +491,30 @@ async function handle(req, res) {
         sendJson(res, 200, { ok: true, ...(tasks.error && { warning: tasks.error }) });
         return;
       }
+      case 'POST /api/sessions/resume-all': {
+        // Every session marked to reopen that is not running and was not active since this boot (it may
+        // still be open in a terminal), oldest first; a second apart so VS Code takes the links in order.
+        const body = await readJsonBody(req);
+        const list = lib.claudeSessions(resolveOutputDir(body.dir));
+        const due = list.filter((s) => s.reopen && !s.running && !s.maybeRunning).sort((a, b) => String(a.lastActivity).localeCompare(String(b.lastActivity)));
+        const skipped = list.filter((s) => s.reopen && !s.running && s.maybeRunning).length;
+        if (!due.length) {
+          sendJson(res, 200, { ok: true, opened: 0, skipped });
+          return;
+        }
+        const first = lib.openInTerminal(due[0].id, due[0].title || due[0].id.slice(0, 8));
+        due.slice(1).forEach((s, i) =>
+          setTimeout(() => {
+            try {
+              if (!lib.isRunning(s.id)) lib.openInTerminal(s.id, s.title || s.id.slice(0, 8));
+            } catch {
+              // One session failing does not stop the others.
+            }
+          }, (i + 1) * 1500)
+        );
+        sendJson(res, 200, { ok: true, opened: due.length, skipped, ...first });
+        return;
+      }
       case 'POST /api/sessions/resume': {
         // Opens a terminal window running `claude --resume <id>` (VS Code's own terminals cannot be started from here).
         const body = await readJsonBody(req);
