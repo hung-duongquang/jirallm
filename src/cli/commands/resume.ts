@@ -32,6 +32,7 @@ const read = (file: string) => {
     return '';
   }
 };
+const pad = (n: number) => String(n).padStart(2, '0');
 const mtime = (file: string) => {
   try {
     return statSync(file).mtimeMs;
@@ -217,7 +218,9 @@ export async function runResume(id: string | undefined, opts: ResumeOptions): Pr
     if (!list.length) return console.log('No Claude sessions left open.');
     for (const s of list) {
       const state = isRunning(s.id, sessionsDir) ? 'running' : 'not running';
-      console.log(`${s.id}  ${new Date(s.lastActivity).toISOString().slice(0, 16).replace('T', ' ')}  ${state}  ${s.title}`);
+      const at = new Date(s.lastActivity);
+      const local = `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`;
+      console.log(`${s.id}  ${local}  ${state}  ${s.title}`);
     }
     return;
   }
@@ -225,7 +228,9 @@ export async function runResume(id: string | undefined, opts: ResumeOptions): Pr
     console.log(`Claude session ${id} is already running in another terminal.`);
     return;
   }
-  const cwd = read(path.join(sessionsDir, `${id}.open`)) || process.cwd();
+  // The folder it ran in (Claude Code finds the transcript by it), if that still exists.
+  const saved = read(path.join(sessionsDir, `${id}.open`));
+  const cwd = saved && existsSync(saved) ? saved : process.cwd();
   // Ctrl+C belongs to Claude (cancel, twice to quit); this process only waits for it.
   process.on('SIGINT', () => {});
   const child = spawn(`claude --resume ${id}`, { cwd, stdio: 'inherit', shell: true });
