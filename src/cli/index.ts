@@ -1911,8 +1911,8 @@ program
 In ~/.claude/settings.json:
   "statusLine": { "type": "command", "command": "jirallm status-line" }
 Prints e.g. "jirallm ✓ 11:32 · 📥 #3 11:30 PR #12 → ✓ read 11:31 · +2 other" or "jirallm ⚠ watch idle 25m · Claude up to date".
-📥 #N = the last delivery to this session (what, when), then "✓ read" (a Claude turn with it in context
-finished) or "⏳ not read yet"; "⏳ N waiting" = changes to this session's tickets not delivered yet;
+📥 #N = the last delivery to this session (what, when), then "✓ read" (Claude acted after it reached
+its context) or "⏳ not read yet"; "⏳ N waiting" = changes to this session's tickets not delivered yet;
 "+N other" = other tickets' changes (only named at the next prompt). Details: jirallm changes --log
 `)
   .action((opts: StatusLineOptions) => {

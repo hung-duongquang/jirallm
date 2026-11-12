@@ -449,12 +449,24 @@ export function readDeliveries(outputDir: string, session: string): Delivery[] {
     });
 }
 
+/**
+ * The session's read receipt (written by the plugin's PostToolUse/Stop hooks when Claude acted after a
+ * delivery), with the first line of Claude's latest reply from `<id>.reply` (Stop hook) when there is one.
+ */
 export function readAck(outputDir: string, session: string): DeliveryAck | undefined {
+  let ack: DeliveryAck;
   try {
-    return JSON.parse(readFileSync(deliveryAckPath(outputDir, session), 'utf-8')) as DeliveryAck;
+    ack = JSON.parse(readFileSync(deliveryAckPath(outputDir, session), 'utf-8')) as DeliveryAck;
   } catch {
     return undefined;
   }
+  try {
+    const reply = JSON.parse(readFileSync(`${seenMarkerPath(outputDir, session)}.reply`, 'utf-8')) as { text?: string };
+    if (reply.text) ack.reply = reply.text;
+  } catch {
+    // No reply recorded yet (or a receipt from 0.30–0.32, which kept it inline).
+  }
+  return ack;
 }
 
 /** Names of the items a report lists ("ZOD-1", "PR #12 (ZOD-1)", "slack/…"); the "other changes" line counts as one. */
@@ -509,7 +521,7 @@ export function deliveryLogReport(outputDir: string, session: string | undefined
     const read = ack && ack.n >= d.n ? '✓ read' : '⏳ not read yet';
     out.push(`#${d.n} ${d.at.slice(0, 10)} ${hhmm(d.at)} via ${d.via}: ${d.items.join(', ') || '(empty)'} — ${read}`);
   }
-  if (ack) out.push(`Last Claude turn with a delivery in context ended ${hhmm(ack.at)} (up to #${ack.n})${ack.reply ? `: "${ack.reply}"` : ''}`);
+  if (ack) out.push(`Read up to #${ack.n} at ${hhmm(ack.at)} (Claude acted after it reached its context)${ack.reply ? `; latest reply: "${ack.reply}"` : ''}`);
   return out.join('\n');
 }
 

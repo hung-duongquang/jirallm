@@ -3,11 +3,12 @@
 // commented on a ticket) and did not write a ticket note, Claude is asked once to save what is worth
 // keeping with `jirallm note`. Stateless: it reads only the current turn (from the last user prompt)
 // out of the transcript, and stays quiet while Claude is already continuing for a stop hook.
-// It also writes the read receipt for jirallm change deliveries (see ackDeliveries).
-import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, writeFileSync } from 'node:fs';
+// It also writes the read receipt for jirallm change deliveries (receipt.mjs), with Claude's reply line.
+import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { outputDir } from './changes.mjs';
+import { ackDeliveries } from './receipt.mjs';
 
 const TAIL_BYTES = 4 * 1024 * 1024;
 const ISSUE_KEY = /\b[A-Z][A-Z0-9]+-\d+\b/g;
@@ -55,44 +56,11 @@ const isUserPrompt = (e) =>
   (typeof e.message?.content === 'string' ||
     (Array.isArray(e.message?.content) && e.message.content.some((c) => c.type === 'text') && !e.message.content.some((c) => c.type === 'tool_result')));
 
-const DELIVERY = /\[jirallm delivery #(\d+) /g;
-
-/**
- * Records that a Claude turn finished with jirallm deliveries in its context: the highest
- * "[jirallm delivery #N" found in prompts, hook context and monitor notifications of the transcript
- * goes to jira-export/.changes.seen.d/<id>.acked with the first line of Claude's reply, which the
- * status line and `jirallm changes --log` show as "✓ read".
- */
-function ackDeliveries(entries, id) {
-  let n = 0;
-  for (const e of entries) {
-    if (e.type !== 'user' && e.type !== 'attachment') continue;
-    for (const m of JSON.stringify(e.message ?? e.attachment ?? '').matchAll(DELIVERY)) n = Math.max(n, Number(m[1]));
-  }
-  if (!n) return;
-  const file = path.join(outputDir, '.changes.seen.d', `${id}.acked`);
-  let acked = 0;
-  try {
-    acked = JSON.parse(readFileSync(file, 'utf8')).n ?? 0;
-  } catch {
-    // First ack for this session.
-  }
-  if (n <= acked) return;
-  const reply = String(input.last_assistant_message ?? '').split('\n').map((l) => l.trim()).find(Boolean)?.slice(0, 120);
-  mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, JSON.stringify({ n, at: new Date().toISOString(), ...(reply && { reply }) }));
-}
-
 try {
   if (!existsSync(outputDir) || typeof input.transcript_path !== 'string' || !existsSync(input.transcript_path)) process.exit(0);
-  const entries = tailEntries(input.transcript_path);
-  const sessionId = typeof input.session_id === 'string' && /^[\w-]{1,100}$/.test(input.session_id) ? input.session_id : '';
-  try {
-    if (sessionId) ackDeliveries(entries, sessionId);
-  } catch {
-    // The read receipt is a bonus too.
-  }
+  ackDeliveries(input.session_id, input.transcript_path, input.last_assistant_message);
   if (input.stop_hook_active) process.exit(0);
+  const entries = tailEntries(input.transcript_path);
   let from = entries.length - 1;
   while (from >= 0 && !isUserPrompt(entries[from])) from--;
   const commands = entries

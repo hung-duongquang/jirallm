@@ -1219,7 +1219,7 @@ function renderSessions(list) {
   }).join('') : '<div class="empty">No live Claude Code session in this workspace, and none was handed jirallm changes in the last 7 days.</div>';
   $('previewBody').innerHTML = `<div class="sessions">
     <h2 class="card-title" style="margin:0">Claude sessions</h2>
-    <p class="hint">Changes the scheduled <code>jirallm watch</code> logged, as handed to each Claude Code session (at a prompt, at session start, or by the background monitor). “✓ read” = a Claude turn with it in context has finished. Refreshes every 15 s.</p>
+    <p class="hint">Changes the scheduled <code>jirallm watch</code> logged, as handed to each Claude Code session (at a prompt, at session start, or by the background monitor). “✓ read” = Claude acted (a tool call or a reply) after it reached its context. Refreshes every 15 s.</p>
     ${body}</div>`;
   $('previewBody').querySelectorAll('.keylink').forEach((b) => b.onclick = (e) => { e.preventDefault(); sessionsOpen = false; openTask(b.dataset.key, { as: 'diff', fromLink: true }); });
 }
