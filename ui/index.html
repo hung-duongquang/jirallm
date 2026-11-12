@@ -1246,10 +1246,17 @@ function renderSessions(list) {
   });
   const all = $('resumeAll');
   if (all) all.onclick = async () => {
+    if (all.dataset.maybe && !all.dataset.sure) {
+      all.dataset.sure = '1';
+      const label = all.textContent;
+      all.textContent = 'Some may still be open: click again';
+      setTimeout(() => { delete all.dataset.sure; all.textContent = label; }, 6000);
+      return;
+    }
     all.disabled = true;
     try {
-      const r = await api('/api/sessions/resume-all', { dir: outDir() });
-      toast(`Opening ${r.opened} session${r.opened === 1 ? '' : 's'}${r.where === 'window' ? ' in terminal windows' : ' in VS Code'}${r.skipped ? ` (skipped ${r.skipped} that may still be open)` : ''}`);
+      const r = await api('/api/sessions/resume-all', { dir: outDir(), includeMaybe: true });
+      toast(`Opening ${r.opened} session${r.opened === 1 ? '' : 's'}${r.where === 'window' ? ' in terminal windows' : ' in VS Code'}`);
     } catch (e) { toast(e.message); }
     setTimeout(() => { lastSessionsJson = ''; refreshSessions(); }, 5000);
   };
@@ -1269,12 +1276,12 @@ function renderSessions(list) {
     setTimeout(() => { b.disabled = false; refreshSessions(); }, 5000);
   });
 }
-/** "Resume all (3)": the sessions marked to reopen that are not running (not those active since this boot: they may still be open). */
+/** "Resume all (3)": the sessions marked to reopen that are not running. Those active since this boot may still be open in a terminal, so with any of them a second click confirms. */
 function resumeAllButton(list) {
-  const due = list.filter((s) => s.reopen && !s.running && !s.maybeRunning).length;
-  const maybe = list.filter((s) => s.reopen && !s.running && s.maybeRunning).length;
-  if (!due) return maybe ? `<span class="meta" title="Active since this boot without a running monitor: they may still be open, so Resume them one by one">${maybe} may still be open</span>` : '';
-  return `<button class="primary" id="resumeAll" title="Opens a VS Code terminal (else a terminal window) for each session marked to reopen that is not running${maybe ? `; skips ${maybe} active since this boot that may still be open` : ''}">Resume all (${due})</button>`;
+  const due = list.filter((s) => s.reopen && !s.running);
+  const maybe = due.filter((s) => s.maybeRunning).length;
+  if (!due.length) return '';
+  return `<button class="primary" id="resumeAll" data-maybe="${maybe ? '1' : ''}" title="Opens a VS Code terminal (else a terminal window) for each session marked to reopen that is not running${maybe ? `. ${maybe} of them were active since this boot and may still be open in a terminal: check first` : ''}">Resume all (${due.length})</button>`;
 }
 async function refreshSessions() {
   try {

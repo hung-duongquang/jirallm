@@ -492,12 +492,12 @@ async function handle(req, res) {
         return;
       }
       case 'POST /api/sessions/resume-all': {
-        // Every session marked to reopen that is not running and was not active since this boot (it may
-        // still be open in a terminal), oldest first; a second apart so VS Code takes the links in order.
+        // Every session marked to reopen that is not running, oldest first, spaced out so VS Code takes the
+        // links in order. Those active since this boot (they may still be open) only with includeMaybe.
         const body = await readJsonBody(req);
         const list = lib.claudeSessions(resolveOutputDir(body.dir));
-        const due = list.filter((s) => s.reopen && !s.running && !s.maybeRunning).sort((a, b) => String(a.lastActivity).localeCompare(String(b.lastActivity)));
-        const skipped = list.filter((s) => s.reopen && !s.running && s.maybeRunning).length;
+        const due = list.filter((s) => s.reopen && !s.running && (body.includeMaybe || !s.maybeRunning)).sort((a, b) => String(a.lastActivity).localeCompare(String(b.lastActivity)));
+        const skipped = body.includeMaybe ? 0 : list.filter((s) => s.reopen && !s.running && s.maybeRunning).length;
         if (!due.length) {
           sendJson(res, 200, { ok: true, opened: 0, skipped });
           return;
