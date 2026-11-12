@@ -1,0 +1,7 @@
+# jirallm: notes
+
+## Ticket state and notes (instead of a separate memory)
+
+`jirallm state <key>...` prints a local card per ticket (no network calls): exported status and assignee, my open PRs for it from the `watch` state (CI, reviews, threads awaiting me), its worktrees with uncommitted/unpushed counts, my own files next to the export (context.md, test report, review history) and its notes. The plugin's prompt hook adds this card automatically the first time a prompt names a ticket that has a folder in `jira-export`.
+Keep per-ticket facts that are not in Jira or git with `jirallm note <key> "<text>"` (appends a dated line to `jira-export/<key>/notes.md`, local only): PR and worktree for others' tickets, which environment it is deployed on, decisions from calls or Slack, settled review points, what is blocked on whom. Prefer this over writing such facts to an assistant memory file: notes load only when the ticket comes up. Keep each note one line and edit `notes.md` directly to drop stale lines.
+The plugin keeps this going on its own: before a compaction it asks the summary to keep the keys, PRs and worktrees and to list decisions not yet noted; after compaction it re-adds the state cards of the session's tickets; and when a turn submitted a review, merged, pushed, opened a PR or changed a ticket without writing a note, a stop hook asks once whether something should be noted. If nothing is worth keeping, just end the turn.

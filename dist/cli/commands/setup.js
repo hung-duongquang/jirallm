@@ -1,0 +1,168 @@
+import { intro, outro, confirm, note, isCancel, cancel } from '@clack/prompts';
+import { checkFfmpeg, resolveFfmpegBinary } from 'framewise';
+import { detectJsPackageManagerFromUserAgent, detectOS, detectPackageManager, ffmpegInstallCommand, hasHomebrew, HOMEBREW_INSTALL_CMD, } from '../../lib/platform.js';
+import { runInteractive } from '../../lib/runCommand.js';
+async function confirmStep(message, defaultYes) {
+    const ok = await confirm({ message, initialValue: defaultYes });
+    if (isCancel(ok)) {
+        cancel('Cancelled.');
+        return false;
+    }
+    return ok === true;
+}
+function detectGlobalInstaller() {
+    const pm = detectJsPackageManagerFromUserAgent();
+    if (pm === 'pnpm')
+        return 'pnpm add -g ffmpeg-static';
+    if (pm === 'yarn')
+        return 'yarn global add ffmpeg-static';
+    return 'npm install -g ffmpeg-static';
+}
+async function installBundled(opts) {
+    const cmd = detectGlobalInstaller();
+    note(`Will run:\n  ${cmd}`, 'Bundled ffmpeg-static install');
+    if (!opts.yes && !(await confirmStep('Proceed with installing ffmpeg-static globally?', true))) {
+        return 1;
+    }
+    const code = await runInteractive(cmd);
+    if (code !== 0) {
+        console.error(`\nInstall command exited with code ${code}.`);
+        return code;
+    }
+    const resolved = await resolveFfmpegBinary();
+    if (resolved) {
+        console.log(`\nffmpeg resolved at: ${resolved}`);
+        return 0;
+    }
+    console.error('\nffmpeg-static installed but jirallm could not resolve it. Verify the global install path is on NODE_PATH.');
+    return 1;
+}
+async function installViaPackageManager(pm, opts) {
+    const cmd = ffmpegInstallCommand(pm);
+    if (!cmd)
+        return 1;
+    note(`Will run:\n  ${cmd}`, 'Installing ffmpeg');
+    if (!opts.yes && !(await confirmStep(`Run \`${cmd}\`?`, true))) {
+        return 1;
+    }
+    return runInteractive(cmd);
+}
+async function installHomebrew(opts) {
+    const disclosure = [
+        'Homebrew is not installed. The official installer:',
+        '  • Downloads and runs a script from raw.githubusercontent.com/Homebrew',
+        '  • Requires sudo (you will be prompted for your password)',
+        '  • May trigger Xcode Command Line Tools install (~1GB, GUI prompt)',
+        '  • Takes 5–15 minutes on a fresh machine',
+        '',
+        `Install command:\n  ${HOMEBREW_INSTALL_CMD}`,
+    ].join('\n');
+    note(disclosure, 'Homebrew install — read carefully');
+    // Homebrew install requires interactive consent unless explicitly opted in via --allow-brew.
+    if (!opts.allowBrew && !(await confirmStep('Install Homebrew now?', false))) {
+        console.log('Skipped Homebrew install. See https://brew.sh for manual instructions.');
+        return 1;
+    }
+    const code = await runInteractive(HOMEBREW_INSTALL_CMD);
+    if (code !== 0) {
+        console.error(`\nHomebrew installer exited with code ${code}.`);
+    }
+    return code;
+}
+async function computeInstallPlan(opts) {
+    if (opts.bundled)
+        return { commands: [detectGlobalInstaller()] };
+    if (await checkFfmpeg())
+        return { commands: [], message: 'ffmpeg already installed. Nothing to do.' };
+    const os = detectOS();
+    if (os === 'macos') {
+        const commands = [];
+        if (!(await hasHomebrew()))
+            commands.push(HOMEBREW_INSTALL_CMD);
+        const cmd = ffmpegInstallCommand(await detectPackageManager());
+        if (cmd)
+            commands.push(cmd);
+        return { commands };
+    }
+    if (os === 'linux') {
+        const pm = await detectPackageManager();
+        if (pm === 'none') {
+            return {
+                commands: [],
+                message: 'No supported package manager detected (apt/dnf/pacman). Install ffmpeg manually or use: jirallm setup --bundled',
+            };
+        }
+        const cmd = ffmpegInstallCommand(pm);
+        return { commands: cmd ? [cmd] : [] };
+    }
+    return {
+        commands: [],
+        message: 'Automatic install not supported on this OS. Install ffmpeg manually or use: jirallm setup --bundled',
+    };
+}
+async function printDryRun(opts) {
+    intro('jirallm setup (dry run)');
+    const { commands, message } = await computeInstallPlan(opts);
+    if (commands.length > 0) {
+        note(commands.map((c) => `  ${c}`).join('\n'), 'Install plan — commands that would run');
+    }
+    else if (message) {
+        note(message, 'Install plan');
+    }
+    outro('Dry run complete. No changes made.');
+}
+export async function runSetup(opts = {}) {
+    if (opts.dryRun) {
+        await printDryRun(opts);
+        return;
+    }
+    intro('jirallm setup');
+    if (opts.bundled) {
+        const code = await installBundled(opts);
+        if (code === 0)
+            outro('Bundled ffmpeg ready.');
+        else
+            process.exit(code);
+        return;
+    }
+    if (await checkFfmpeg()) {
+        outro('ffmpeg already installed. Nothing to do.');
+        return;
+    }
+    const os = detectOS();
+    if (os === 'macos') {
+        if (!(await hasHomebrew())) {
+            const hbCode = await installHomebrew(opts);
+            if (hbCode !== 0) {
+                note('You can also use the bundled fallback:\n  jirallm setup --bundled', 'Alternative');
+                process.exit(hbCode);
+            }
+        }
+        const pm = await detectPackageManager();
+        const code = await installViaPackageManager(pm, opts);
+        if (code !== 0)
+            process.exit(code);
+    }
+    else if (os === 'linux') {
+        const pm = await detectPackageManager();
+        if (pm === 'none') {
+            note('No supported package manager detected (apt/dnf/pacman). Install ffmpeg manually or use:\n  jirallm setup --bundled', 'Manual install required');
+            process.exit(1);
+        }
+        const code = await installViaPackageManager(pm, opts);
+        if (code !== 0)
+            process.exit(code);
+    }
+    else {
+        note('Automatic install not supported on this OS. Options:\n  • Install ffmpeg manually (https://ffmpeg.org/download.html)\n  • Use bundled fallback: jirallm setup --bundled', 'Manual install required');
+        process.exit(1);
+    }
+    // Re-verify
+    if (await checkFfmpeg()) {
+        outro('ffmpeg installed successfully.');
+        return;
+    }
+    console.error('Install reported success but ffmpeg is still not on PATH. Open a new shell and try `ffmpeg -version`.');
+    process.exit(1);
+}
+//# sourceMappingURL=setup.js.map
