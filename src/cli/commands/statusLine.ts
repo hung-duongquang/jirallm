@@ -1,18 +1,44 @@
 import { existsSync, readFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { unseenCount, WATCH_AT_MARKER } from './watch.js';
+import { OTHER_ITEM, pendingCounts, readAck, readDeliveries, WATCH_AT_MARKER } from './watch.js';
 
 export type StatusLineOptions = { outputDir?: string };
 
 /** A watch run older than this means the scheduled task stopped (it normally runs every 1–15 minutes). */
 const STALE_MINUTES = 20;
+const SESSION_ID = /^[\w-]{1,100}$/;
+const hhmm = (ms: number) => new Date(ms).toLocaleTimeString('sv-SE').slice(0, 5);
+
+/** Tickets the session works on: the keys its prompts named (kept by the plugin's prompt hook). */
+export function sessionKeys(session: string | undefined, dir = path.join(os.tmpdir(), 'jirallm-sessions')): string[] {
+  if (!session || !SESSION_ID.test(session)) return [];
+  try {
+    return readFileSync(path.join(dir, `${session}.keys`), 'utf-8').split('\n').map((k) => k.trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/** "📥 #3 11:30 PR #12 → ✓ read 11:31" for the last delivery to the session, or ''. */
+function lastDelivery(outputDir: string, session: string): string {
+  const log = readDeliveries(outputDir, session);
+  const last = log[log.length - 1];
+  if (!last) return '';
+  const names = last.items.filter((i) => i !== OTHER_ITEM).map((i) => (i.startsWith('slack/') ? 'Slack' : i.replace(/^PR (#\d+) \([^)]*\)$/, 'PR $1')));
+  const what = names.length ? names.slice(0, 2).join(', ') + (names.length > 2 ? ` +${names.length - 2}` : '') : 'other tickets';
+  const ack = readAck(outputDir, session);
+  const read = ack && ack.n >= last.n ? `✓ read ${hhmm(Date.parse(ack.at))}` : '⏳ not read yet';
+  return `📥 #${last.n} ${hhmm(Date.parse(last.at))} ${what} → ${read}`;
+}
 
 /**
  * One status-line segment for Claude Code: whether the scheduled `watch` is alive (time of its last
- * run, or how long it has been idle) and how many logged changes this session has not been given
- * yet. Empty when the workspace has no export directory.
+ * run, or how long it has been idle), the last change report handed to this session and whether a
+ * Claude turn has read it, changes to the session's tickets still waiting, and other tickets' changes.
+ * Empty when the workspace has no export directory.
  */
-export function statusLine(outputDir: string, session: string | undefined, now = Date.now()): string {
+export function statusLine(outputDir: string, session: string | undefined, now = Date.now(), keys = sessionKeys(session)): string {
   if (!existsSync(outputDir)) return '';
   const marker = path.join(outputDir, WATCH_AT_MARKER);
   const [iso, ...rest] = existsSync(marker) ? readFileSync(marker, 'utf-8').trim().split(' ') : [];
@@ -25,15 +51,21 @@ export function statusLine(outputDir: string, session: string | undefined, now =
     watch =
       minutes > STALE_MINUTES
         ? `jirallm ⚠ watch idle ${minutes < 120 ? `${minutes}m` : `${Math.floor(minutes / 60)}h`}`
-        : `jirallm ✓ ${new Date(at).toLocaleTimeString('sv-SE').slice(0, 5)}${errors}`;
+        : `jirallm ✓ ${hhmm(at)}${errors}`;
   }
-  let n = 0;
+  const parts = [watch];
   try {
-    n = unseenCount(outputDir, session && /^[\w-]{1,100}$/.test(session) ? session : undefined);
+    const id = session && SESSION_ID.test(session) ? session : undefined;
+    const delivered = id ? lastDelivery(outputDir, id) : '';
+    const { waiting, others } = pendingCounts(outputDir, id, keys);
+    if (delivered) parts.push(delivered);
+    if (waiting) parts.push(`⏳ ${waiting} waiting for Claude`);
+    if (others) parts.push(`+${others} other`);
+    if (!delivered && !waiting && !others) parts.push('Claude up to date');
   } catch {
     // A status line never fails.
   }
-  return `${watch} · ${n ? `${n} new for Claude` : 'Claude up to date'}`;
+  return parts.join(' · ');
 }
 
 /** `jirallm status-line`: reads Claude Code's status-line JSON on stdin (session id, project dir) and prints the segment. */

@@ -1891,10 +1891,13 @@ program
   .option('--session <id>', 'Claude Code session id: --unseen/--follow keep a marker per session, so every open session hears about every change')
   .option('--keys <keys>', "With --session: the session's tickets (comma-separated, may be empty); their changes print in full, others as one line of names")
   .option('--push-only', "With --session: print only the session's tickets' changes and keep them for the monitor (does not mark others seen)")
+  .option('--via <name>', 'With --session: how the report reaches Claude (prompt, start, monitor, …), recorded in the delivery log')
+  .option('--log', 'Show what was delivered to a session (--session, else the most recent one), when and how, and whether a Claude turn has read it')
   .addHelpText('after', `
 Examples:
   $ jirallm changes --unseen
   $ jirallm changes --follow --session <id>   # Claude Code: run it under the Monitor tool; each change becomes an event
+  $ jirallm changes --log                     # did my Claude session get the CI/review/Slack update, and has it read it?
 `)
   .action(async (opts: ChangesOptions) => {
     try { await runChanges(opts); } catch (err) { exitOnError(err); }
@@ -1907,7 +1910,10 @@ program
   .addHelpText('after', `
 In ~/.claude/settings.json:
   "statusLine": { "type": "command", "command": "jirallm status-line" }
-Prints e.g. "jirallm ✓ 11:32 · 2 new for Claude" or "jirallm ⚠ watch idle 25m · Claude up to date".
+Prints e.g. "jirallm ✓ 11:32 · 📥 #3 11:30 PR #12 → ✓ read 11:31 · +2 other" or "jirallm ⚠ watch idle 25m · Claude up to date".
+📥 #N = the last delivery to this session (what, when), then "✓ read" (a Claude turn with it in context
+finished) or "⏳ not read yet"; "⏳ N waiting" = changes to this session's tickets not delivered yet;
+"+N other" = other tickets' changes (only named at the next prompt). Details: jirallm changes --log
 `)
   .action((opts: StatusLineOptions) => {
     try { runStatusLine(opts); } catch { /* a status line never fails */ }

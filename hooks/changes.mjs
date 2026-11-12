@@ -44,12 +44,12 @@ const newerThan = (file, marker) => !existsSync(marker) || statSync(file).mtimeM
  * the CLI is only started when CHANGES.md changed after the session's marker: usually two stat
  * calls per prompt.
  */
-export function unseenChanges(sessionId, quick, keys = sessionKeys(sessionId)) {
+export function unseenChanges(sessionId, quick, keys = sessionKeys(sessionId), via = 'prompt') {
   try {
     if (!existsSync(changesFile)) return '';
     if (quick && !newerThan(changesFile, markerOf(sessionId))) return '';
     const args = ['changes', '--unseen', '--output-dir', outputDir];
-    if (sessionId && SESSION_ID.test(sessionId)) args.push('--session', sessionId, `--keys=${keys.join(',')}`);
+    if (sessionId && SESSION_ID.test(sessionId)) args.push('--session', sessionId, `--keys=${keys.join(',')}`, '--via', via);
     return jirallm(args, 10000);
   } catch {
     return ''; // Context is a bonus; never fail the prompt.
@@ -67,14 +67,15 @@ export function pushChanges(sessionId) {
     if (!keys.length || !existsSync(changesFile)) return '';
     const own = path.join(outputDir, '.changes.seen.d', sessionId);
     if (!newerThan(changesFile, `${own}.pushed`) || !newerThan(changesFile, markerOf(sessionId))) return '';
-    return jirallm(['changes', '--output-dir', outputDir, '--session', sessionId, `--keys=${keys.join(',')}`, '--push-only'], 10000);
+    return jirallm(['changes', '--output-dir', outputDir, '--session', sessionId, `--keys=${keys.join(',')}`, '--push-only', '--via', 'monitor'], 10000);
   } catch {
     return '';
   }
 }
 
-/** "📥 jirallm: 3 changes added to Claude's context — ZOD-4083, PR #3017, Slack thread" from a change report. */
+/** "📥 jirallm #4: 3 changes added to Claude's context — ZOD-4083, PR #3017, Slack thread" from a change report. */
 export function changesMessage(report) {
+  const n = report.match(/^\[jirallm delivery (#\d+)/)?.[1];
   const items = [];
   for (const line of report.split('\n')) {
     if (!line.startsWith('- ') || line.startsWith('- …')) continue;
@@ -86,5 +87,5 @@ export function changesMessage(report) {
   if (items.length === 0) return '';
   const names = [...new Set(items)];
   const shown = names.slice(0, 5).join(', ') + (names.length > 5 ? `, +${names.length - 5} more` : '');
-  return `📥 jirallm: ${items.length} change${items.length === 1 ? '' : 's'} added to Claude's context — ${shown}`;
+  return `📥 jirallm${n ? ` ${n}` : ''}: ${items.length} change${items.length === 1 ? '' : 's'} added to Claude's context — ${shown}`;
 }

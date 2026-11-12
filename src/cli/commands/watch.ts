@@ -320,7 +320,17 @@ export async function slackChanges(
   return changes;
 }
 
-export type ChangesOptions = { outputDir?: string; unseen?: boolean; max?: string; follow?: string | boolean; session?: string; keys?: string; pushOnly?: boolean };
+export type ChangesOptions = {
+  outputDir?: string;
+  unseen?: boolean;
+  max?: string;
+  follow?: string | boolean;
+  session?: string;
+  keys?: string;
+  pushOnly?: boolean;
+  via?: string;
+  log?: boolean;
+};
 
 /** Path of the seen marker for a session (validated id), or of the shared one without a session. */
 export function seenMarkerPath(outputDir: string, session?: string): string {
@@ -390,18 +400,139 @@ export async function runChanges(opts: ChangesOptions): Promise<void> {
   const keys = opts.keys === undefined ? undefined : opts.keys.split(',').map((k) => k.trim().toUpperCase()).filter(Boolean);
   if ((keys || opts.pushOnly) && !opts.session) throw new Error('--keys and --push-only need --session.');
   const focus: ChangeFocus | undefined = keys || opts.pushOnly ? { keys: keys ?? [], pushOnly: opts.pushOnly } : undefined;
-  if (opts.follow === undefined || opts.follow === false) {
-    const report = changesReport(outputDir, !!opts.unseen || !!focus, max, opts.session, focus);
-    if (report) console.log(report);
+  if (opts.log) {
+    console.log(deliveryLogReport(outputDir, opts.session, max));
+    return;
+  }
+  const following = opts.follow !== undefined && opts.follow !== false;
+  const via = opts.via ?? (following ? 'follow' : opts.pushOnly ? 'monitor' : 'cli');
+  if (!following) {
+    const unseen = !!opts.unseen || !!focus;
+    const report = changesReport(outputDir, unseen, max, opts.session, focus);
+    // Only reports that move a marker are deliveries; a plain `changes` listing is not.
+    const out = unseen ? tagDelivery(outputDir, opts.session, via, report) : report;
+    if (out) console.log(out);
     return;
   }
   const seconds = opts.follow === true ? 30 : Number(opts.follow);
   if (!(seconds >= 1)) throw new Error('--follow takes a number of seconds.');
   for (;;) {
-    const report = changesReport(outputDir, true, max, opts.session, focus);
+    const report = tagDelivery(outputDir, opts.session, via, changesReport(outputDir, true, max, opts.session, focus));
     if (report) console.log(report);
     await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
   }
+}
+
+/** One report handed to a Claude Code session, as logged in `.changes.seen.d/<id>.log` (JSON lines). */
+export type Delivery = { n: number; at: string; via: string; items: string[] };
+/** Written by the plugin's Stop hook: the highest delivery number a finished Claude turn had in context. */
+export type DeliveryAck = { n: number; at: string; reply?: string };
+
+export const deliveryLogPath = (outputDir: string, session: string) => `${seenMarkerPath(outputDir, session)}.log`;
+export const deliveryAckPath = (outputDir: string, session: string) => `${seenMarkerPath(outputDir, session)}.acked`;
+const MAX_LOG_LINES = 200;
+export const OTHER_ITEM = 'other tickets (names only)';
+const hhmm = (iso: string) => new Date(iso).toLocaleTimeString('sv-SE').slice(0, 5);
+
+export function readDeliveries(outputDir: string, session: string): Delivery[] {
+  const file = deliveryLogPath(outputDir, session);
+  if (!existsSync(file)) return [];
+  return readFileSync(file, 'utf-8')
+    .split('\n')
+    .flatMap((l) => {
+      try {
+        return l.trim() ? [JSON.parse(l) as Delivery] : [];
+      } catch {
+        return [];
+      }
+    });
+}
+
+export function readAck(outputDir: string, session: string): DeliveryAck | undefined {
+  try {
+    return JSON.parse(readFileSync(deliveryAckPath(outputDir, session), 'utf-8')) as DeliveryAck;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Names of the items a report lists ("ZOD-1", "PR #12 (ZOD-1)", "slack/…"); the "other changes" line counts as one. */
+function reportItems(report: string): string[] {
+  const items: string[] = [];
+  for (const line of report.split('\n')) {
+    if (line.startsWith('- ') && !line.startsWith('- …')) items.push(line.slice(2).split(':')[0]!.trim());
+    else if (line.startsWith('Other changes,')) items.push(OTHER_ITEM);
+  }
+  return [...new Set(items)];
+}
+
+/**
+ * Logs a report handed to a session and prefixes it with "[jirallm delivery #N · via HH:MM]", so the
+ * plugin's Stop hook can tell from the transcript which deliveries a finished Claude turn had in
+ * context, and the status line can show "delivered → read". Without a session: the report as is.
+ */
+export function tagDelivery(outputDir: string, session: string | undefined, via: string, report: string | null, now = new Date()): string | null {
+  if (!report || !session) return report;
+  const items = reportItems(report);
+  // Only other tickets' names: nothing for this session to act on, so not worth tracking.
+  if (items.every((i) => i === OTHER_ITEM)) return report;
+  const log = readDeliveries(outputDir, session);
+  const n = (log[log.length - 1]?.n ?? 0) + 1;
+  const entry: Delivery = { n, at: now.toISOString(), via, items };
+  const file = deliveryLogPath(outputDir, session);
+  mkdirSync(path.dirname(file), { recursive: true });
+  if (log.length >= MAX_LOG_LINES) writeFileSync(file, [...log.slice(-MAX_LOG_LINES / 2), entry].map((d) => JSON.stringify(d)).join('\n') + '\n');
+  else appendFileSync(file, JSON.stringify(entry) + '\n');
+  return `[jirallm delivery #${n} · ${via} ${hhmm(entry.at)}]\n${report}`;
+}
+
+/** The most recently written session delivery log, for `changes --log` without `--session`. */
+function newestLogSession(outputDir: string): string | undefined {
+  const dir = path.join(outputDir, SESSION_SEEN_DIR);
+  if (!existsSync(dir)) return undefined;
+  return readdirSync(dir)
+    .filter((f) => f.endsWith('.log'))
+    .map((f) => ({ id: f.slice(0, -'.log'.length), at: statSync(path.join(dir, f)).mtimeMs }))
+    .sort((a, b) => b.at - a.at)[0]?.id;
+}
+
+/** `changes --log`: what was handed to a session, when and how, and whether a Claude turn has read it. */
+export function deliveryLogReport(outputDir: string, session: string | undefined, max: number): string {
+  const id = session ?? newestLogSession(outputDir);
+  if (!id) return 'No deliveries logged yet (each session logs to jira-export/.changes.seen.d/<id>.log).';
+  const log = readDeliveries(outputDir, id).slice(-max);
+  if (!log.length) return `Session ${id}: nothing delivered yet.`;
+  const ack = readAck(outputDir, id);
+  const out = [`Deliveries to session ${id}${session ? '' : ' (most recent session)'}:`];
+  for (const d of log) {
+    const read = ack && ack.n >= d.n ? '✓ read' : '⏳ not read yet';
+    out.push(`#${d.n} ${d.at.slice(0, 10)} ${hhmm(d.at)} via ${d.via}: ${d.items.join(', ') || '(empty)'} — ${read}`);
+  }
+  if (ack) out.push(`Last Claude turn with a delivery in context ended ${hhmm(ack.at)} (up to #${ack.n})${ack.reply ? `: "${ack.reply}"` : ''}`);
+  return out.join('\n');
+}
+
+/**
+ * For the status line: unseen changes to the session's tickets not handed to it yet (`waiting`),
+ * and unseen changes to other tickets (`others`, which only arrive as one line of names).
+ */
+export function pendingCounts(outputDir: string, session: string | undefined, keys: string[]): { waiting: number; others: number } {
+  const file = path.join(outputDir, CHANGES_FILE);
+  if (!existsSync(file)) return { waiting: 0, others: 0 };
+  const seen = seenStamp(outputDir, session);
+  const pushed = session ? readStamp(pushedMarkerPath(outputDir, session)) : '';
+  const waiting = new Set<string>();
+  const others = new Set<string>();
+  for (const e of changeEntries(readFileSync(file, 'utf-8'))) {
+    if (e.stamp <= seen) continue;
+    for (const l of e.lines) {
+      const item = l.slice(2).split(':')[0]!;
+      if (keys.length && concerns(l, keys)) {
+        if (e.stamp > pushed) waiting.add(item);
+      } else others.add(item);
+    }
+  }
+  return { waiting: waiting.size, others: others.size };
 }
 
 /**
