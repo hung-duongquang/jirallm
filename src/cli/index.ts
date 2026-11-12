@@ -48,6 +48,7 @@ import { runAgentGuide, type AgentGuideOptions } from './commands/agentGuide.js'
 import { runPage, type PageOptions } from './commands/page.js';
 import { runPageSearch, type PageSearchOptions } from './commands/pageSearch.js';
 import { runSlack, runSlackAuth, runSlackSearch, type SlackOptions, type SlackSearchOptions } from './commands/slack.js';
+import { runSlackCopy, type SlackCopyOptions } from './commands/slackCopy.js';
 import { runSharePoint, runSharePointAuth, runSharePointEdit, runSharePointSearch, type SharePointEditOptions, type SharePointOptions, type SharePointSearchOptions } from './commands/sharepoint.js';
 import { runChanges, runWatch, type ChangesOptions, type WatchOptions } from './commands/watch.js';
 import { runStatusLine, type StatusLineOptions } from './commands/statusLine.js';
@@ -1682,6 +1683,26 @@ Examples:
 `)
   .action(async (url: string, opts: SlackOptions) => {
     try { await runSlack(url, opts); } catch (err) { exitOnError(err); }
+  });
+
+program
+  .command('slack:copy [file]')
+  .description('Make text copied from Claude Code paste well in Slack: tables become bullets, markdown becomes Slack formatting (clipboard in, clipboard out)')
+  .option('--print', 'Only print the Slack version, leave the clipboard alone')
+  .addHelpText('after', `
+Reads the file, else piped stdin, else the clipboard. Box-drawing and markdown tables become one
+bullet per row ("*first cell* — other cells"), **bold**/headings become bold, lists, links and code
+are kept, and the "● " marker and indent of a Claude Code reply are dropped. On Windows the result
+goes on the clipboard as rich text, which Slack keeps when pasted (Ctrl+V); elsewhere as plain text
+in Slack markup.
+
+Examples:
+  $ jirallm slack:copy                 # copy from the terminal first, then paste in Slack
+  $ jirallm slack:copy reply.md --print
+  (in Claude Code)  ! jirallm slack:copy
+`)
+  .action(async (file: string | undefined, opts: SlackCopyOptions) => {
+    try { await runSlackCopy(file, opts); } catch (err) { exitOnError(err); }
   });
 
 program
