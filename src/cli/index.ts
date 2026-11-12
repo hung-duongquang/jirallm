@@ -51,6 +51,7 @@ import { runSlack, runSlackAuth, runSlackSearch, type SlackOptions, type SlackSe
 import { runSharePoint, runSharePointAuth, runSharePointEdit, runSharePointSearch, type SharePointEditOptions, type SharePointOptions, type SharePointSearchOptions } from './commands/sharepoint.js';
 import { runChanges, runWatch, type ChangesOptions, type WatchOptions } from './commands/watch.js';
 import { runStatusLine, type StatusLineOptions } from './commands/statusLine.js';
+import { runResume, type ResumeOptions } from './commands/resume.js';
 import { runPrContext, type PrContextOptions } from './commands/prContext.js';
 import { runPrStatus, type PrStatusOptions } from './commands/prStatus.js';
 import { runNote, runState, type NoteOptions, type StateOptions } from './commands/state.js';
@@ -581,6 +582,27 @@ Examples:
   $ jirallm setup --dry-run
 `
   );
+
+program
+  .command('resume [session-id]')
+  .description('Bring back the Claude Code sessions left open (e.g. by a reboot): list them, resume one, or write VS Code tasks that reopen them all')
+  .option('--vscode <workspace>', 'Write <workspace>/.vscode/tasks.json tasks: one terminal per open session, run when the folder opens')
+  .option('--forget', 'Do not bring this session back')
+  .addHelpText('after', `
+The jirallm plugin marks a session open when it starts and unmarks it when you end it (/exit,
+/clear, logout); a reboot or a closed window leaves it marked. The plugin keeps the VS Code tasks
+of the workspace up to date, so after a reboot opening the folder starts one terminal per session
+(VS Code asks once to allow automatic tasks). A session that is still running is not started twice.
+
+Examples:
+  $ jirallm resume                                   # the sessions left open
+  $ jirallm resume 70ab4bf2-f36a-44e8-aa11-497a0c125fc3
+  $ jirallm resume --vscode .
+  $ jirallm resume 70ab4bf2-f36a-44e8-aa11-497a0c125fc3 --forget --vscode .
+`)
+  .action(async (id: string | undefined, opts: ResumeOptions) => {
+    try { await runResume(id, opts); } catch (err) { exitOnError(err); }
+  });
 
 program
   .command('ui')

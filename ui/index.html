@@ -1195,11 +1195,14 @@ const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', m
 function linkKeys(text) {
   return esc(text).replace(KEY_IN_TEXT, (k) => `<button class="keylink" data-key="${k}" title="Open ${k} (diff with the previous export)">${k}</button>`);
 }
-const tickets = (s) => s.keys.filter((k) => !k.startsWith('slack/'));
-/** "ZOD-1 · 1 Slack thread": what the monitor follows for a session. */
+const tickets = (s) => s.keys.filter((k) => !k.startsWith('slack/') && !k.startsWith('confluence/'));
+/** "ZOD-1 · 1 Slack thread · 1 Confluence page": what the monitor follows for a session. */
 function followed(s) {
-  const n = s.keys.length - tickets(s).length;
-  return [...tickets(s), ...(n ? [n === 1 ? '1 Slack thread' : `${n} Slack threads`] : [])].join(' · ');
+  const count = (prefix, one, many) => {
+    const n = s.keys.filter((k) => k.startsWith(prefix)).length;
+    return n ? [n === 1 ? `1 ${one}` : `${n} ${many}`] : [];
+  };
+  return [...tickets(s), ...count('slack/', 'Slack thread', 'Slack threads'), ...count('confluence/', 'Confluence page', 'Confluence pages')].join(' · ');
 }
 function renderSessions(list) {
   $('previewHead').hidden = true;

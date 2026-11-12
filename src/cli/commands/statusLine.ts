@@ -31,7 +31,7 @@ function lastDelivery(outputDir: string, session: string): string {
   const log = readDeliveries(outputDir, session);
   const last = log[log.length - 1];
   if (!last) return '';
-  const names = last.items.filter((i) => i !== OTHER_ITEM).map((i) => (i.startsWith('slack/') ? 'Slack' : i.replace(/^PR (#\d+) \([^)]*\)$/, 'PR $1')));
+  const names = last.items.filter((i) => i !== OTHER_ITEM).map((i) => (i.startsWith('slack/') ? 'Slack' : i.startsWith('confluence/') ? 'Confluence' : i.replace(/^PR (#\d+) \([^)]*\)$/, 'PR $1')));
   const what = names.length ? names.slice(0, 2).join(', ') + (names.length > 2 ? ` +${names.length - 2}` : '') : 'other tickets';
   const ack = readAck(outputDir, session);
   const read = ack && ack.n >= last.n ? `✓ read ${hhmm(Date.parse(ack.at))}` : '⏳ not read yet';

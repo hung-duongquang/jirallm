@@ -11,7 +11,7 @@
 import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { changesMessage, jirallm, outputDir, unseenChanges } from './changes.mjs';
+import { changesMessage, jirallm, markOpen, outputDir, refreshResumeTasks, unseenChanges } from './changes.mjs';
 
 const sessionsDir = path.join(os.tmpdir(), 'jirallm-sessions');
 const SESSION_ID = /^[\w-]{1,100}$/;
@@ -93,6 +93,10 @@ if (!jirallm(['--version'], 15000)) {
     } catch {
       // Without the handshake the monitor stays idle; the prompt hook still delivers changes.
     }
+    // Open until the user ends it (session-end.mjs), so a reboot brings it back. A new session has no
+    // transcript yet, so its resume task is written on its first prompt; a resumed one has one now.
+    markOpen(session, true);
+    if (input.source === 'resume') refreshResumeTasks();
     parts.push(
       `jirallm session id: ${session}. The plugin's background monitor "jirallm-changes" delivers new changes ` +
         `(CI, reviews, Jira, Slack) as notifications during this session; if it is not running, ` +

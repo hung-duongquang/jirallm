@@ -617,12 +617,18 @@ export type ChangeFocus = { keys: string[]; pushOnly?: boolean };
 const pushedMarkerPath = (outputDir: string, session: string) => `${seenMarkerPath(outputDir, session)}.pushed`;
 const readStamp = (file: string) => (existsSync(file) ? readFileSync(file, 'utf-8').trim() : '');
 
-/** "ZOD-1, 2 Slack threads": the session's tickets, and its followed Slack threads ("slack/<channel>-<ts>") counted. */
+/**
+ * "ZOD-1, 2 Slack threads, its Confluence page": the session's tickets, and its followed Slack threads
+ * ("slack/<channel>-<ts>") and Confluence pages ("confluence/<id>") counted.
+ */
 function followedNames(keys: string[]): string {
   const isThread = (k: string) => k.toLowerCase().startsWith('slack/');
+  const isPage = (k: string) => k.toLowerCase().startsWith('confluence/');
   const threads = keys.filter(isThread).length;
-  const names = keys.filter((k) => !isThread(k));
+  const pages = keys.filter(isPage).length;
+  const names = keys.filter((k) => !isThread(k) && !isPage(k));
   if (threads) names.push(threads === 1 ? 'its Slack thread' : `${threads} Slack threads`);
+  if (pages) names.push(pages === 1 ? 'its Confluence page' : `${pages} Confluence pages`);
   return names.join(', ');
 }
 
@@ -676,7 +682,9 @@ function focusedReport(outputDir: string, session: string, focus: ChangeFocus): 
   const out: string[] = [];
   if (mine.size) out.push(`Changes to this session's tickets (${followedNames(focus.keys)}; re-exported to ${outputDir}):`, ...mine.values());
   if (others.size) {
-    const names = [...others.keys()].map((n) => (n.startsWith('slack/') ? 'a Slack thread' : n.replace(/ \([^)]*\)$/, '')));
+    const names = [...others.keys()].map((n) =>
+      n.startsWith('slack/') ? 'a Slack thread' : n.startsWith('confluence/') ? 'a Confluence page' : n.replace(/ \([^)]*\)$/, '')
+    );
     const unique = [...new Set(names)];
     const shown = unique.slice(-8).join(', ') + (unique.length > 8 ? `, +${unique.length - 8} more` : '');
     out.push(`Other changes, not this session's tickets (only on request: \`jirallm changes\`): ${shown}`);

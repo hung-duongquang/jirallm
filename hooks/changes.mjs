@@ -1,7 +1,7 @@
 // Shared by the jirallm plugin hooks: run the CLI, read this session's unseen changes, and turn
 // them into a one-line message the user sees in Claude Code (so they know Claude got them).
-import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -16,6 +16,43 @@ export function jirallm(args, timeout) {
       ? spawnSync(['jirallm', ...args].map((a) => (/[\s"&|<>^]/.test(a) ? `"${a}"` : a)).join(' '), { encoding: 'utf8', shell: true, timeout })
       : spawnSync('jirallm', args, { encoding: 'utf8', timeout });
   return r.status === 0 ? r.stdout.trim() : '';
+}
+
+/** Starts the CLI in the background, outliving the hook; nothing waits for it or sees its output. */
+export function jirallmDetached(args) {
+  const opts = { detached: true, stdio: 'ignore', windowsHide: true };
+  const child =
+    process.platform === 'win32'
+      ? spawn(['jirallm', ...args].map((a) => (/[\s"&|<>^]/.test(a) ? `"${a}"` : a)).join(' '), { ...opts, shell: true })
+      : spawn('jirallm', args, opts);
+  child.on('error', () => {});
+  child.unref();
+}
+
+const sessionsDir = path.join(os.tmpdir(), 'jirallm-sessions');
+
+/**
+ * Keeps the workspace's VS Code tasks that reopen the sessions left open (`jirallm resume --vscode`)
+ * current. In the background: the hook does not wait for it.
+ */
+export function refreshResumeTasks() {
+  if (existsSync(outputDir)) jirallmDetached(['resume', '--vscode', path.dirname(outputDir)]);
+}
+
+/** Marks the session open (it is brought back after a reboot) with its project dir, or unmarks it. */
+export function markOpen(sessionId, open) {
+  if (!sessionId || !SESSION_ID.test(sessionId)) return;
+  const file = path.join(sessionsDir, `${sessionId}.open`);
+  try {
+    if (open) {
+      mkdirSync(sessionsDir, { recursive: true });
+      writeFileSync(file, process.env.CLAUDE_PROJECT_DIR || process.cwd());
+    } else if (existsSync(file)) {
+      unlinkSync(file);
+    }
+  } catch {
+    // Without the marker the session is just not brought back.
+  }
 }
 
 /** The session's seen marker, else the shared one (a session from before per-session markers). */
@@ -90,6 +127,7 @@ export function changesMessage(report) {
     if (!line.startsWith('- ') || line.startsWith('- …')) continue;
     let item = line.slice(2).split(':')[0].trim();
     if (item.startsWith('slack/')) item = 'Slack thread';
+    else if (item.startsWith('confluence/')) item = 'Confluence page';
     else item = item.replace(/^PR (#\d+) \(([^)]+)\)$/, '$1 $2');
     items.push(item);
   }

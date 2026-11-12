@@ -37,6 +37,17 @@ describe('a followed Slack thread', () => {
   });
 });
 
+describe('a followed Confluence page', () => {
+  it('pushes its new versions, matched by page id whatever the folder slug', () => {
+    log([['2026-11-12 11:40', ['- confluence/2190574225-payment-module: "Payment module" v3 → v4', '- ZOD-4001: Comments changed']]]);
+    const report = changesReport(dir, false, 20, 's10', { keys: ['CONFLUENCE/2190574225'], pushOnly: true })!;
+    expect(report).toContain("Changes to this session's tickets (its Confluence page;");
+    expect(report).toContain('- confluence/2190574225-payment-module: "Payment module" v3 → v4');
+    expect(report).not.toContain('ZOD-4001');
+    expect(concerns('- confluence/21905742250-other: x', ['CONFLUENCE/2190574225'])).toBe(false);
+  });
+});
+
 describe('changes focused on a session', () => {
   it('prints the session tickets in full and others as one line of names', () => {
     const report = changesReport(dir, true, 20, 's1', { keys: ['ZOD-4082'] })!;
