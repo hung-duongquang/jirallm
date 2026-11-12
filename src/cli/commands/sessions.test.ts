@@ -27,6 +27,27 @@ describe('claudeSessions', () => {
     expect(s!.deliveries[1]!.text).toMatch(/^Changes to this session's tickets \(ZOD-1;[^\n]*\n- PR #12 \(ZOD-1\): CI failed/);
   });
 
+  it('lists a live session before its first delivery, titled from its transcript, and never a throwaway resume session', () => {
+    const dir = path.join(mkdtempSync(path.join(tmpdir(), 'sessions-')), 'jira-export');
+    mkdirSync(dir);
+    const tmp = mkdtempSync(path.join(tmpdir(), 'sessions-tmp-'));
+    const transcript = path.join(tmp, 'real.jsonl');
+    writeFileSync(
+      transcript,
+      [
+        { type: 'user', isMeta: true, message: { content: '<local-command-caveat>x</local-command-caveat>' } },
+        { type: 'user', message: { content: '<command-message>jirallm:implement</command-message>\n<command-name>/jirallm:implement</command-name>\n<command-args>ZOD-4155</command-args>' } },
+      ].map((e) => JSON.stringify(e)).join('\n') + '\n'
+    );
+    const project = path.dirname(dir);
+    writeFileSync(path.join(tmp, 'real.start'), `${project}\nresume\n${transcript}`);
+    writeFileSync(path.join(tmp, 'throwaway.start'), `${project}\nstartup\n${path.join(tmp, 'missing.jsonl')}`);
+    writeFileSync(path.join(tmp, 'throwaway.monitor'), String(process.pid));
+    writeFileSync(path.join(tmp, 'elsewhere.start'), `${tmp}\nstartup\n${transcript}`);
+    const list = claudeSessions(dir, 7, tmp);
+    expect(list.map((s) => [s.id, s.live, s.title, s.deliveries.length])).toEqual([['real', true, '/jirallm:implement ZOD-4155', 0]]);
+  });
+
   it('leaves out sessions idle for longer than the window', () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'sessions-'));
     mkdirSync(path.join(dir, '.changes.seen.d'));

@@ -86,7 +86,10 @@ if (!jirallm(['--version'], 15000)) {
   if (session) {
     try {
       mkdirSync(sessionsDir, { recursive: true });
-      writeFileSync(path.join(sessionsDir, `${session}.start`), process.env.CLAUDE_PROJECT_DIR || process.cwd());
+      // Lines: project dir, source (startup/resume/clear/compact), transcript path. The monitor matches the
+      // project, and moves from a throwaway startup session to the one `claude --resume` switches to.
+      const transcript = typeof input.transcript_path === 'string' ? input.transcript_path : '';
+      writeFileSync(path.join(sessionsDir, `${session}.start`), [process.env.CLAUDE_PROJECT_DIR || process.cwd(), input.source ?? '', transcript].join('\n'));
     } catch {
       // Without the handshake the monitor stays idle; the prompt hook still delivers changes.
     }
