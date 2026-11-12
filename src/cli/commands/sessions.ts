@@ -19,6 +19,8 @@ export type SessionOverview = {
   running: boolean;
   /** Brought back after a reboot (`jirallm resume`): the plugin marked it open and the user has not ended it. */
   reopen: boolean;
+  /** Not known to run (no monitor), but its transcript was written since this boot: it may still be open in a terminal. */
+  maybeRunning: boolean;
   lastActivity: string;
   /** Changes to the session's tickets that have not been handed to it yet. */
   waiting: number;
@@ -120,6 +122,7 @@ export function claudeSessions(outputDir: string, days = 7, sessionsDir = path.j
     // A session without a transcript (the throwaway one `claude --resume` starts first) is never shown.
     const live = (monitor || now - wrote < LIVE_MS) && (wrote > 0 || log.length > 0);
     const reopen = wrote > 0 && isMarkedOpen(id, sessionsDir);
+    const running = isRunning(id, sessionsDir);
     if (!live && !reopen && (!log.length || last < cutoff)) continue;
     const keys = sessionKeys(id, sessionsDir);
     const ack = readAck(outputDir, id);
@@ -129,8 +132,9 @@ export function claudeSessions(outputDir: string, days = 7, sessionsDir = path.j
       keys,
       monitor,
       live,
-      running: isRunning(id, sessionsDir),
+      running,
       reopen,
+      maybeRunning: !running && wrote >= now - os.uptime() * 1000,
       lastActivity: new Date(last).toISOString(),
       waiting: pendingCounts(outputDir, id, keys).waiting,
       ...(ack?.reply && { reply: ack.reply }),

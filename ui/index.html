@@ -1225,7 +1225,7 @@ function renderSessions(list) {
         <button class="sess-reopen" data-id="${esc(s.id)}" data-reopen="${s.reopen ? '' : '1'}" title="${s.reopen
           ? 'After a reboot, opening the workspace in VS Code reopens this session in a terminal (jirallm resume). Click to stop that.'
           : 'Not reopened after a reboot (you ended it, or it was dropped). Click to reopen it after the next reboot.'}">${s.reopen ? '↻ reopens after reboot' : '↻ off'}</button>
-        ${s.running ? '' : `<button class="primary sess-resume" data-id="${esc(s.id)}" title="Opens a terminal window running claude --resume for this session">Resume</button>`}
+        ${s.running ? '' : `<button class="primary sess-resume" data-id="${esc(s.id)}" data-maybe="${s.maybeRunning ? '1' : ''}" title="Opens a terminal window running claude --resume for this session${s.maybeRunning ? '. It was active since this boot and may still be open in a terminal: check first' : ''}">Resume</button>`}
       </div>
       <div class="meta">${esc(s.id)} · active ${ago(s.lastActivity)}${s.readAt ? ` · last read ${clock(s.readAt)}` : ''}${s.reply ? ` — Claude: “${esc(s.reply)}”` : ''}</div>
       <ul>${items || `<li class="meta">No updates yet${s.keys.length ? '' : ' — updates are sent once a prompt names a ticket or links a Slack thread'}.</li>`}</ul></div>`;
@@ -1245,6 +1245,13 @@ function renderSessions(list) {
     } catch (e) { toast(e.message); b.disabled = false; }
   });
   $('previewBody').querySelectorAll('.sess-resume').forEach((b) => b.onclick = async () => {
+    // Active since this boot without a monitor: it may still run in a terminal, so a second click confirms.
+    if (b.dataset.maybe && !b.dataset.sure) {
+      b.dataset.sure = '1';
+      b.textContent = 'May still be open: click again';
+      setTimeout(() => { delete b.dataset.sure; b.textContent = 'Resume'; }, 6000);
+      return;
+    }
     b.disabled = true;
     try {
       await api('/api/sessions/resume', { dir: outDir(), id: b.dataset.id });
