@@ -21,10 +21,27 @@ const ISSUE_KEY = /\b[A-Z][A-Z0-9]+-\d+\b/;
 const MAX_TITLE = 80;
 const MAX_STATE_KEYS = 3;
 
-/** Keys in the prompt with a local ticket folder that this session has not had a card for yet. */
+const PR_REF = /\/pull\/(\d+)\b|\b(?:PR|pull request)\s*#?(\d+)\b|(?:^|\s)#(\d{3,})\b/gi;
+
+/**
+ * Ticket keys of the PRs the prompt names (a PR link, "PR #3151", "#3151"), from the PR list
+ * `jirallm watch --prs` keeps in .prs.json, so a session started from a PR link follows its ticket.
+ */
+function prTicketKeys(prompt) {
+  const numbers = [...prompt.matchAll(PR_REF)].map((m) => m[1] ?? m[2] ?? m[3]);
+  if (!numbers.length) return [];
+  try {
+    const prs = JSON.parse(readFileSync(path.join(outputDir, '.prs.json'), 'utf8')).prs ?? {};
+    return numbers.map((n) => prs[n]?.key).filter((k) => typeof k === 'string' && ISSUE_KEY.test(k));
+  } catch {
+    return [];
+  }
+}
+
+/** Keys in the prompt (or of the PRs it names) with a local ticket folder that this session has not had a card for yet. */
 function newTicketKeys(prompt, sessionId) {
   if (!sessionId || !/^[\w-]+$/.test(sessionId)) return [];
-  const keys = [...new Set(prompt.match(new RegExp(ISSUE_KEY, 'g')) ?? [])].filter((k) =>
+  const keys = [...new Set([...(prompt.match(new RegExp(ISSUE_KEY, 'g')) ?? []), ...prTicketKeys(prompt)])].filter((k) =>
     existsSync(path.join(outputDir, k.toLowerCase()))
   );
   if (!keys.length) return [];
