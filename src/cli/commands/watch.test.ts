@@ -25,6 +25,19 @@ describe('describeChange', () => {
     );
   });
 
+  it('says what happened to comments, also when they sit in History next to status changes', () => {
+    const doc = (count: number, history: string, at = '05:34') =>
+      `---\nkey: "ZOD-9"\nupdatedAt: "2026-11-12T${at}:11+0100"\ncommentsUpdatedAt: "2026-11-12T${at}:11+0100"\ncommentCount: ${count}\n---\n\n# ZOD-9\n\n## History\n\n${history}\n`;
+    const status = '[STATUS CHANGE] Ann — 11/12/2026: To Do → In Progress';
+    const comment = (who: string, text: string) => `---\n[COMMENT] ${who} — 11/12/2026, 11:35:19 AM:\n${text}`;
+    // A new comment (the real ZOD-4180 e2e case logged "History changed").
+    expect(describeChange(doc(0, status), doc(1, `${status}\n${comment('Hung Duong Quang', 'hi')}`, '05:35'))).toBe('1 new comment (Hung Duong Quang)');
+    expect(describeChange(doc(1, comment('Ann', 'a')), doc(0, '', '05:36'))).toBe('1 comment deleted');
+    expect(describeChange(doc(1, comment('Ann', 'a')), doc(1, comment('Ann', 'b'), '05:40'))).toBe('comment edited');
+    // A status change in History is still named.
+    expect(describeChange(doc(0, ''), doc(1, `${status}\n${comment('Bo', 'x')}`, '05:35'))).toBe('1 new comment (Bo); History changed');
+  });
+
   it('marks added and removed fields with ∅', () => {
     expect(describeChange(task('To Do', 'a'), task('To Do', 'a').replace('status: "To Do"\n', 'status: "To Do"\nlabels: ["X"]\n'))).toBe(
       'labels: ∅ → ["X"]'

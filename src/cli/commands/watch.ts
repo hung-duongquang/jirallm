@@ -121,8 +121,29 @@ export function describeChange(previous: string | null, current: string): string
   };
   const s1 = sections(previous);
   const s2 = sections(current);
-  const changed = [...new Set([...s1.keys(), ...s2.keys()])].filter((k) => s1.get(k) !== s2.get(k)).map((k) => `${k} changed`);
-  return [...fields, ...changed].join('; ') || 'no visible change';
+  const comments = commentChange(before, after, current);
+  // Comments live in "Comments", or in "History" next to status changes: when only comments moved,
+  // say what happened to them instead of naming the section.
+  const statusLines = (text = '') => text.split('\n').filter((l) => l.startsWith('[STATUS CHANGE]') || l.startsWith('[FIELD CHANGE]')).join('\n');
+  const changed = [...new Set([...s1.keys(), ...s2.keys()])]
+    .filter((k) => s1.get(k) !== s2.get(k))
+    .filter((k) => !(comments && (k === 'Comments' || (k === 'History' && statusLines(s1.get(k)) === statusLines(s2.get(k))))))
+    .map((k) => `${k} changed`);
+  return [...fields, ...(comments ? [comments] : []), ...changed].join('; ') || 'no visible change';
+}
+
+/** "1 new comment (Ann)", "1 comment deleted" or "comment edited", from the export frontmatter; '' when comments did not move. */
+function commentChange(before: Record<string, string>, after: Record<string, string>, current: string): string {
+  const n1 = Number(before.commentCount ?? NaN);
+  const n2 = Number(after.commentCount ?? NaN);
+  if (Number.isFinite(n1) && Number.isFinite(n2) && n2 !== n1) {
+    if (n2 < n1) return `${n1 - n2} comment${n1 - n2 === 1 ? '' : 's'} deleted`;
+    const authors = [...current.matchAll(/^\[COMMENT\] (.+?) — /gm)].slice(-(n2 - n1)).map((m) => m[1]!);
+    const by = [...new Set(authors)].join(', ');
+    return `${n2 - n1} new comment${n2 - n1 === 1 ? '' : 's'}${by ? ` (${by})` : ''}`;
+  }
+  if (before.commentsUpdatedAt !== undefined && before.commentsUpdatedAt !== after.commentsUpdatedAt) return 'comment edited';
+  return '';
 }
 
 /**
