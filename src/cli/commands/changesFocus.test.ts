@@ -25,6 +25,18 @@ describe('concerns', () => {
   });
 });
 
+describe('a followed Slack thread', () => {
+  it('pushes its new replies even when the thread title names no ticket', () => {
+    log([['2026-11-12 10:31', ['- slack/c0asdakdk9t-1794453154441869: 1 new reply in "cái current phase nó empty"', '- ZOD-4001: Comments changed']]]);
+    // As runChanges passes them: upper-cased.
+    const report = changesReport(dir, false, 20, 's9', { keys: ['SLACK/C0ASDAKDK9T-1794453154441869'], pushOnly: true })!;
+    expect(report).toContain("Changes to this session's tickets (its Slack thread;");
+    expect(report).toContain('- slack/c0asdakdk9t-1794453154441869: 1 new reply');
+    expect(report).not.toContain('ZOD-4001');
+    expect(concerns('- slack/c0asdakdk9t-17944531544418690: x', ['SLACK/C0ASDAKDK9T-1794453154441869'])).toBe(false);
+  });
+});
+
 describe('changes focused on a session', () => {
   it('prints the session tickets in full and others as one line of names', () => {
     const report = changesReport(dir, true, 20, 's1', { keys: ['ZOD-4082'] })!;

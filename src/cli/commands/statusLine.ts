@@ -10,14 +10,20 @@ const STALE_MINUTES = 20;
 const SESSION_ID = /^[\w-]{1,100}$/;
 const hhmm = (ms: number) => new Date(ms).toLocaleTimeString('sv-SE').slice(0, 5);
 
-/** Tickets the session works on: the keys its prompts named (kept by the plugin's prompt hook). */
+/**
+ * What the session follows: the ticket keys its prompts named (`<id>.keys`) and the Slack threads
+ * they linked (`<id>.follow`, "slack/<channel>-<ts>"), both kept by the plugin's prompt hook.
+ */
 export function sessionKeys(session: string | undefined, dir = path.join(os.tmpdir(), 'jirallm-sessions')): string[] {
   if (!session || !SESSION_ID.test(session)) return [];
-  try {
-    return readFileSync(path.join(dir, `${session}.keys`), 'utf-8').split('\n').map((k) => k.trim()).filter(Boolean);
-  } catch {
-    return [];
-  }
+  const read = (file: string) => {
+    try {
+      return readFileSync(path.join(dir, file), 'utf-8').split('\n').map((k) => k.trim()).filter(Boolean);
+    } catch {
+      return [];
+    }
+  };
+  return [...read(`${session}.keys`), ...read(`${session}.follow`)];
 }
 
 /** "📥 #3 11:30 PR #12 → ✓ read 11:31" for the last delivery to the session, or ''. */

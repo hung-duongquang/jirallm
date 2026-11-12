@@ -11,6 +11,7 @@
 //    card (`jirallm state --notes`: Jira status, my PRs, worktree, own files, notes) is added, once
 //    per key per session, so ticket facts live with the ticket instead of in a memory index.
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { changesMessage, jirallm, outputDir, unseenChanges } from './changes.mjs';
@@ -70,6 +71,40 @@ try {
   // No or bad stdin: still report changes.
 }
 
+const SLACK_MESSAGE = /https:\/\/[\w-]+\.slack\.com\/archives\/([A-Z0-9]+)\/p(\d{16})[^\s<>)"'\]]*/gi;
+
+/**
+ * Slack threads linked in the prompt become things this session follows (`<id>.follow`), so the
+ * monitor pushes their new replies like changes to its tickets. `watch` only polls exported threads,
+ * so a thread with no export yet is exported in the background (the prompt does not wait for it).
+ * The name is the export folder: channel + thread start (thread_ts of a reply link, else its own ts).
+ */
+function followSlackThreads(prompt, sessionId) {
+  if (!sessionId || !/^[\w-]+$/.test(sessionId)) return;
+  const file = path.join(sessionsDir, `${sessionId}.follow`);
+  const followed = existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean) : [];
+  const added = [];
+  for (const m of prompt.matchAll(SLACK_MESSAGE)) {
+    const threadTs = /[?&]thread_ts=(\d+)\.(\d+)/.exec(m[0]);
+    const item = `slack/${m[1].toLowerCase()}-${threadTs ? threadTs[1] + threadTs[2] : m[2]}`;
+    if (followed.includes(item) || added.includes(item)) continue;
+    added.push(item);
+    if (!existsSync(path.join(outputDir, item))) {
+      const args = ['slack', m[0], '--output-dir', outputDir];
+      const opts = { detached: true, stdio: 'ignore', windowsHide: true };
+      const child =
+        process.platform === 'win32'
+          ? spawn(['jirallm', ...args].map((a) => (/[\s"&|<>^]/.test(a) ? `"${a}"` : a)).join(' '), { ...opts, shell: true })
+          : spawn('jirallm', args, opts);
+      child.on('error', () => {});
+      child.unref();
+    }
+  }
+  if (!added.length) return;
+  mkdirSync(sessionsDir, { recursive: true });
+  writeFileSync(file, [...followed, ...added].join('\n'));
+}
+
 /** Names the session in `jirallm ui` (Claude sessions): its Slack thread title, else its first prompt. */
 function saveUiTitle(sessionId, text) {
   const line = text.replace(/\s+/g, ' ').trim();
@@ -83,6 +118,12 @@ try {
   if (first) saveUiTitle(input.session_id, title || input.prompt);
 } catch {
   // A title is a bonus too.
+}
+
+try {
+  if (typeof input.prompt === 'string') followSlackThreads(input.prompt, input.session_id);
+} catch {
+  // Following is a bonus too.
 }
 
 let cards = '';

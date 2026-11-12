@@ -25,14 +25,23 @@ function markerOf(sessionId) {
   return path.join(outputDir, '.changes.seen');
 }
 
-/** Tickets this session works on: the keys its prompts named (written by the prompt hook). */
-export function sessionKeys(sessionId) {
-  const file = path.join(os.tmpdir(), 'jirallm-sessions', `${sessionId}.keys`);
+const lines = (file) => {
   try {
-    return sessionId && SESSION_ID.test(sessionId) && existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean) : [];
+    return existsSync(file) ? readFileSync(file, 'utf8').split('\n').map((l) => l.trim()).filter(Boolean) : [];
   } catch {
     return [];
   }
+};
+
+/**
+ * What this session follows, for change delivery: the ticket keys its prompts named (`<id>.keys`)
+ * and the Slack threads they linked (`<id>.follow`, as "slack/<channel>-<ts>", the export folder
+ * name that `watch` logs new replies under). Both written by the prompt hook.
+ */
+export function sessionKeys(sessionId) {
+  if (!sessionId || !SESSION_ID.test(sessionId)) return [];
+  const dir = path.join(os.tmpdir(), 'jirallm-sessions');
+  return [...lines(path.join(dir, `${sessionId}.keys`)), ...lines(path.join(dir, `${sessionId}.follow`))];
 }
 
 const newerThan = (file, marker) => !existsSync(marker) || statSync(file).mtimeMs > statSync(marker).mtimeMs;

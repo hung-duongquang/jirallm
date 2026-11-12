@@ -596,6 +596,15 @@ export type ChangeFocus = { keys: string[]; pushOnly?: boolean };
 const pushedMarkerPath = (outputDir: string, session: string) => `${seenMarkerPath(outputDir, session)}.pushed`;
 const readStamp = (file: string) => (existsSync(file) ? readFileSync(file, 'utf-8').trim() : '');
 
+/** "ZOD-1, 2 Slack threads": the session's tickets, and its followed Slack threads ("slack/<channel>-<ts>") counted. */
+function followedNames(keys: string[]): string {
+  const isThread = (k: string) => k.toLowerCase().startsWith('slack/');
+  const threads = keys.filter(isThread).length;
+  const names = keys.filter((k) => !isThread(k));
+  if (threads) names.push(threads === 1 ? 'its Slack thread' : `${threads} Slack threads`);
+  return names.join(', ');
+}
+
 /** True when a change line names one of the keys (a ticket, its PR "(KEY)", a Slack thread title). */
 export function concerns(line: string, keys: string[]): boolean {
   return keys.some((k) => new RegExp(`(^|[^A-Z0-9-])${k}(?![0-9])`, 'i').test(line));
@@ -644,7 +653,7 @@ function focusedReport(outputDir: string, session: string, focus: ChangeFocus): 
     markSeen(outputDir, last, session);
   }
   const out: string[] = [];
-  if (mine.size) out.push(`Changes to this session's tickets (${focus.keys.join(', ')}; re-exported to ${outputDir}):`, ...mine.values());
+  if (mine.size) out.push(`Changes to this session's tickets (${followedNames(focus.keys)}; re-exported to ${outputDir}):`, ...mine.values());
   if (others.size) {
     const names = [...others.keys()].map((n) => (n.startsWith('slack/') ? 'a Slack thread' : n.replace(/ \([^)]*\)$/, '')));
     const unique = [...new Set(names)];
