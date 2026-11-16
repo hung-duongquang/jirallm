@@ -36,7 +36,7 @@ It exists because every team that uses Jira + LLMs ends up writing the same brit
 npm install -g github:hung-duongquang/jirallm#release
 ```
 
-Setup guide for colleagues: <https://hung-duongquang.github.io/jirallm/?setup>
+Setup guide for colleagues: <https://hung-duongquang.github.io/jirallm/?setup>. Add `&jira=<Jira URL>&org=<name>&project=<KEY>` to fill in the answers to the `jirallm init` wizard for your team, e.g. `?setup&jira=https://acme.atlassian.net&org=acme&project=PROJ`.
 
 ### Updating
 

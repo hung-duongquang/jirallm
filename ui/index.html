@@ -192,6 +192,12 @@
   .setup li.done { color: var(--muted); }
   .setup code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
   .setup a { color: var(--accent); }
+  .setup ol ol, .setup ul { gap: 4px; margin: 6px 0 0; }
+  .setup table { border-collapse: collapse; margin-top: 8px; font-size: 13px; width: 100%; }
+  .setup th, .setup td { text-align: left; vertical-align: top; padding: 4px 8px; border-bottom: 1px solid var(--border); }
+  .setup th { color: var(--muted); font-weight: 600; }
+  .setup details { margin-top: 6px; }
+  .setup summary { cursor: pointer; }
   .cmd { display: flex; gap: 8px; align-items: center; margin-top: 6px; background: var(--code-bg);
     border: 1px solid var(--border); border-radius: 6px; padding: 6px 6px 6px 10px; }
   .cmd code { flex: 1; background: none; padding: 0; overflow-x: auto; white-space: nowrap; }
@@ -1107,21 +1113,50 @@ function code(cmd) {
 }
 function renderSetup(problem, offline) {
   $('previewHead').hidden = true;
-  const jira = params.get('jira');
+  // A team shares ?setup&jira=<url>&org=<name>&project=<KEY>, so the wizard answers below are filled in.
+  const jira = params.get('jira'), org = params.get('org'), project = params.get('project');
+  const answer = (value, otherwise) => (value ? `<code>${esc(value)}</code>` : otherwise);
   $('previewBody').innerHTML = `
     <div class="setup">
       <h2>Connect your computer</h2>
       ${problem ? `<p class="problem">${esc(problem)}</p>` : ''}
       <p>This page runs exports through a small helper on your own machine. Your Jira token is stored
-        in your OS keychain by the helper and is never sent to this website.</p>
+        in your OS keychain by the helper and is never sent to this website. Setting it up takes about 10 minutes.</p>
       <p class="hint">Want to check it first? <a href="https://github.com/hung-duongquang/jirallm#checking-it-before-you-install" target="_blank" rel="noopener">What it installs, which programs it starts and what it can write</a>,
         with the files to read and how to install a pinned commit.</p>
+      <p><b>Before you start</b>, open a terminal (on Windows: PowerShell or Windows Terminal) and check that both print a version:</p>
+      ${code('node --version')}${code('git --version')}
+      <p class="hint">Node.js must be 20 or newer: install the LTS version from <a href="https://nodejs.org" target="_blank" rel="noopener">nodejs.org</a>.
+        Git comes from <a href="https://git-scm.com/downloads" target="_blank" rel="noopener">git-scm.com</a> (npm uses it to download jirallm from GitHub).
+        After installing either, open a new terminal.</p>
       <ol>
-        <li class="${offline ? '' : 'done'}"><b>Install the helper</b> (once; needs Node.js 20+):${code(INSTALL_CMD)}
-          <span class="hint">To update later, run the same command again. <code>jirallm upgrade</code> does the same.</span></li>
-        <li><b>Add your Jira token.</b>
-          <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noopener">Create an API token</a>,
-          then run the wizard and enter ${jira ? `<code>${esc(jira)}</code>` : 'your Jira URL'}, your e-mail and the token:${code('jirallm init')}</li>
+        <li class="${offline ? '' : 'done'}"><b>Install the helper</b> (once):${code(INSTALL_CMD)}
+          <span class="hint">Takes a minute; warnings are normal. If <code>jirallm</code> is "not recognized" afterwards, open a new terminal.
+            To update later, run the same command again (<code>jirallm upgrade</code> does the same).</span></li>
+        <li><b>Create a Jira API token</b> (Atlassian shows it only once, so keep the page open until step 3 is done):
+          <ol>
+            <li>Open <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noopener">Atlassian → Security → API tokens</a>
+              and sign in with your work account.</li>
+            <li>Click <b>Create API token</b> (the plain one, not "with scopes").</li>
+            <li>Name it <code>jirallm</code>, pick the latest expiry date it offers, and click <b>Create</b>.</li>
+            <li>Click <b>Copy</b>. Lost it? Revoke it and create a new one; nothing else depends on it.</li>
+          </ol></li>
+        <li><b>Run the setup wizard</b> and answer its questions:${code('jirallm init')}
+          <table>
+            <tr><th>The wizard asks</th><th>Answer</th></tr>
+            <tr><td>Organization name</td><td>${answer(org, 'a short name of your choice, e.g. <code>acme</code>')}</td></tr>
+            <tr><td>Jira base URL</td><td>${answer(jira, 'the address you open Jira at, e.g. <code>https://acme.atlassian.net</code>')}</td></tr>
+            <tr><td>Jira account email</td><td>the e-mail you sign in to Jira with</td></tr>
+            <tr><td>Include subtasks / extract video frames / FPS / max frames</td><td>press Enter for the defaults</td></tr>
+            <tr><td>Jira API token</td><td>paste the token from step 2 (right-click or Ctrl+V; nothing is shown while you paste), then Enter</td></tr>
+            <tr><td>Project keys</td><td>${answer(project, 'the letters before the number in a ticket key, e.g. <code>PROJ</code> for PROJ-123')}</td></tr>
+            <tr><td>Default output directory</td><td><code>./jira-export</code>, or Enter to skip</td></tr>
+            <tr><td>Run <code>jirallm setup</code> now?</td><td>Yes: it installs ffmpeg, used to show screen recordings as frames</td></tr>
+          </table>
+          <span class="hint">Made a typo? Run <code>jirallm init</code> again. To replace only the token (expired, or pasted wrong):
+            <code>jirallm auth set --org ${esc(org || '<organization name>')}</code>.</span></li>
+        <li><b>Check it works:</b>${code('jirallm doctor')}
+          <span class="hint">Every line should start with ✔, and "Jira reachable" shows your name. A ✖ there means the URL, e-mail or token is wrong: see step 3's hint.</span></li>
         <li class="${offline ? '' : 'done'}"><b>Start the helper</b> and keep the terminal open:${code('jirallm ui')}</li>
         <li><b>Connect.</b> If the browser asks to allow access to devices on your local network, allow it.
           <div class="row" style="margin-top:8px">
@@ -1137,17 +1172,32 @@ function renderSetup(problem, offline) {
         Exports stay in your output folder. Tickets can hold patient or customer data, so check your organisation's rules
         before giving them to an AI assistant.
         <a href="https://github.com/hung-duongquang/jirallm#privacy-and-network-traffic" target="_blank" rel="noopener">Details</a></p>
-      <p class="hint">Optional, for PR stacks: install the <a href="https://cli.github.com" target="_blank" rel="noopener">GitHub CLI</a> and run <code>gh auth login</code>.
-        Safari blocks pages from reaching your own computer; use Chrome, Edge or Firefox.</p>
+      <p class="hint">Safari blocks pages from reaching your own computer; use Chrome, Edge or Firefox.</p>
 
       <h2>Use it with Claude Code</h2>
       <p>The jirallm plugin teaches Claude which jirallm command answers which question (ticket context,
-        Confluence pages, starting work, test reports) and asks before anything that writes to Jira.
-        It needs the helper from step 1 and the token from step 2.</p>
+        Confluence pages, Slack threads, starting work, test reports) and asks before anything that writes to Jira.
+        It needs steps 1 to 4 above, and Claude Code itself (<code>claude --version</code> prints a version).</p>
       <ol>
-        <li><b>Add the plugin</b> (once):${code(PLUGIN_MARKETPLACE_CMD)}${code(PLUGIN_INSTALL_CMD)}
+        <li><b>Add the plugin</b> (once, in a terminal, not inside Claude):${code(PLUGIN_MARKETPLACE_CMD)}${code(PLUGIN_INSTALL_CMD)}
           <span class="hint">Restart Claude Code afterwards. Update later with <code>claude plugin marketplace update jirallm</code>
             and <code>claude plugin update jirallm@jirallm</code>.</span></li>
+        <li><b>Optional: pull requests.</b> To let Claude follow your PRs' CI and reviews, install the
+          <a href="https://cli.github.com" target="_blank" rel="noopener">GitHub CLI</a> and sign in:${code('gh auth login')}
+          <span class="hint">Choose GitHub.com, HTTPS, and "Login with a web browser".</span></li>
+        <li><b>Optional: Slack.</b> To let Claude read Slack links and search discussions:${code('jirallm slack:auth')}
+          <details><summary class="hint">Where do I get the Slack token and cookie?</summary>
+            <ol>
+              <li>Open Slack in Chrome or Edge (<code>https://app.slack.com</code>), signed in to your workspace.</li>
+              <li>Press F12, open <b>Console</b> and run this; it prints a token starting with <code>xoxc-</code>:
+                ${code('Object.values(JSON.parse(localStorage.localConfig_v2).teams)[0].token')}
+                <span class="hint">If you are in several workspaces, run <code>Object.values(JSON.parse(localStorage.localConfig_v2).teams).map(t =&gt; t.name + ' ' + t.token)</code> and take your work one.</span></li>
+              <li>Paste it when <code>jirallm slack:auth</code> asks for the token.</li>
+              <li>For the cookie: in the same F12 window open <b>Application</b> → <b>Cookies</b> → <code>https://app.slack.com</code>,
+                click the cookie named <code>d</code> and copy its value (starts with <code>xoxd-</code>). Paste it when asked.</li>
+            </ol>
+            <span class="hint">Both are stored in your OS keychain. They act as you in Slack, so never share them; signing out of Slack in that browser makes them stop working (run <code>jirallm slack:auth</code> again then).</span>
+          </details></li>
         <li><b>Optional: keep tickets current.</b> In your project folder, export a ticket once
           (<code>jirallm ZOD-1234 --output-dir ./jira-export</code>), then let jirallm re-export changed tickets
           every 15 minutes:${code('jirallm watch --install 15')}
