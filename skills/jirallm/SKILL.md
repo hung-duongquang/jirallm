@@ -1,6 +1,6 @@
 ---
 name: jirallm
-description: Read and update Jira and Confluence, and read Slack and SharePoint, from the shell with jirallm. Use when a task mentions a Jira key (e.g. ZOD-1234), a sprint, a board column, or asks to assign, transition, comment or log work; when implementing a ticket, or reviewing or re-reviewing a pull request (also one named only by its number), checking it against the ticket and, if Slack is set up, the discussions where decisions not written in Jira were made; to read a pasted Slack message, SharePoint page or SharePoint Office document (slide deck, Word, Excel) link, or to change text in a PowerPoint deck on SharePoint, or find something on the company intranet; to find, read or write a Confluence page (spec, test report); to write up a ticket's business or technical context, documentation or a how-to-test for testers or the team; to test a ticket; before opening a pull request for a ticket branch; after a PR is raised, to follow its CI pipeline (failed checks and their logs) and code reviews (review threads, comments) until it is green and approved; or to check what changed in tickets or whether the local ticket context is current.
+description: Jira, Confluence, Slack and SharePoint from the shell with jirallm. Use when a task names a Jira key (e.g. ZOD-1234), a sprint or a board column, or asks to assign, transition, comment or log work; to implement, test or write up a ticket (context, how-to-test, a Confluence page); to review or re-review a pull request (also one named only by its number) against its ticket and the Slack discussions about it; before opening a PR for a ticket branch and after it, to follow its CI and code reviews until green and approved; to read a pasted Slack, Confluence or SharePoint link (pages, Office documents; change a slide deck) or search the intranet; or to check what changed in tickets.
 model: sonnet
 ---
 
@@ -17,6 +17,7 @@ The steps for each workflow live next to this file, so they only cost context wh
 - Where a ticket stands, and keeping per-ticket facts (`state`, `note`) → read `references/notes.md`
 - Testing a ticket and writing or publishing its test report → read `references/test.md`
 - Ticket, PR and Slack changes (`watch`, `changes`, the monitor), keeping jira-export lean (`prune`) → read `references/staying-current.md`
+- A Slack link, searching Slack for a ticket or PR (`slack:search`), text to paste in Slack (`slack:copy`) → read `references/slack.md`
 - SharePoint pages and Office documents, editing a PowerPoint deck, intranet search → read `references/sharepoint.md`
 
 ## Read (safe, no side effects)
@@ -31,10 +32,8 @@ The steps for each workflow live next to this file, so they only cost context wh
 | Exact field values the markdown lacks or renders wrong (custom fields, link metadata, IDs) | `jirallm fetch PROJ-1 --raw --fields <jira field ids>` (e.g. `issuelinks,customfield_10050`); avoid bare `--raw`, it returns every field |
 | One Confluence page by URL (e.g. a test report) | `jirallm page <url>` → `jira-export/confluence/<id>-<slug>/page.md` |
 | Find Confluence pages (plain words or CQL) | `jirallm page:search "<words>" [--space KEY] --format tsv`, then `jirallm page <url>` on a hit |
-| A Slack message link (`https://<ws>.slack.com/archives/<channel>/p<id>`) or image/file link (`…/files/<user>/<F…>/<name>`, resolved to the message that shares it), with its thread | `jirallm slack <url>` prints Markdown, plus a section with channel messages posted after the thread started (people often answer in the channel instead of the thread; they can be unrelated, `--no-channel` drops them); `--output-dir ./jira-export` also saves images and extracts frames from videos (`<file>-frames/`, read them to see a screen recording). `--title` prints one line (`<first line> · #channel`; the plugin hook names a session after the Slack link in its first prompt). No token → ask the user to run `jirallm slack:auth` |
+| A Slack message or file link, Slack discussions of a ticket or PR, text to paste in Slack | read `references/slack.md` first |
 | SharePoint pages, Office documents (read; change a deck), intranet search | read `references/sharepoint.md` first |
-| Slack discussions of a ticket or PR (decisions not written in Jira) | `jirallm slack:search "PROJ-1 OR PROJ-0 OR pull/123" --after <ticket created>`: one TSV row per thread with its permalink; open the relevant ones with `jirallm slack <url>` |
-| Text for the user to paste in Slack (it has no tables) | `jirallm slack:copy <file>` (or the user runs `! jirallm slack:copy` after copying a reply): tables become one bullet per row, markdown becomes Slack formatting, and the result goes on the clipboard as rich text |
 | Child pages of a Confluence page (find where a new page goes) | `jirallm page:children <id or url> --format tsv` |
 | List issues (compact) | `jirallm search --org <org> '<JQL>' --fields key,summary,status,assignee --format tsv --all` |
 | Active sprint, by status | JQL `project = PROJ AND sprint in openSprints() AND status = "To Do"` |

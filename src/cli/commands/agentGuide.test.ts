@@ -36,6 +36,18 @@ describe('agent-guide', () => {
     for (const heading of AGENT_GUIDE.match(/^## .+$/gm)!) expect(all, heading).toContain(heading);
     expect(files['references/sharepoint.md']).toContain('sharepoint:edit');
     expect(files['SKILL.md']).not.toContain('sharepoint:edit');
+    expect(files['references/slack.md']).toContain('slack:search');
+    expect(files['references/slack.md']).toContain('slack:copy');
+    expect(files['SKILL.md']).toContain('read `references/slack.md`');
+    expect(files['SKILL.md']).not.toContain('slack:copy <file>');
+    // The Slack-is-optional rule stays in the core: the workflows' Slack steps rely on it.
+    expect(files['SKILL.md']).toContain('## Slack (optional)');
+  });
+
+  it('keeps the always-loaded description short', () => {
+    const description = /^description: (.+)$/m.exec(AGENT_GUIDE)![1]!;
+    expect(description.length).toBeLessThan(800);
+    for (const trigger of ['Jira key', 'Confluence', 'Slack', 'SharePoint', 'pull request', 'CI']) expect(description).toContain(trigger);
   });
 
   it('refuses a guide section without a place in the skill', () => {

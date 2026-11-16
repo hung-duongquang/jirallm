@@ -7,7 +7,7 @@ import path from 'node:path';
  */
 export const AGENT_GUIDE = `---
 name: jirallm
-description: Read and update Jira and Confluence, and read Slack and SharePoint, from the shell with jirallm. Use when a task mentions a Jira key (e.g. ZOD-1234), a sprint, a board column, or asks to assign, transition, comment or log work; when implementing a ticket, or reviewing or re-reviewing a pull request (also one named only by its number), checking it against the ticket and, if Slack is set up, the discussions where decisions not written in Jira were made; to read a pasted Slack message, SharePoint page or SharePoint Office document (slide deck, Word, Excel) link, or to change text in a PowerPoint deck on SharePoint, or find something on the company intranet; to find, read or write a Confluence page (spec, test report); to write up a ticket's business or technical context, documentation or a how-to-test for testers or the team; to test a ticket; before opening a pull request for a ticket branch; after a PR is raised, to follow its CI pipeline (failed checks and their logs) and code reviews (review threads, comments) until it is green and approved; or to check what changed in tickets or whether the local ticket context is current.
+description: Jira, Confluence, Slack and SharePoint from the shell with jirallm. Use when a task names a Jira key (e.g. ZOD-1234), a sprint or a board column, or asks to assign, transition, comment or log work; to implement, test or write up a ticket (context, how-to-test, a Confluence page); to review or re-review a pull request (also one named only by its number) against its ticket and the Slack discussions about it; before opening a PR for a ticket branch and after it, to follow its CI and code reviews until green and approved; to read a pasted Slack, Confluence or SharePoint link (pages, Office documents; change a slide deck) or search the intranet; or to check what changed in tickets.
 model: sonnet
 ---
 
@@ -161,7 +161,26 @@ const SKILL_LAYOUT: Array<{ heading: string; file?: string; when?: string }> = [
   { heading: 'Staying current', file: 'staying-current.md', when: 'Ticket, PR and Slack changes (`watch`, `changes`, the monitor), keeping jira-export lean (`prune`)' },
   { heading: 'Gotchas' },
 ];
-const SHAREPOINT_ROW = /^\| (A SharePoint|Change text in a PowerPoint|Find SharePoint)/;
+/**
+ * Read-table rows that are long and only needed for one kind of link: they move to their own
+ * reference file, and the core table keeps one pointer row in their place.
+ */
+const OFFLOADED_ROWS: Array<{ rows: RegExp; file: string; heading: string; pointer: string; when: string }> = [
+  {
+    rows: /^\| (A Slack message link|Slack discussions of a ticket|Text for the user to paste in Slack)/,
+    file: 'slack.md',
+    heading: 'Slack',
+    pointer: '| A Slack message or file link, Slack discussions of a ticket or PR, text to paste in Slack | read `references/slack.md` first |',
+    when: 'A Slack link, searching Slack for a ticket or PR (`slack:search`), text to paste in Slack (`slack:copy`)',
+  },
+  {
+    rows: /^\| (A SharePoint|Change text in a PowerPoint|Find SharePoint)/,
+    file: 'sharepoint.md',
+    heading: 'SharePoint',
+    pointer: '| SharePoint pages, Office documents (read; change a deck), intranet search | read `references/sharepoint.md` first |',
+    when: 'SharePoint pages and Office documents, editing a PowerPoint deck, intranet search',
+  },
+];
 
 /** The plugin skill as files relative to skills/jirallm/: SKILL.md plus references/*.md. */
 export function pluginSkillFiles(guide = AGENT_GUIDE): Record<string, string> {
@@ -180,20 +199,23 @@ export function pluginSkillFiles(guide = AGENT_GUIDE): Record<string, string> {
     if (place.when) index.push(`- ${place.when} → read \`references/${place.file}\``);
     refs.set(place.file, [...(refs.get(place.file) ?? []), chunk]);
   }
-  // The SharePoint rows are long and rarely needed: one pointer row in the core table instead.
-  const spRows: string[] = [];
+  const moved = new Map<(typeof OFFLOADED_ROWS)[number], string[]>();
   const coreText = core
     .join('')
     .split('\n')
     .flatMap((line) => {
-      if (!SHAREPOINT_ROW.test(line)) return [line];
-      spRows.push(line);
-      return spRows.length === 1 ? ['| SharePoint pages, Office documents (read; change a deck), intranet search | read `references/sharepoint.md` first |'] : [];
+      const offload = OFFLOADED_ROWS.find((o) => o.rows.test(line));
+      if (!offload) return [line];
+      const rows = moved.get(offload) ?? [];
+      moved.set(offload, [...rows, line]);
+      return rows.length === 0 ? [offload.pointer] : [];
     })
     .join('\n');
-  if (spRows.length) {
-    index.push('- SharePoint pages and Office documents, editing a PowerPoint deck, intranet search → read `references/sharepoint.md`');
-    refs.set('sharepoint.md', ['## SharePoint\n\n| Need | Command |\n|---|---|\n', `${spRows.join('\n')}\n`]);
+  for (const offload of OFFLOADED_ROWS) {
+    const rows = moved.get(offload);
+    if (!rows) continue;
+    index.push(`- ${offload.when} → read \`references/${offload.file}\``);
+    refs.set(offload.file, [`## ${offload.heading}\n\n| Need | Command |\n|---|---|\n`, `${rows.join('\n')}\n`]);
   }
   const workflows = `## Workflows: read the file before starting that kind of task\n\nThe steps for each workflow live next to this file, so they only cost context when needed:\n${index.join('\n')}\n\n`;
   const files: Record<string, string> = { 'SKILL.md': `${head}${workflows}${coreText}` };
