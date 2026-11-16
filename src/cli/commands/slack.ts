@@ -1,3 +1,6 @@
+import { existsSync, readFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { intro, outro, password, isCancel, cancel } from '@clack/prompts';
 import { removeSecret, setSecret } from '../../lib/credentials.js';
 import {
@@ -12,12 +15,15 @@ import {
   formatTs,
   mentionedUsers,
   parseSince,
+  refreshSlackExport,
   renderThread,
+  type LoadedThread,
   searchHits,
   slackSearchQueries,
   threadTitle,
 } from '../../lib/slack.js';
 import { printJson } from '../jsonOutput.js';
+import { logChanges } from './watch.js';
 
 export type SlackOptions = {
   outputDir?: string;
@@ -55,15 +61,66 @@ export async function runSlack(url: string, opts: SlackOptions): Promise<void> {
     console.log(thread.path);
     return;
   }
-  const { link, url: messageUrl, channelName, messages, channelMessages, names } = await loadSlackThread(url, undefined, {
-    channel: opts.channel,
-  });
+  const loaded = await loadSlackThread(url, undefined, { channel: opts.channel });
+  const { link, url: messageUrl, channelName, messages, channelMessages, names } = loaded;
   if (opts.json) {
     printJson({ link, channelName, users: Object.fromEntries(names), messages, channelMessages });
-    return;
+  } else {
+    const since = opts.since ? parseSince(opts.since) : undefined;
+    process.stdout.write(renderThread({ url: messageUrl, channelName, messages, channelMessages, linkedTs: link.ts, names, since }));
   }
-  const since = opts.since ? parseSince(opts.since) : undefined;
-  process.stdout.write(renderThread({ url: messageUrl, channelName, messages, channelMessages, linkedTs: link.ts, names, since }));
+  await refreshAfterRead(loaded, opts.channel);
+}
+
+const SESSION_ID = /^[\w-]{1,100}$/;
+
+/**
+ * The workspace's export folder: the project of this Claude Code session (its handshake in
+ * jirallm-sessions holds the project dir, also when Claude works in a worktree elsewhere), else the
+ * nearest `jira-export` above the current directory.
+ */
+export function workspaceOutputDir(
+  session = process.env.CLAUDE_CODE_SESSION_ID,
+  cwd = process.cwd(),
+  sessionsDir = path.join(os.tmpdir(), 'jirallm-sessions')
+): string | undefined {
+  if (session && SESSION_ID.test(session)) {
+    try {
+      const project = readFileSync(path.join(sessionsDir, `${session}.start`), 'utf8').split('\n')[0]!.trim();
+      if (project && existsSync(path.join(project, 'jira-export'))) return path.join(project, 'jira-export');
+    } catch {
+      // No handshake: look around the current directory.
+    }
+  }
+  for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
+    if (existsSync(path.join(dir, 'jira-export'))) return path.join(dir, 'jira-export');
+    if (path.dirname(dir) === dir) return undefined;
+  }
+}
+
+/**
+ * After reading a thread that is exported (so `watch` follows it) and got new replies: brings the
+ * export up to date and logs the change as `watch` would, so other sessions following the thread still
+ * get it, but marks it read for the session that read it (CLAUDE_CODE_SESSION_ID): its monitor does
+ * not hand it the replies it just read. A thread that was never exported is left alone.
+ */
+export async function refreshAfterRead(
+  loaded: LoadedThread & { client: SlackClient },
+  channel: boolean | undefined,
+  outputDir = workspaceOutputDir(),
+  session = process.env.CLAUDE_CODE_SESSION_ID
+): Promise<void> {
+  if (!outputDir) return;
+  try {
+    const exported = await refreshSlackExport(loaded, outputDir, channel);
+    if (!exported) return;
+    const n = exported.newReplies;
+    const line = `slack/${exported.dirName}: ${n} new repl${n === 1 ? 'y' : 'ies'} in "${exported.title}"`;
+    logChanges(outputDir, [line], session && SESSION_ID.test(session) ? session : undefined);
+    console.error(`# Export updated (${exported.path}): these replies will not come back to this session as a change.`);
+  } catch (err) {
+    console.error(`# Export not updated: ${String(err instanceof Error ? err.message : err).split('\n')[0]}`);
+  }
 }
 
 export type SlackSearchOptions = {

@@ -527,19 +527,50 @@ async function videoFrames(videoPath: string, framesDir: string): Promise<number
   return existing();
 }
 
+/** Folder of a thread below `<outputDir>/slack/`: "<channel>-<thread ts without the dot>". */
+export function slackThreadDirName(link: SlackLink, messages: SlackMessage[]): string {
+  return `${link.channel.toLowerCase()}-${(messages[0]!.thread_ts ?? messages[0]!.ts).replace('.', '')}`;
+}
+
+/**
+ * Brings an existing export of a thread just read up to date, so `watch` does not report the
+ * replies the reader has already seen as new. A thread that was never exported is left alone; one
+ * read without its channel messages is not written (the export would lose them). Returns the
+ * export's path when it was refreshed.
+ */
+export async function refreshSlackExport(
+  loaded: LoadedThread & { client: SlackClient },
+  outputDir: string,
+  channel: boolean | undefined
+): Promise<ExportedSlackThread | undefined> {
+  if (channel === false) return undefined;
+  const file = join(outputDir, 'slack', slackThreadDirName(loaded.link, loaded.messages), 'thread.md');
+  if (!existsSync(file)) return undefined;
+  const prev = threadFrontmatter(readFileSync(file, 'utf8'));
+  if (prev.lastTs && Number(loaded.messages.at(-1)!.ts) <= Number(prev.lastTs)) return undefined;
+  return exportSlackThread(loaded.url, { outputDir, loaded });
+}
+
 /**
  * Writes `<outputDir>/slack/<channel>-<thread ts>/thread.md` and downloads the thread's files
  * next to it (unless `files` is false). Exporting the same thread again overwrites it.
  */
 export async function exportSlackThread(
   fileOrMessageUrl: string,
-  opts: { outputDir: string; files?: boolean; client?: SlackClient; channel?: boolean; frames?: boolean }
+  opts: {
+    outputDir: string;
+    files?: boolean;
+    client?: SlackClient;
+    channel?: boolean;
+    frames?: boolean;
+    /** The thread as already fetched (`jirallm slack <url>` printing it), so it is not fetched twice. */
+    loaded?: LoadedThread & { client: SlackClient };
+  }
 ): Promise<ExportedSlackThread> {
   // Frontmatter and Source keep the message link, so watch can re-read the thread.
-  const { link, url, channelName, messages, channelMessages, names, client } = await loadSlackThread(fileOrMessageUrl, opts.client, {
-    channel: opts.channel,
-  });
-  const dirName = `${link.channel.toLowerCase()}-${(messages[0].thread_ts ?? messages[0].ts).replace('.', '')}`;
+  const { link, url, channelName, messages, channelMessages, names, client } =
+    opts.loaded ?? (await loadSlackThread(fileOrMessageUrl, opts.client, { channel: opts.channel }));
+  const dirName = slackThreadDirName(link, messages);
   const dir = join(opts.outputDir, 'slack', dirName);
   mkdirSync(dir, { recursive: true });
 

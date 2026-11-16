@@ -1675,6 +1675,9 @@ posted after the thread started (until 12 h after its last reply, at most 15) fo
 an "In the channel, outside the thread" section; --no-channel leaves them out.
 With --output-dir, images are embedded and videos get up to 10 frames (JPEG) in
 <file>-frames/ next to them, so an agent can see a screen recording.
+Reading a thread that is already exported (watch follows it) also updates that export and
+logs its new replies for other sessions; the Claude Code session that read them
+(CLAUDE_CODE_SESSION_ID) is not handed them again as a change.
 
 Examples:
   $ jirallm slack https://acme.slack.com/archives/C0123ABCD/p1793370497363139

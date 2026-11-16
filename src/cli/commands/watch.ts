@@ -407,6 +407,35 @@ export function changeEntries(md: string): { stamp: string; lines: string[] }[] 
   });
 }
 
+/** Lines a session already read itself (`<session>.read`: "<stamp>\t<line>"), so they are not handed to it again. */
+const readByPath = (outputDir: string, session: string) => `${seenMarkerPath(outputDir, session)}.read`;
+
+function readBySession(outputDir: string, session: string | undefined): Set<string> {
+  if (!session) return new Set();
+  try {
+    return new Set(readFileSync(readByPath(outputDir, session), 'utf-8').split(/\r?\n/).filter(Boolean));
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * Appends one CHANGES.md entry as `watch` does, for a change found outside it (`jirallm slack <url>`
+ * refreshing an export), so every other session following the item still hears about it. With
+ * `readBy`, that session read the change itself: it is not handed to it again.
+ */
+export function logChanges(outputDir: string, lines: string[], readBy?: string, now = new Date()): string {
+  const stamp = now.toLocaleString('sv-SE').slice(0, 16);
+  mkdirSync(outputDir, { recursive: true });
+  appendFileSync(path.join(outputDir, CHANGES_FILE), `\n## ${stamp}\n\n${lines.map((l) => `- ${l}`).join('\n')}\n`);
+  if (readBy) {
+    const file = readByPath(outputDir, readBy);
+    mkdirSync(path.dirname(file), { recursive: true });
+    appendFileSync(file, lines.map((l) => `${stamp}\t- ${l}\n`).join(''));
+  }
+  return stamp;
+}
+
 /**
  * Prints the logged changes, newest last, capped at `--max` lines. With `--unseen` only entries
  * after the last `--unseen` call are printed (nothing at all when there are none), so a
@@ -555,11 +584,13 @@ export function pendingCounts(outputDir: string, session: string | undefined, ke
   if (!existsSync(file)) return { waiting: 0, others: 0 };
   const seen = seenStamp(outputDir, session);
   const pushed = session ? readStamp(pushedMarkerPath(outputDir, session)) : '';
+  const read = readBySession(outputDir, session);
   const waiting = new Set<string>();
   const others = new Set<string>();
   for (const e of changeEntries(readFileSync(file, 'utf-8'))) {
     if (e.stamp <= seen) continue;
     for (const l of e.lines) {
+      if (read.has(`${e.stamp}\t${l}`)) continue;
       const item = l.slice(2).split(':')[0]!;
       if (keys.length && concerns(l, keys)) {
         if (e.stamp > pushed) waiting.add(item);
@@ -657,10 +688,13 @@ function focusedReport(outputDir: string, session: string, focus: ChangeFocus): 
   if (entries.length === 0) return null;
   const last = entries[entries.length - 1]!.stamp;
 
+  const read = readBySession(outputDir, session);
   const mine = new Map<string, string>();
   const others = new Map<string, true>();
   for (const e of entries) {
     for (const l of e.lines) {
+      // The session read this change itself (`jirallm slack <url>` in it): not handed to it again.
+      if (read.has(`${e.stamp}\t${l}`)) continue;
       const item = l.slice(2).split(':')[0]!;
       if (concerns(l, focus.keys)) {
         // Already pushed by the monitor: the prompt does not repeat it.
