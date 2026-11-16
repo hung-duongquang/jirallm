@@ -38,11 +38,29 @@ function prTicketKeys(prompt) {
   }
 }
 
-/** Keys in the prompt (or of the PRs it names) with a local ticket folder that this session has not had a card for yet. */
+/** Lower-case project prefixes that have exported ticket folders ("zod" for jira-export/zod-1234). */
+function exportedProjects() {
+  try {
+    return new Set(readdirSync(outputDir).map((f) => /^([a-z][a-z0-9]*)-\d+$/.exec(f)?.[1]).filter(Boolean));
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * Records the keys in the prompt (or of the PRs it names) as this session's tickets, and returns those
+ * not recorded before that have a local ticket folder (their state card is shown). A key is followed
+ * even before its folder exists: `/jirallm:implement ZOD-1` names a ticket the command exports only
+ * after this hook ran, and a session that followed nothing missed every change to it (CI, reviews).
+ * Without a folder a key counts only for a project with exported tickets, so "UTF-8" or "SHA-256"
+ * in a prompt is not taken for a ticket.
+ */
 function newTicketKeys(prompt, sessionId) {
   if (!sessionId || !/^[\w-]+$/.test(sessionId)) return [];
-  const keys = [...new Set([...(prompt.match(new RegExp(ISSUE_KEY, 'g')) ?? []), ...prTicketKeys(prompt)])].filter((k) =>
-    existsSync(path.join(outputDir, k.toLowerCase()))
+  const projects = exportedProjects();
+  const hasFolder = (k) => existsSync(path.join(outputDir, k.toLowerCase()));
+  const keys = [...new Set([...(prompt.match(new RegExp(ISSUE_KEY, 'g')) ?? []), ...prTicketKeys(prompt)])].filter(
+    (k) => hasFolder(k) || projects.has(k.split('-')[0].toLowerCase())
   );
   if (!keys.length) return [];
   mkdirSync(sessionsDir, { recursive: true });
@@ -50,7 +68,7 @@ function newTicketKeys(prompt, sessionId) {
   const seen = existsSync(marker) ? readFileSync(marker, 'utf8').split('\n').filter(Boolean) : [];
   const fresh = keys.filter((k) => !seen.includes(k)).slice(0, MAX_STATE_KEYS);
   if (fresh.length) writeFileSync(marker, [...seen, ...fresh].join('\n'));
-  return fresh;
+  return fresh.filter(hasFolder);
 }
 
 /** True only for the first prompt of this session (a marker file per session id; old ones are cleared). */
