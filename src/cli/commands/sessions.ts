@@ -1,4 +1,4 @@
-import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { isMarkedOpen, isRunning } from './resume.js';
@@ -86,6 +86,28 @@ export function firstPrompt(transcript: string, maxBytes = 256 * 1024): string {
     }
   }
   return '';
+}
+
+/**
+ * Removes everything jirallm keeps about a session, so it leaves the sessions view: its handshake,
+ * keys, title, followed links, reopen mark and monitor pid (sessionsDir) and its delivery log,
+ * receipts and seen markers (outputDir/.changes.seen.d). Claude Code's own transcript stays, so
+ * `claude --resume <id>` still works; resuming it starts the records afresh. A running session is
+ * refused: its hooks would write the records back at once. Returns the number of files removed.
+ */
+export function removeSession(id: string, outputDir: string, sessionsDir = path.join(os.tmpdir(), 'jirallm-sessions')): number {
+  if (!/^[0-9a-f-]{8,}$/i.test(id)) throw new Error(`Not a session id: ${id}`);
+  if (isRunning(id, sessionsDir)) throw new Error('This session is running: end it (/exit) before deleting it');
+  let removed = 0;
+  for (const dir of [sessionsDir, path.join(outputDir, SESSION_DIR)]) {
+    if (!existsSync(dir)) continue;
+    for (const f of readdirSync(dir)) {
+      if (f !== id && !f.startsWith(`${id}.`)) continue;
+      rmSync(path.join(dir, f), { force: true });
+      removed++;
+    }
+  }
+  return removed;
 }
 
 /**

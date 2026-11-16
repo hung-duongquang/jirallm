@@ -1225,6 +1225,7 @@ function renderSessions(list) {
         <button class="sess-reopen" data-id="${esc(s.id)}" data-reopen="${s.reopen ? '' : '1'}" title="${s.reopen
           ? 'After a reboot, opening the workspace in VS Code reopens this session in a terminal (jirallm resume). Click to stop that.'
           : 'Not reopened after a reboot (you ended it, or it was dropped). Click to reopen it after the next reboot.'}">${s.reopen ? '↻ reopens after reboot' : '↻ off'}</button>
+        ${s.running ? '' : `<button class="sess-delete" data-id="${esc(s.id)}" title="Remove this session from the list for good (jirallm's records of it). Claude Code keeps its transcript, so claude --resume ${esc(s.id.slice(0, 8))}… still works">🗑 Delete</button>`}
         ${s.running ? '' : `<button class="primary sess-resume" data-id="${esc(s.id)}" data-maybe="${s.maybeRunning ? '1' : ''}" title="Opens a VS Code terminal (else a terminal window) running claude --resume for this session${s.maybeRunning ? '. It was active since this boot and may still be open in a terminal: check first' : ''}">Resume</button>`}
       </div>
       <div class="meta">${esc(s.id)} · active ${ago(s.lastActivity)}${s.readAt ? ` · last read ${clock(s.readAt)}` : ''}${s.reply ? ` — Claude: “${esc(s.reply)}”` : ''}</div>
@@ -1244,8 +1245,23 @@ function renderSessions(list) {
       await refreshSessions();
     } catch (e) { toast(e.message); b.disabled = false; }
   });
+  $('previewBody').querySelectorAll('.sess-delete').forEach((b) => b.onclick = async () => {
+    if (!b.dataset.sure) {
+      b.dataset.sure = '1';
+      b.textContent = 'Delete? click again';
+      setTimeout(() => { delete b.dataset.sure; b.textContent = '🗑 Delete'; }, 6000);
+      return;
+    }
+    b.disabled = true;
+    try {
+      const r = await api('/api/sessions/delete', { dir: outDir(), id: b.dataset.id });
+      toast(r.warning || 'Session removed from the list');
+      lastSessionsJson = '';
+      await refreshSessions();
+    } catch (e) { toast(e.message); b.disabled = false; }
+  });
   const all = $('resumeAll');
-  if (all) all.onclick = async () => {
+  if (all && !all.disabled) all.onclick = async () => {
     if (all.dataset.maybe && !all.dataset.sure) {
       all.dataset.sure = '1';
       const label = all.textContent;
@@ -1276,11 +1292,20 @@ function renderSessions(list) {
     setTimeout(() => { b.disabled = false; refreshSessions(); }, 5000);
   });
 }
-/** "Resume all (3)": the sessions marked to reopen that are not running. Those active since this boot may still be open in a terminal, so with any of them a second click confirms. */
+/**
+ * "Resume all (3)": the sessions marked to reopen that are not running. Those active since this boot may still be open in a terminal, so with any of them a second click confirms.
+ * With none due it stays visible but disabled, saying why (all marked ones run, the rest are ↻ off), instead of vanishing when a toggle is switched off.
+ */
 function resumeAllButton(list) {
+  if (!list.length) return '';
   const due = list.filter((s) => s.reopen && !s.running);
   const maybe = due.filter((s) => s.maybeRunning).length;
-  if (!due.length) return '';
+  if (!due.length) {
+    const runningMarked = list.filter((s) => s.reopen && s.running).length;
+    const off = list.filter((s) => !s.reopen && !s.running).length;
+    const why = [runningMarked && `${runningMarked} marked to reopen ${runningMarked === 1 ? 'is' : 'are'} already running`, off && `${off} ${off === 1 ? 'is' : 'are'} ↻ off (switch one on, or use its own Resume)`].filter(Boolean).join('; ');
+    return `<button class="primary" id="resumeAll" disabled title="Nothing to resume: ${esc(why || 'no session is marked to reopen')}">Resume all (0)</button>`;
+  }
   return `<button class="primary" id="resumeAll" data-maybe="${maybe ? '1' : ''}" title="Opens a VS Code terminal (else a terminal window) for each session marked to reopen that is not running${maybe ? `. ${maybe} of them were active since this boot and may still be open in a terminal: check first` : ''}">Resume all (${due.length})</button>`;
 }
 async function refreshSessions() {

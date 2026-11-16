@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { claudeSessions } from './sessions.js';
+import { claudeSessions, removeSession } from './sessions.js';
 import { changesReport, tagDelivery } from './watch.js';
 
 describe('claudeSessions', () => {
@@ -56,5 +56,37 @@ describe('claudeSessions', () => {
     const old = new Date('2026-01-01T00:00:00Z');
     utimesSync(log, old, old);
     expect(claudeSessions(dir, 7, dir)).toEqual([]);
+  });
+});
+
+describe('removeSession', () => {
+  const id = '70ab4bf2-f36a-44e8-aa11-497a0c125fc3';
+  const other = '22fe6fe9-0000-4000-8000-000000000000';
+  const setup = () => {
+    const dir = path.join(mkdtempSync(path.join(tmpdir(), 'sessions-')), 'jira-export');
+    const seen = path.join(dir, '.changes.seen.d');
+    mkdirSync(seen, { recursive: true });
+    const tmp = mkdtempSync(path.join(tmpdir(), 'sessions-tmp-'));
+    for (const s of [id, other]) {
+      for (const ext of ['', '.start', '.keys', '.title', '.follow', '.open']) writeFileSync(path.join(tmp, s + ext), 'x');
+      for (const ext of ['', '.log', '.acked', '.pushed', '.reply']) writeFileSync(path.join(seen, s + ext), 'x');
+    }
+    return { dir, seen, tmp };
+  };
+
+  it('removes every jirallm record of that session and nothing of another', () => {
+    const { dir, seen, tmp } = setup();
+    expect(removeSession(id, dir, tmp)).toBe(11);
+    expect([...readdirSync(tmp), ...readdirSync(seen)].filter((f) => f.startsWith(id))).toEqual([]);
+    expect(readdirSync(tmp).filter((f) => f.startsWith(other))).toHaveLength(6);
+    expect(readdirSync(seen).filter((f) => f.startsWith(other))).toHaveLength(5);
+  });
+
+  it('refuses a running session and anything that is not a session id', () => {
+    const { dir, tmp } = setup();
+    writeFileSync(path.join(tmp, id + '.monitor'), String(process.pid));
+    expect(() => removeSession(id, dir, tmp)).toThrow(/running/);
+    expect(existsSync(path.join(tmp, id + '.start'))).toBe(true);
+    expect(() => removeSession('..', dir, tmp)).toThrow(/Not a session id/);
   });
 });

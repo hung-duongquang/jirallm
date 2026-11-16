@@ -491,6 +491,17 @@ async function handle(req, res) {
         sendJson(res, 200, { ok: true, ...(tasks.error && { warning: tasks.error }) });
         return;
       }
+      case 'POST /api/sessions/delete': {
+        // Drops a session from this view for good: jirallm's records of it, not Claude Code's transcript.
+        const body = await readJsonBody(req);
+        const outputDir = resolveOutputDir(body.dir);
+        const session = knownSession(outputDir, body.id);
+        if (session.running) throw new HttpError(409, 'This session is running: end it (/exit) before deleting it');
+        const removed = lib.removeSession(session.id, outputDir);
+        const tasks = lib.refreshVsCodeTasks(dirname(outputDir));
+        sendJson(res, 200, { ok: true, removed, ...(tasks.error && { warning: tasks.error }) });
+        return;
+      }
       case 'POST /api/sessions/resume-all': {
         // Every session marked to reopen that is not running, oldest first, spaced out so VS Code takes the
         // links in order. Those active since this boot (they may still be open) only with includeMaybe.
