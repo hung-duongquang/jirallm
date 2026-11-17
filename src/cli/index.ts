@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { realpathSync } from 'node:fs';
 import { Command, InvalidArgumentError, Option } from 'commander';
-import { checkForUpdates } from './updateCheck.js';
+import { checkForUpdates, updateNotice } from './updateCheck.js';
 import { JiraExporter } from '../lib/exporter.js';
 import { listOrgs, loadProfile } from '../lib/config.js';
 import { resolveOrgInteractive } from './resolveOrg.js';
@@ -721,6 +721,15 @@ Examples:
   $ jirallm ui --open --repo acme/app --output-dir ./context
 `
   );
+
+program
+  .command('update-notice', { hidden: true })
+  .description("For the Claude Code plugin's session start: this version, then a line naming an update or a plugin/CLI mismatch when there is one")
+  .option('--plugin <version>', "The plugin's version")
+  .action((opts: { plugin?: string }) => {
+    const notice = updateNotice(pkg.version, opts.plugin);
+    console.log(notice ? `${pkg.version}\n${notice}` : pkg.version);
+  });
 
 program
   .command('upgrade')

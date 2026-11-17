@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fetchLatestVersion, isNewer, RELEASE_PACKAGE_JSON_URL, updateCheckDisabled } from './updateCheck.js';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fetchLatestVersion, isNewer, RELEASE_PACKAGE_JSON_URL, updateCheckDisabled, updateNotice, writeState } from './updateCheck.js';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -46,5 +49,20 @@ describe('fetchLatestVersion', () => {
   it('throws on a non-OK response', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('nope', { status: 404, statusText: 'Not Found' }));
     await expect(fetchLatestVersion()).rejects.toThrow(/404/);
+  });
+});
+
+describe('updateNotice', () => {
+  const file = () => path.join(mkdtempSync(path.join(tmpdir(), 'jl-notice-')), 'update-check.json');
+  const noRefresh = () => {};
+
+  it('names a newer release once a day, and a plugin/CLI mismatch', () => {
+    const f = file();
+    writeState({ lastCheck: 1, latest: '0.41.0' }, f);
+    expect(updateNotice('0.40.5', '0.40.5', 1000, f, noRefresh)).toBe('⬆ jirallm 0.41.0 is available (you have 0.40.5): run `jirallm upgrade` in a terminal, then restart Claude Code');
+    expect(updateNotice('0.40.5', '0.40.5', 2000, f, noRefresh)).toBe('');
+    expect(updateNotice('0.40.5', '0.40.4', 3000, f, noRefresh)).toContain('the jirallm plugin (0.40.4) and CLI (0.40.5) differ');
+    expect(updateNotice('0.40.5', '0.40.5', 1000 + 25 * 3600 * 1000, f, noRefresh)).toContain('0.41.0 is available');
+    expect(updateNotice('0.41.0', '0.41.0', 1000, f, noRefresh)).toBe('');
   });
 });

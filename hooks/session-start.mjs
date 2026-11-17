@@ -11,6 +11,7 @@
 import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { changesMessage, jirallm, markOpen, outputDir, refreshResumeTasks, unseenChanges } from './changes.mjs';
 
 const sessionsDir = path.join(os.tmpdir(), 'jirallm-sessions');
@@ -75,7 +76,23 @@ function restoreSessionKeys() {
   }
 }
 
-if (!jirallm(['--version'], 15000)) {
+/** This plugin's version (its .claude-plugin/plugin.json next to hooks/). */
+function pluginVersion() {
+  try {
+    const root = process.env.CLAUDE_PLUGIN_ROOT || path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+    return JSON.parse(readFileSync(path.join(root, '.claude-plugin', 'plugin.json'), 'utf8')).version ?? '';
+  } catch {
+    return '';
+  }
+}
+
+// One CLI start answers both "is it installed" and "is there an update" (a CLI older than
+// `update-notice` fails it and is asked for its version only).
+const plugin = pluginVersion();
+const versionOut = jirallm(['update-notice', ...(plugin ? ['--plugin', plugin] : [])], 15000) || jirallm(['--version'], 15000);
+const updateLine = versionOut.split('\n').slice(1).join(' ').trim();
+
+if (!versionOut) {
   console.log(
     'jirallm plugin: the jirallm CLI is not installed. Ask the user to run ' +
       '`npm install -g github:hung-duongquang/jirallm#release` and then `jirallm init` (their own Jira API token).'
@@ -120,15 +137,18 @@ if (!jirallm(['--version'], 15000)) {
       );
     }
   }
-  const message = [changes && changesMessage(changes), keys.length && `🗂 jirallm: state of ${keys.join(', ')} re-added after compaction`]
+  const message = [updateLine, changes && changesMessage(changes), keys.length && `🗂 jirallm: state of ${keys.join(', ')} re-added after compaction`]
     .filter(Boolean)
     .join(' · ');
-  if (parts.length) {
+  if (parts.length || message) {
     process.stdout.write(
       JSON.stringify({
         ...(message && { systemMessage: message }),
-        hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: parts.join('\n\n') },
+        ...(parts.length && { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: parts.join('\n\n') } }),
       })
     );
   }
+} else if (updateLine) {
+  // jirallm is not used in this workspace, but its user still hears of an update.
+  process.stdout.write(JSON.stringify({ systemMessage: updateLine }));
 }

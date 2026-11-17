@@ -15,6 +15,8 @@ const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 interface UpdateState {
   lastCheck?: number;
   latest?: string;
+  /** When the plugin's session-start notice last named an update (shown once a day). */
+  noticedAt?: number;
 }
 
 /** Fetches the version on the release branch. Sends nothing but a plain GET. */
@@ -82,6 +84,11 @@ export function checkForUpdates(currentVersion: string, now: number = Date.now()
     });
   }
 
+  refreshIfDue(state, path, now);
+}
+
+/** At most once per 24 h, a detached worker stores the release branch's version for later runs. */
+function refreshIfDue(state: UpdateState, path: string, now: number): void {
   if (state.lastCheck !== undefined && now - state.lastCheck < CHECK_INTERVAL_MS) return;
   try {
     // Mark the check as started first, so parallel runs do not all spawn a worker.
@@ -91,4 +98,35 @@ export function checkForUpdates(currentVersion: string, now: number = Date.now()
   } catch {
     // An update check must never break a command.
   }
+}
+
+/**
+ * The line the Claude Code plugin shows the user at session start, or '' (`jirallm update-notice`).
+ * Most use of jirallm goes through Claude and its hooks, where no terminal shows the CLI's own notice,
+ * so the daily check is started from here too. A newer release is named once a day; a plugin whose
+ * version differs from the CLI's (one of the two was updated alone) every time, as its hooks may call
+ * commands the CLI lacks.
+ */
+export function updateNotice(
+  current: string,
+  pluginVersion: string | undefined,
+  now: number = Date.now(),
+  path: string = updateStatePath(),
+  refresh: (state: UpdateState, path: string, now: number) => void = refreshIfDue
+): string {
+  if ('NO_UPDATE_NOTIFIER' in process.env) return '';
+  const state = readState(path);
+  refresh(state, path, now);
+  const notes: string[] = [];
+  if (state.latest && isNewer(state.latest, current) && (state.noticedAt === undefined || now - state.noticedAt >= CHECK_INTERVAL_MS)) {
+    notes.push(`jirallm ${state.latest} is available (you have ${current})`);
+    try {
+      writeState({ ...readState(path), noticedAt: now }, path);
+    } catch {
+      // Then it is named again next session.
+    }
+  } else if (pluginVersion && pluginVersion !== current) {
+    notes.push(`the jirallm plugin (${pluginVersion}) and CLI (${current}) differ`);
+  }
+  return notes.length ? `⬆ ${notes.join('; ')}: run \`jirallm upgrade\` in a terminal, then restart Claude Code` : '';
 }

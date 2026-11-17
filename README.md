@@ -40,14 +40,14 @@ Setup guide for colleagues: <https://hung-duongquang.github.io/jirallm/?setup>. 
 
 ### Updating
 
-jirallm checks the release branch once a day in the background and prints a notice on the next run. To upgrade:
+jirallm checks the release branch once a day in the background and prints a notice on the next run in a terminal. With the Claude Code plugin, a new session also shows it (once a day), and says so when the plugin and CLI versions differ. To upgrade:
 
 ```bash
 jirallm upgrade           # reinstalls from github:hung-duongquang/jirallm#release (npm / pnpm / yarn)
 jirallm upgrade --check   # only report whether a newer release exists
 ```
 
-Running the install command again does the same.
+`jirallm upgrade` also updates the Claude Code plugin when it is installed (restart Claude Code to load it). On Windows it first moves aside the image library DLLs a running jirallm may hold, which otherwise make npm fail with EBUSY. Running the install command again updates the CLI only.
 
 ## Configuration
 

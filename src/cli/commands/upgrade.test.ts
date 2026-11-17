@@ -20,10 +20,14 @@ vi.mock('@clack/prompts', () => ({
 
 import {
   detectInstallMethod,
+  moveLockedNativeFiles,
   fetchLatestVersion,
   runUpgrade,
   upgradeCommandFor,
 } from './upgrade.js';
+import { mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 let logs: string[];
 let errors: string[];
@@ -203,5 +207,19 @@ describe('runUpgrade', () => {
     setEnv('/usr/local/lib/node_modules/jirallm/dist/cli/index.js', 'npm/10');
     runInteractiveMock.mockResolvedValue(2);
     await expect(runUpgrade({ yes: true })).rejects.toThrow('exit:2');
+  });
+});
+
+describe('moveLockedNativeFiles', () => {
+  it('moves sharp files of an installed copy on Windows only', () => {
+    const base = mkdtempSync(path.join(tmpdir(), 'jl-upg-'));
+    const root = path.join(base, 'node_modules', 'jirallm');
+    const lib = path.join(root, 'node_modules', '@img', 'sharp-win32-x64', 'lib');
+    mkdirSync(lib, { recursive: true });
+    writeFileSync(path.join(lib, 'libvips-42.dll'), '');
+    expect(moveLockedNativeFiles(root, 'linux')).toBe(0);
+    expect(moveLockedNativeFiles(base, 'win32')).toBe(0);
+    expect(moveLockedNativeFiles(root, 'win32')).toBe(1);
+    expect(readdirSync(lib)).toEqual([]);
   });
 });
