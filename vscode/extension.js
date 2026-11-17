@@ -43,14 +43,12 @@ exports.activate = (context) => {
           return;
         }
         const cwd = q.get('cwd') ?? '';
-        const title = (q.get('title') || id.slice(0, 8)).replace(/[\r\n]/g, ' ').slice(0, 40);
+        // No name: a named terminal's tab keeps that name, while an unnamed one shows the title Claude
+        // keeps setting (its session title with a spinner while it works, ✳ while it waits), like a
+        // terminal where `claude` was typed by hand.
         const terminal = vscode.window.createTerminal({
-          name: `claude: ${title}`,
           cwd: cwd && fs.existsSync(cwd) ? cwd : undefined,
           iconPath: claudeIcon(),
-          // In the editor area, like the terminals Claude Code's extension opens: an editor tab shows the
-          // title Claude keeps setting ("✳ …", a spinner while it works), where a panel tab keeps this name.
-          location: { viewColumn: vscode.ViewColumn.Active },
         });
         terminal.show();
         terminal.sendText(`jirallm resume ${id}`);
