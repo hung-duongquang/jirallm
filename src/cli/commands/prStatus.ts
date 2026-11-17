@@ -43,13 +43,15 @@ export type PrState = {
   headRefOid: string;
   lastPush?: string;
   me: string;
+  /** Who opened the PR (absent from older callers' fakes). */
+  author?: string;
   checks: Check[];
   reviews: Review[];
   threads: Thread[];
   comments: Comment[];
 };
 
-const PR_FIELDS = 'number,title,url,state,isDraft,mergeable,reviewDecision,headRefName,baseRefName,headRefOid,statusCheckRollup,latestReviews,comments,commits';
+const PR_FIELDS = 'number,title,url,state,isDraft,mergeable,reviewDecision,headRefName,baseRefName,headRefOid,statusCheckRollup,latestReviews,comments,commits,author';
 const THREADS_QUERY = `query($o:String!,$n:String!,$p:Int!){viewer{login}repository(owner:$o,name:$n){pullRequest(number:$p){reviewThreads(first:100){nodes{isResolved isOutdated path line comments(first:1){totalCount nodes{author{login} body createdAt url}} last:comments(last:1){nodes{author{login} body createdAt url}}}}}}}`;
 const MAX_BODY = 300;
 const NOISE_AUTHORS = /^(github-actions|codecov|sonarcloud|qodana)/i;
@@ -126,7 +128,7 @@ export function fetchPrState(gh: Gh, cwd: string, pr?: string): PrState {
   const raw = JSON.parse(gh(cwd, ['pr', 'view', ...(pr ? [pr] : []), '--json', PR_FIELDS])) as {
     number: number; title: string; url: string; state: string; isDraft: boolean; mergeable: string; reviewDecision: string;
     headRefName: string; baseRefName: string; headRefOid: string; statusCheckRollup: RollupItem[] | null;
-    latestReviews: Review[]; comments: Comment[]; commits: Array<{ committedDate: string }>;
+    latestReviews: Review[]; comments: Comment[]; commits: Array<{ committedDate: string }>; author?: { login: string };
   };
   const [, owner, name] = /github\.com\/([^/]+)\/([^/]+)\/pull\//.exec(raw.url) ?? [];
   type Node = { isResolved: boolean; isOutdated: boolean; path: string; line: number | null; comments: { totalCount: number; nodes: Comment[] }; last: { nodes: Comment[] } };
@@ -146,6 +148,7 @@ export function fetchPrState(gh: Gh, cwd: string, pr?: string): PrState {
     headRefOid: raw.headRefOid,
     lastPush: raw.commits[raw.commits.length - 1]?.committedDate,
     me: gql.data.viewer.login,
+    author: raw.author?.login,
     checks: latestRuns(raw.statusCheckRollup ?? []).map(toCheck),
     reviews: raw.latestReviews ?? [],
     threads: gql.data.repository.pullRequest.reviewThreads.nodes.map((t) => ({
@@ -155,6 +158,9 @@ export function fetchPrState(gh: Gh, cwd: string, pr?: string): PrState {
     comments: (raw.comments ?? []).filter((c) => !NOISE_AUTHORS.test(c.author.login)),
   };
 }
+
+/** On someone else's PR: unresolved threads I opened whose last word is not mine (the author answered my review). */
+export const repliesToMyThreads = (s: PrState) => s.threads.filter((t) => !t.isResolved && t.first.author.login === s.me && t.last.author.login !== s.me);
 
 /** Unresolved threads whose last word is not mine: the reviewer is waiting for an answer or a fix. */
 export const threadsAwaitingMe = (s: PrState) => s.threads.filter((t) => !t.isResolved && t.last.author.login !== s.me);
@@ -231,7 +237,9 @@ export async function runPrStatus(pr: string | undefined, opts: PrStatusOptions,
 }
 
 /** One line per open PR of mine, for `watch`: compact state compared between runs. */
-export type PrSnapshot = { number: number; title: string; url?: string; sig?: string; key?: string; head: string; failed: string[]; pending: number; reviews: Record<string, string>; awaiting: number; comments: number };
+export type PrSnapshot = { number: number; title: string; url?: string; sig?: string; key?: string; head: string;
+  /** Someone else's PR that I review: `awaiting` counts the author's replies to my threads. */
+  reviewing?: boolean; failed: string[]; pending: number; reviews: Record<string, string>; awaiting: number; comments: number };
 
 export function snapshotOf(s: PrState): PrSnapshot {
   return {
@@ -243,7 +251,8 @@ export function snapshotOf(s: PrState): PrSnapshot {
     failed: s.checks.filter((c) => c.bucket === 'fail').map((c) => c.name).sort(),
     pending: s.checks.filter((c) => c.bucket === 'pending').length,
     reviews: Object.fromEntries(s.reviews.filter((r) => r.author.login !== s.me).map((r) => [r.author.login, `${r.state}@${r.submittedAt}`])),
-    awaiting: threadsAwaitingMe(s).length,
+    ...(s.author && s.author !== s.me && { reviewing: true }),
+    awaiting: (s.author && s.author !== s.me ? repliesToMyThreads(s) : threadsAwaitingMe(s)).length,
     comments: s.comments.filter((c) => c.author.login !== s.me).length,
   };
 }
@@ -255,14 +264,17 @@ export function describePrChange(prev: PrSnapshot | undefined, cur: PrSnapshot):
   const settled = cur.pending === 0;
   if (!prev) {
     if (cur.failed.length) parts.push(`CI failed: ${cur.failed.join(', ')}`);
-    if (cur.awaiting) parts.push(`${cur.awaiting} review thread(s) awaiting me`);
+    if (cur.awaiting) parts.push(cur.reviewing ? `${cur.awaiting} repl(ies) to my review` : `${cur.awaiting} review thread(s) awaiting me`);
     return parts.length ? `${label}: ${parts.join('; ')} — jirallm pr-status ${cur.number}` : undefined;
   }
   const newFails = cur.failed.filter((f) => prev.head !== cur.head || !prev.failed.includes(f));
   if (newFails.length) parts.push(`CI failed: ${newFails.join(', ')}`);
   else if (settled && !cur.failed.length && (prev.failed.length || (prev.pending > 0 && prev.head === cur.head) || prev.head !== cur.head)) parts.push('CI green');
   for (const [who, st] of Object.entries(cur.reviews)) if (prev.reviews[who] !== st) parts.push(`${who} reviewed: ${st.split('@')[0]}`);
-  if (cur.awaiting > prev.awaiting) parts.push(`${cur.awaiting - prev.awaiting} new review thread(s)/repl(ies) awaiting me`);
+  if (cur.awaiting > prev.awaiting) {
+    const n = cur.awaiting - prev.awaiting;
+    parts.push(cur.reviewing ? `${n} new repl(ies) to my review` : `${n} new review thread(s)/repl(ies) awaiting me`);
+  }
   if (cur.comments > prev.comments) parts.push(`${cur.comments - prev.comments} new comment(s)`);
   return parts.length ? `${label}: ${parts.join('; ')} — jirallm pr-status ${cur.number}` : undefined;
 }

@@ -1,13 +1,15 @@
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { listOrgs, loadProfile, type ResolvedProfile } from '../../lib/config.js';
 import { ConfluenceClient, exportConfluencePage } from '../../lib/confluence.js';
 import { JiraExporter } from '../../lib/exporter.js';
 import { JiraClient, jiraMillis, latestCommentUpdate, type JqlIssue } from '../../lib/jiraClient.js';
 import { exportSlackThread, hasSlackToken, loadSlackAuth, parseSlackUrl, SlackClient, threadFrontmatter, type SlackMessage } from '../../lib/slack.js';
-import { slackMentionChanges } from './slackMentions.js';
-import { defaultGh, describePrChange, fetchPrState, myOpenPrs, notifiedPrs, repoSlug, snapshotOf, toast, type Gh, type PrSnapshot } from './prStatus.js';
+import { isRunning } from './resume.js';
+import { runningSessionKeys, slackMentionChanges } from './slackMentions.js';
+import { checksSignature, defaultGh, describePrChange, fetchPrState, myOpenPrs, notifiedPrs, repoSlug, snapshotOf, toast, type Gh, type PrSnapshot } from './prStatus.js';
 
 export type WatchOptions = {
   org?: string;
@@ -233,6 +235,39 @@ async function runOnce(profile: ResolvedProfile, opts: WatchOptions, outputDir: 
   return lines;
 }
 
+/** What running Claude Code sessions follow besides my own PRs: their ticket keys and PRs they named (`pr/<n>`). */
+export type SessionFollows = { keys: string[]; prs: number[] };
+
+export function runningSessionFollows(outputDir: string, sessionsDir = path.join(os.tmpdir(), 'jirallm-sessions')): SessionFollows {
+  const prs = new Set<number>();
+  if (existsSync(sessionsDir)) {
+    for (const f of readdirSync(sessionsDir)) {
+      if (!f.endsWith('.follow') || !isRunning(f.slice(0, -'.follow'.length), sessionsDir)) continue;
+      for (const l of readFileSync(path.join(sessionsDir, f), 'utf8').split(/\r?\n/)) {
+        const n = /^pr\/(\d+)$/.exec(l.trim())?.[1];
+        if (n) prs.add(Number(n));
+      }
+    }
+  }
+  return { keys: [...runningSessionKeys(outputDir, sessionsDir).keys()], prs: [...prs] };
+}
+
+/**
+ * Open PRs of others that a running session works on: a PR it named, or one whose title or branch holds
+ * one of its ticket keys (reviewing Trung's PR for ZOD-1 follows its CI and reviews like my own PRs).
+ * One `gh pr list` call, made only while sessions follow something.
+ */
+export function followedPrs(gh: Gh, cwd: string, follow: SessionFollows, mine: Set<number>): Array<{ number: number; sig: string }> {
+  if (!follow.keys.length && !follow.prs.length) return [];
+  const open = JSON.parse(
+    gh(cwd, ['pr', 'list', '--state', 'open', '--json', 'number,title,headRefName,headRefOid,statusCheckRollup', '--limit', '100'])
+  ) as Array<{ number: number; title: string; headRefName: string; headRefOid: string; statusCheckRollup: Parameters<typeof checksSignature>[1] | null }>;
+  return open
+    .filter((p) => !mine.has(p.number))
+    .filter((p) => follow.prs.includes(p.number) || follow.keys.some((k) => concerns(`${p.title} ${p.headRefName}`, [k])))
+    .map((p) => ({ number: p.number, sig: checksSignature(p.headRefOid, p.statusCheckRollup ?? []) }));
+}
+
 /** A change line for CHANGES.md, with the page a notification should open; `error` lines are only printed. */
 export type PrChange = { line: string; url?: string; error?: boolean };
 type PrsState = { meta?: { lastModified?: string; checkedAt?: string; repo?: string; repoPath?: string }; prs: Record<string, PrSnapshot> };
@@ -244,7 +279,13 @@ type PrsState = { meta?: { lastModified?: string; checkedAt?: string; repo?: str
  * that is a free 304 when nothing happened; a PR is only read in full when its checks changed or it
  * got a notification.
  */
-export function prChanges(repo: string, outputDir: string, dryRun: boolean | undefined, gh: Gh = defaultGh): PrChange[] {
+export function prChanges(
+  repo: string,
+  outputDir: string,
+  dryRun: boolean | undefined,
+  gh: Gh = defaultGh,
+  follow: SessionFollows = runningSessionFollows(outputDir)
+): PrChange[] {
   const file = path.join(outputDir, PRS_FILE);
   const stored = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) as PrsState | Record<string, PrSnapshot> : undefined;
   const state: PrsState = stored && 'prs' in stored ? stored as PrsState : { prs: (stored ?? {}) as Record<string, PrSnapshot> };
@@ -259,7 +300,8 @@ export function prChanges(repo: string, outputDir: string, dryRun: boolean | und
     const slug = meta.repo ?? repoSlug(gh, cwd);
     const since = meta.checkedAt ? new Date(Date.parse(meta.checkedAt) - 120_000).toISOString() : undefined;
     const notified = notifiedPrs(gh, cwd, slug, meta.lastModified, since);
-    for (const { number: n, sig } of myOpenPrs(gh, cwd)) {
+    const mine = myOpenPrs(gh, cwd);
+    for (const { number: n, sig } of [...mine, ...followedPrs(gh, cwd, follow, new Set(mine.map((p) => p.number)))]) {
       const old = prev[n];
       if (old && old.sig === sig && notified.prs && !notified.prs.includes(n)) {
         next[n] = old;
@@ -279,6 +321,8 @@ export function prChanges(repo: string, outputDir: string, dryRun: boolean | und
       if (next[n]) continue;
       let pr = 'closed';
       try { pr = (JSON.parse(gh(cwd, ['pr', 'view', n, '--json', 'state'])) as { state: string }).state.toLowerCase(); } catch { /* keep "closed" */ }
+      // Someone else's PR that no running session follows any more: still open, nothing to report.
+      if (pr === 'open') continue;
       changes.push({ line: `PR #${n}${old.key ? ` (${old.key})` : ''}: ${pr}`, url: old.url });
     }
     meta = { repo: slug, repoPath: cwd, lastModified: notified.lastModified, checkedAt: startedAt };
@@ -658,7 +702,7 @@ function followedNames(keys: string[]): string {
   const isPage = (k: string) => k.toLowerCase().startsWith('confluence/');
   const threads = keys.filter(isThread).length;
   const pages = keys.filter(isPage).length;
-  const names = keys.filter((k) => !isThread(k) && !isPage(k));
+  const names = keys.filter((k) => !isThread(k) && !isPage(k)).map((k) => k.replace(/^pr\/(\d+)$/i, 'PR #$1'));
   if (threads) names.push(threads === 1 ? 'its Slack thread' : `${threads} Slack threads`);
   if (pages) names.push(pages === 1 ? 'its Confluence page' : `${pages} Confluence pages`);
   return names.join(', ');
@@ -666,7 +710,11 @@ function followedNames(keys: string[]): string {
 
 /** True when a change line names one of the keys (a ticket, its PR "(KEY)", a Slack thread title). */
 export function concerns(line: string, keys: string[]): boolean {
-  return keys.some((k) => new RegExp(`(^|[^A-Z0-9-])${k}(?![0-9])`, 'i').test(line));
+  return keys.some((k) => {
+    // A PR the session named ("pr/12") matches its change lines ("PR #12 (ZOD-1): …").
+    const pr = /^pr\/(\d+)$/i.exec(k)?.[1];
+    return pr ? new RegExp(`PR #${pr}(?![0-9])`).test(line) : new RegExp(`(^|[^A-Z0-9-])${k}(?![0-9])`, 'i').test(line);
+  });
 }
 
 /**

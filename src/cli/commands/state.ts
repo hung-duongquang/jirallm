@@ -53,7 +53,8 @@ export function worktreesFor(porcelain: string, key: string): Array<{ path: stri
 function prLine(p: PrSnapshot): string {
   const ci = p.failed.length ? `CI failed: ${p.failed.join(', ')}` : p.pending ? `CI pending (${p.pending})` : 'CI green';
   const reviews = Object.entries(p.reviews).filter(([who]) => !/copilot|\[bot\]/i.test(who)).map(([who, st]) => `${who} ${st.split('@')[0]}`);
-  return `- PR #${p.number} (mine, open): ${ci}; reviews: ${reviews.join(', ') || 'none'}${p.awaiting ? `; ${p.awaiting} thread(s) awaiting me` : ''}${p.url ? ` · ${p.url}` : ''}`;
+  const awaiting = p.awaiting ? (p.reviewing ? `; ${p.awaiting} repl(ies) to my review` : `; ${p.awaiting} thread(s) awaiting me`) : '';
+  return `- PR #${p.number} (${p.reviewing ? 'reviewing' : 'mine'}, open): ${ci}; reviews: ${reviews.join(', ') || 'none'}${awaiting}${p.url ? ` · ${p.url}` : ''}`;
 }
 
 /**

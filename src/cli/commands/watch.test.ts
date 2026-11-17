@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { changeEntries, changesReport, commentsChangedSince, describeChange, frontmatter, prChanges, slackChanges, unseenCount } from './watch.js';
+import { changeEntries, changesReport, commentsChangedSince, concerns, describeChange, frontmatter, prChanges, slackChanges, unseenCount } from './watch.js';
 import type { SlackClient } from '../../lib/slack.js';
 
 const task = (status: string, comments: string) =>
@@ -107,6 +107,7 @@ describe('commentsChangedSince: deletions', () => {
 });
 
 describe('prChanges', () => {
+  const none = { keys: [], prs: [] };
   const view = (failed: boolean) => JSON.stringify({
     number: 7, title: 'ZOD-1: x', url: 'https://github.com/o/r/pull/7', state: 'OPEN', isDraft: false, mergeable: 'MERGEABLE', reviewDecision: '',
     headRefName: 'feature/ZOD-1-x', baseRefName: 'main', headRefOid: 'h1', latestReviews: [], comments: [], commits: [{ committedDate: '2026-10-29T10:00:00Z' }],
@@ -128,18 +129,72 @@ describe('prChanges', () => {
   it('reads a PR in full only when its checks changed or it got a notification', () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'prs-'));
     const first = fakeGh({ failed: true, notifications: 'HTTP/2.0 200 OK\nLast-Modified: t1\n\n[]' });
-    expect(prChanges('.', dir, false, first.gh).map((c) => c.line)).toEqual(['PR #7 (ZOD-1): CI failed: Unit — jirallm pr-status 7']);
+    expect(prChanges('.', dir, false, first.gh, none).map((c) => c.line)).toEqual(['PR #7 (ZOD-1): CI failed: Unit — jirallm pr-status 7']);
 
     const quiet = fakeGh({ failed: true, notifications: 'HTTP/2.0 304 Not Modified\n\n' });
-    expect(prChanges('.', dir, false, quiet.gh)).toEqual([]);
+    expect(prChanges('.', dir, false, quiet.gh, none)).toEqual([]);
     expect(quiet.calls).toEqual(['api -i', 'pr list']);
 
     const green = fakeGh({ failed: false, notifications: 'HTTP/2.0 304 Not Modified\n\n' });
-    expect(prChanges('.', dir, false, green.gh)).toEqual([{ line: 'PR #7 (ZOD-1): CI green — jirallm pr-status 7', url: 'https://github.com/o/r/pull/7' }]);
+    expect(prChanges('.', dir, false, green.gh, none)).toEqual([{ line: 'PR #7 (ZOD-1): CI green — jirallm pr-status 7', url: 'https://github.com/o/r/pull/7' }]);
 
     const review = fakeGh({ failed: false, notifications: 'HTTP/2.0 200 OK\nLast-Modified: t2\n\n[{"repository":{"full_name":"o/r"},"subject":{"type":"PullRequest","url":"https://api.github.com/repos/o/r/pulls/7"}}]' });
-    prChanges('.', dir, false, review.gh);
+    prChanges('.', dir, false, review.gh, none);
     expect(review.calls).toContain('pr view');
+  });
+});
+
+describe('prChanges for PRs a running session reviews', () => {
+  const rollup = [{ __typename: 'CheckRun', name: 'Unit', status: 'COMPLETED', conclusion: 'SUCCESS' }];
+  const view = (n: number, title: string, branch: string, state = 'OPEN') => JSON.stringify({
+    number: n, title, url: `https://github.com/o/r/pull/${n}`, state, isDraft: false, mergeable: 'MERGEABLE', reviewDecision: '',
+    headRefName: branch, baseRefName: 'main', headRefOid: 'h1', latestReviews: [], comments: [], commits: [{ committedDate: '2026-10-29T10:00:00Z' }],
+    statusCheckRollup: rollup,
+  });
+  const others = [
+    { number: 8, title: 'ZOD-2: theirs', headRefName: 'feature/ZOD-2-x' },
+    { number: 9, title: 'Bump deps', headRefName: 'deps' },
+    { number: 10, title: 'Unrelated', headRefName: 'feature/ZOD-3-y' },
+  ];
+  const fakeGh = (states: Record<number, string> = {}) => {
+    const calls: string[] = [];
+    const gh = (_cwd: string, args: string[]) => {
+      calls.push(args.join(' '));
+      if (args[0] === 'repo') return 'o/r';
+      if (args[0] === 'api' && args[1] === '-i') return 'HTTP/2.0 304 Not Modified' + String.fromCharCode(10).repeat(2);
+      if (args[0] === 'api') return JSON.stringify({ data: { viewer: { login: 'me' }, repository: { pullRequest: { reviewThreads: { nodes: [] } } } } });
+      if (args[1] === 'list' && args.includes('--author')) return '[]';
+      if (args[1] === 'list') return JSON.stringify(others.map((p) => ({ ...p, headRefOid: 'h1', statusCheckRollup: rollup })));
+      const n = Number(args[2]);
+      const p = others.find((o) => o.number === n)!;
+      if (args.includes('state')) return JSON.stringify({ state: states[n] ?? 'OPEN' });
+      return view(n, p.title, p.headRefName, states[n]);
+    };
+    return { gh, calls };
+  };
+
+  it('follows the PRs of the sessions tickets and the PRs they named, and drops them quietly when the session ends', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'prs-'));
+    const a = fakeGh();
+    // First sight of a green PR is no change, but #8 (key ZOD-2) and #9 (named) are now followed; #10 is not.
+    expect(prChanges('.', dir, false, a.gh, { keys: ['ZOD-2'], prs: [9] })).toEqual([]);
+    expect(a.calls.filter((c) => c.startsWith('pr view')).map((c) => c.split(' ')[2])).toEqual(['8', '9']);
+    expect(Object.keys(JSON.parse(readFileSync(path.join(dir, '.prs.json'), 'utf8')).prs)).toEqual(['8', '9']);
+
+    // The session ended: PR #8 is still open, so nothing is reported; a merged PR #9 is.
+    expect(prChanges('.', dir, false, fakeGh({ 9: 'MERGED' }).gh, { keys: [], prs: [] }).map((c) => c.line)).toEqual(['PR #9: merged']);
+  });
+
+  it('makes no extra call while no session follows anything', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'prs-'));
+    const a = fakeGh();
+    prChanges('.', dir, false, a.gh, { keys: [], prs: [] });
+    expect(a.calls.filter((c) => c.startsWith('pr list'))).toHaveLength(1);
+  });
+
+  it('matches the change lines of a named PR', () => {
+    expect(concerns('PR #9: CI green', ['pr/9'])).toBe(true);
+    expect(concerns('PR #90: CI green', ['pr/9'])).toBe(false);
   });
 });
 

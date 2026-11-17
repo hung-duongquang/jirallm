@@ -135,6 +135,12 @@ function followLinks(prompt, sessionId) {
     const exported = () => existsSync(dir) && readdirSync(dir).some((d) => d.startsWith(`${id}-`));
     links.push({ item: `confluence/${id}`, url: m[0], command: 'page', exported });
   }
+  // A PR named outright (a PR link, "PR #12", "pull request 12"; not a bare "#12"): `watch --prs`
+  // follows its CI and reviews for this session also when it is someone else's PR (a review).
+  for (const m of prompt.matchAll(/\/pull\/(\d+)\b|\b(?:PR|pull request)\s*#?(\d+)\b/gi)) {
+    const item = `pr/${m[1] ?? m[2]}`;
+    if (!followed.includes(item) && !added.includes(item)) added.push(item);
+  }
   for (const { item, url, command, exported } of links) {
     if (followed.includes(item) || added.includes(item)) continue;
     added.push(item);

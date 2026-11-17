@@ -152,6 +152,15 @@ describe('snapshotOf', () => {
     }));
     expect(s).toMatchObject({ key: 'ZOD-1', failed: ['A', 'B'], pending: 1, reviews: { linh: 'APPROVED@t' } });
   });
+
+  it('on a PR I review, counts only the author\'s replies to my threads', () => {
+    const c = (login: string) => ({ author: { login }, body: '', createdAt: 't' });
+    const t = (first: string, last: string, isResolved = false) => ({ isResolved, isOutdated: false, path: 'a.cs', line: 1, first: c(first), last: c(last), count: 2 });
+    const threads = [t('me', 'trung'), t('me', 'me'), t('copilot', 'trung'), t('me', 'trung', true)];
+    expect(snapshotOf(state({ author: 'trung', threads }))).toMatchObject({ reviewing: true, awaiting: 1 });
+    expect(snapshotOf(state({ threads })).awaiting).toBe(2);
+    expect(describePrChange(snap({ reviewing: true }), snap({ reviewing: true, awaiting: 1 }))).toBe('PR #7 (ZOD-1): 1 new repl(ies) to my review — jirallm pr-status 7');
+  });
 });
 
 describe('describePrChange', () => {
