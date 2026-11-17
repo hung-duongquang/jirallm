@@ -48,6 +48,9 @@ exports.activate = (context) => {
           name: `claude: ${title}`,
           cwd: cwd && fs.existsSync(cwd) ? cwd : undefined,
           iconPath: claudeIcon(),
+          // In the editor area, like the terminals Claude Code's extension opens: an editor tab shows the
+          // title Claude keeps setting ("✳ …", a spinner while it works), where a panel tab keeps this name.
+          location: { viewColumn: vscode.ViewColumn.Active },
         });
         terminal.show();
         terminal.sendText(`jirallm resume ${id}`);
