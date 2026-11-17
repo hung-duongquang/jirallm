@@ -120,6 +120,38 @@ export async function describeMedia(
   return { marker: mediaMarker(index), filename: basename(filePath), source: filePath, kind, caption, size };
 }
 
+const MARKDOWN_IMAGE = /!\[[^\]\n]*\]\(<?([^)\s>]+)>?(?:\s+"[^"\n]*")?\)/g;
+
+/**
+ * Markdown images that show one of the issue's attachments, as an export writes them
+ * (`![image](attachments/<file>)`), become media marker blocks, which the step after the write turns
+ * back into the embedded picture. Without this, markdown→wiki made each a link to a local path, so
+ * writing an exported or edited description back lost every image in it. Web URLs and files that are
+ * not attachments of the issue are left as they are.
+ */
+export function embedAttachedImages(
+  body: string,
+  attachmentNames: string[],
+  firstIndex: number
+): { body: string; media: EmbeddedMedia[] } {
+  const media: EmbeddedMedia[] = [];
+  const replaced = body.replace(MARKDOWN_IMAGE, (match, target: string) => {
+    if (/^[a-z][a-z0-9+.-]*:/i.test(target)) return match;
+    let name = basename(target);
+    try {
+      name = decodeURIComponent(name);
+    } catch {
+      // Not percent-encoded.
+    }
+    const attached = attachmentNames.find((a) => a === name) ?? attachmentNames.find((a) => a.toLowerCase() === name.toLowerCase());
+    if (!attached) return match;
+    const item: EmbeddedMedia = { marker: mediaMarker(firstIndex + media.length), filename: attached, source: target, kind: mediaKind(attached) };
+    media.push(item);
+    return `\n\n${buildMediaEmbedBlock([item])}\n\n`;
+  });
+  return { body: replaced, media };
+}
+
 export function buildMediaEmbedBlock(media: EmbeddedMedia[]): string {
   return media.map((item) => `${item.marker}\n\n[^${item.filename}]`).join('\n\n');
 }

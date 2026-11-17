@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { loadProfile } from '../../lib/config.js';
 import { JiraClient } from '../../lib/jiraClient.js';
+import { embedAttachedImages } from '../../lib/adfMedia.js';
 import { parseFieldFlags } from '../../lib/customFieldWrite.js';
 import { withResolvedSprint } from '../../lib/sprintWrite.js';
 import { parseIssueKey, type ParsedIssueKey } from '../issueKey.js';
@@ -149,6 +150,16 @@ export async function runEdit(opts: EditOptions): Promise<void> {
     }
   }
 
+  // Images of the ticket's own attachments in the Markdown (an exported description holds them as
+  // local links) are put back as embedded pictures instead of becoming links.
+  const media = [...applied.media];
+  if (descriptionMarkdown !== undefined && !opts.noWiki && /!\[[^\]\n]*\]\(/.test(descriptionMarkdown)) {
+    const names = [...(await client.getAttachmentNames(parsed.key)), ...applied.attachedNames];
+    const existing = embedAttachedImages(descriptionMarkdown, names, media.length);
+    descriptionMarkdown = existing.body;
+    media.push(...existing.media);
+  }
+
   const fields = {
     summary: opts.summary,
     descriptionMarkdown,
@@ -175,7 +186,7 @@ export async function runEdit(opts: EditOptions): Promise<void> {
         issueKey: parsed.key,
         fields: dryRunFields,
         attachments: applied.attachedNames,
-        embeddedImages: previewMedia(applied.media, applied.layout),
+        embeddedImages: previewMedia(media, applied.layout),
       });
     } else {
       console.log(`Dry run — would edit ${parsed.key}:`);
@@ -191,8 +202,8 @@ export async function runEdit(opts: EditOptions): Promise<void> {
   }
 
   await client.editIssue(parsed.key, fields);
-  if (applied.media.length > 0 && descriptionMarkdown !== undefined) {
-    await embedDescriptionImages(client, parsed.key, applied.media, applied.layout);
+  if (media.length > 0 && descriptionMarkdown !== undefined) {
+    await embedDescriptionImages(client, parsed.key, media, applied.layout);
   }
 
   if (shouldOutputJson(opts)) {

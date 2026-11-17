@@ -1291,6 +1291,14 @@ export class JiraClient {
     }
   }
 
+  /** File names of the issue's attachments. */
+  async getAttachmentNames(issueKey: string): Promise<string[]> {
+    const response = await this.makeRequest<{ fields: { attachment?: Array<{ filename?: string }> } }>(
+      `${apiPath`/issue/${issueKey}`}?fields=attachment`
+    );
+    return (response.fields.attachment ?? []).map((a) => a.filename ?? '').filter(Boolean);
+  }
+
   async getIssueDescriptionAdf(issueKey: string): Promise<unknown> {
     const response = await this.makeRequest<{ fields: { description?: unknown } }>(
       `${apiPath`/issue/${issueKey}`}?fields=description`

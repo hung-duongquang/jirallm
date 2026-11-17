@@ -30,9 +30,11 @@ const listBoardsMock = vi.fn();
 const listSprintsMock = vi.fn();
 const findBoardByNameMock = vi.fn();
 const getEditFieldsMock = vi.fn();
+const getAttachmentNamesMock = vi.fn(async () => [] as string[]);
 vi.mock('../../lib/jiraClient.js', () => ({
   JiraClient: class {
     getEditFields = getEditFieldsMock;
+    getAttachmentNames = getAttachmentNamesMock;
     uploadAttachment = uploadAttachmentMock;
     getIssueDescriptionAdf = getIssueDescriptionAdfMock;
     updateIssueDescriptionAdf = updateIssueDescriptionAdfMock;
@@ -425,6 +427,31 @@ describe('runEdit', () => {
     const [, adf] = updateIssueDescriptionAdfMock.mock.calls[0];
     expect(adf.content[0].attrs).toEqual({ layout: 'center', width: 80 });
     expect(adf.content[1].content[0].text).toBe('After the fix');
+  });
+
+  it('keeps images of existing attachments embedded when an exported description is written back', async () => {
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    getAttachmentNamesMock.mockResolvedValueOnce(['image-20261117-062456.png']);
+    getIssueDescriptionAdfMock.mockResolvedValue({
+      version: 1,
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: '⟦jirallm-media-0⟧' }] },
+        { type: 'mediaGroup', content: [{ type: 'media', attrs: { type: 'file', id: 'uuid-1', collection: '' } }] },
+      ],
+    });
+
+    await runEdit({
+      issueKey: 'PROJ-1',
+      description: 'Before\n\n![image](attachments/image-20261117-062456.png)\n\n![web](https://x.test/a.png) ![gone](attachments/other.png)',
+    });
+
+    const written = editIssueMock.mock.calls[0][1].descriptionMarkdown as string;
+    expect(written).toContain('⟦jirallm-media-0⟧\n\n[^image-20261117-062456.png]');
+    expect(written).toContain('![web](https://x.test/a.png)');
+    expect(written).toContain('![gone](attachments/other.png)');
+    const [, adf] = updateIssueDescriptionAdfMock.mock.calls[0];
+    expect(adf.content[0].type).toBe('mediaSingle');
   });
 
   it('uploads but leaves the description alone when no description flag is given', async () => {
