@@ -33,10 +33,34 @@ const alive = (pid) => {
   }
 };
 
-/** A handshake: lines project dir, source, transcript path (older hooks wrote the project dir only). */
+/** A handshake: lines project dir, source, transcript path, Claude Code pid (older hooks wrote fewer lines). */
 function readStart(file) {
-  const [project = '', source = '', transcript = ''] = readFileSync(file, 'utf8').split('\n').map((l) => l.trim());
-  return { project: path.resolve(project), source, transcript, at: statSync(file).mtimeMs };
+  const [project = '', source = '', transcript = '', claudePid = ''] = readFileSync(file, 'utf8').split('\n').map((l) => l.trim());
+  return { project: path.resolve(project), source, transcript, claudePid, at: statSync(file).mtimeMs };
+}
+
+/** Claude Code's pid, which it gives to its hooks and plugin processes alike. */
+const CLAUDE_PID = /^\d+$/.test(process.env.CLAUDE_PID ?? '') ? process.env.CLAUDE_PID : '';
+
+/**
+ * The session of the Claude Code process this monitor runs in: the newest handshake written by a hook of
+ * the same process. Exact, so sessions started together never swap monitors, and it follows `/resume`
+ * and `claude --resume` (a new handshake with another id from the same process). Undefined while the
+ * hook has not written one yet, or with a Claude Code that does not pass CLAUDE_PID.
+ */
+function ownSession() {
+  if (!CLAUDE_PID) return undefined;
+  // Only handshakes from about our start on: an old one can carry a reused pid.
+  return startsSince(startedAt - 120_000).find((s) => s.claudePid === CLAUDE_PID)?.id;
+}
+
+/** Marks the session as served by this monitor (the UI shows it running; another monitor gives way). */
+function claimOwn(id) {
+  try {
+    writeFileSync(claimFile(id), String(process.pid));
+  } catch {
+    // The claim mark is a bonus; delivery does not depend on it.
+  }
 }
 
 /** Session handshakes for this project written since `since`, newest first. */
@@ -101,18 +125,29 @@ if (!existsSync(outputDir)) process.exit(0); // jirallm is not used in this work
 
 let session;
 while (!session && Date.now() - startedAt < HANDSHAKE_WAIT_MS) {
-  session = claimSession();
+  // Without CLAUDE_PID (older Claude Code): the newest unclaimed handshake, which can pick another
+  // session's when several start within seconds.
+  session = CLAUDE_PID ? ownSession() : claimSession();
   if (!session) await sleep(2000);
 }
 if (!session) {
   // Quietly: a notification about plumbing is noise. Changes still arrive with each prompt.
   process.exit(0);
 }
+if (CLAUDE_PID) claimOwn(session);
 
 const claimedAt = Date.now();
 for (let i = 0; ; i++) {
   // Check for a resume often at first (it follows the throwaway session within seconds), then each poll.
-  session = followResume(session, claimedAt);
+  if (CLAUDE_PID) {
+    const own = ownSession();
+    if (own && own !== session) {
+      session = own;
+      claimOwn(session);
+    }
+  } else {
+    session = followResume(session, claimedAt);
+  }
   const report = pushChanges(session);
   if (report) console.log(report);
   await sleep(i < 20 ? 3000 : POLL_MS); // Both are cheap: pushChanges only stats files until CHANGES.md moves.

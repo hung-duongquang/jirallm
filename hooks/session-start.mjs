@@ -59,7 +59,9 @@ function restoreSessionKeys() {
       }
       const content = entry.message?.content;
       const text = typeof content === 'string' ? content : Array.isArray(content) && !content.some((c) => c.type === 'tool_result') ? content.filter((c) => c.type === 'text').map((c) => c.text).join('\n') : '';
-      // Hook output injected into prompts names other tickets too; only the user's own words count.
+      // Hook output injected into prompts names other tickets too, and so does a background task's
+      // notification (another session's monitor once did); only the user's own words count.
+      if (/^\s*<task-notification>/.test(text)) continue;
       for (const k of text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').match(/\b[A-Z][A-Z0-9]+-\d+\b/g) ?? []) {
         if (!existsSync(path.join(outputDir, k.toLowerCase()))) continue;
         const i = keys.indexOf(k);
@@ -86,10 +88,12 @@ if (!jirallm(['--version'], 15000)) {
   if (session) {
     try {
       mkdirSync(sessionsDir, { recursive: true });
-      // Lines: project dir, source (startup/resume/clear/compact), transcript path. The monitor matches the
-      // project, and moves from a throwaway startup session to the one `claude --resume` switches to.
+      // Lines: project dir, source (startup/resume/clear/compact), transcript path, Claude Code's pid. The
+      // monitor runs in the same Claude Code process (same CLAUDE_PID), so it finds its own session even when
+      // several start at once (`jirallm resume` after a reboot) and when `claude --resume` switches ids.
       const transcript = typeof input.transcript_path === 'string' ? input.transcript_path : '';
-      writeFileSync(path.join(sessionsDir, `${session}.start`), [process.env.CLAUDE_PROJECT_DIR || process.cwd(), input.source ?? '', transcript].join('\n'));
+      const lines = [process.env.CLAUDE_PROJECT_DIR || process.cwd(), input.source ?? '', transcript, process.env.CLAUDE_PID ?? ''];
+      writeFileSync(path.join(sessionsDir, `${session}.start`), lines.join('\n'));
     } catch {
       // Without the handshake the monitor stays idle; the prompt hook still delivers changes.
     }

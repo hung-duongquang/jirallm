@@ -157,11 +157,16 @@ function saveUiTitle(sessionId, text) {
   if (line) writeFileSync(path.join(sessionsDir, `${sessionId}.title`), line.length > MAX_TITLE ? `${line.slice(0, MAX_TITLE - 1)}…` : line);
 }
 
+// A background task's notification (a monitor event, a finished command) comes in as a prompt too. What it
+// names is not what the user works on: a monitor of another session once named that session's tickets, and
+// this one followed them from then on. Only the user's own words add tickets, links and a title.
+const userPrompt = typeof input.prompt === 'string' && !/^\s*<task-notification>/.test(input.prompt) ? input.prompt : undefined;
+
 let title = '';
 try {
-  const first = typeof input.prompt === 'string' && isFirstPrompt(input.session_id);
-  if (first && SLACK_URL.test(input.prompt)) title = slackSessionTitle(input.prompt);
-  if (first) saveUiTitle(input.session_id, title || input.prompt);
+  const first = typeof userPrompt === 'string' && isFirstPrompt(input.session_id);
+  if (first && SLACK_URL.test(userPrompt)) title = slackSessionTitle(userPrompt);
+  if (first) saveUiTitle(input.session_id, title || userPrompt);
   // Now the session has a transcript and a title: its VS Code resume task can be written.
   if (first) refreshResumeTasks();
 } catch {
@@ -169,7 +174,7 @@ try {
 }
 
 try {
-  if (typeof input.prompt === 'string') followLinks(input.prompt, input.session_id);
+  if (userPrompt) followLinks(userPrompt, input.session_id);
 } catch {
   // Following is a bonus too.
 }
@@ -177,8 +182,8 @@ try {
 let cards = '';
 let cardKeys = [];
 try {
-  if (typeof input.prompt === 'string') {
-    cardKeys = newTicketKeys(input.prompt, input.session_id);
+  if (userPrompt) {
+    cardKeys = newTicketKeys(userPrompt, input.session_id);
     if (cardKeys.length) cards = jirallm(['state', ...cardKeys, '--notes', '--output-dir', outputDir], 10000);
   }
 } catch {
