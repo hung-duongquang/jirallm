@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { keyFromBranch } from './prContext.js';
+import { keyFromBranch, repoDir } from './prContext.js';
 import { defaultGh, type Gh } from './prStatus.js';
 import { NOTES_FILE } from './state.js';
 
@@ -168,7 +168,7 @@ function diffSince(gh: Gh, cwd: string, d: ReviewData): Diffstat {
 
 export function runReviewHistory(pr: string, opts: ReviewHistoryOptions, gh: Gh = defaultGh): void {
   if (!/^\d+$/.test(pr)) throw new Error(`Expected a PR number, got "${pr}".`);
-  const cwd = path.resolve(opts.repo ?? '.');
+  const cwd = repoDir(opts.repo);
   const d = fetchReviewData(gh, cwd, pr);
   const key = keyFromBranch(d.headRefName) ?? keyFromBranch(d.title);
   const outputDir = path.resolve(opts.outputDir ?? './jira-export');

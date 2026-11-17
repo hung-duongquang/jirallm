@@ -1,6 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import path from 'node:path';
-import { keyFromBranch } from './prContext.js';
+import { keyFromBranch, repoDir } from './prContext.js';
 
 export type PrStatusOptions = {
   repo?: string;
@@ -215,7 +214,7 @@ export function renderPrStatus(s: PrState, logFor: (jobId: string) => string[]):
  * threads. With --wait, polls until no check is pending and exits 1 when one failed.
  */
 export async function runPrStatus(pr: string | undefined, opts: PrStatusOptions, gh: Gh = defaultGh): Promise<void> {
-  const cwd = path.resolve(opts.repo ?? '.');
+  const cwd = repoDir(opts.repo);
   const interval = Number(opts.interval ?? 60);
   const timeout = Number(opts.timeout ?? 90);
   const maxLog = Number(opts.logLines ?? 25);

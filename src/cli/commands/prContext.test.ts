@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { jiraEventsSince, keyFromBranch, lineDiff, workStart } from './prContext.js';
+import { jiraEventsSince, keyFromBranch, lineDiff, workStart, repoDir } from './prContext.js';
 
 const history = (created: string, field: string, from: string | null, to: string | null) => ({
   author: { displayName: 'Ann' },
@@ -48,5 +48,12 @@ describe('jiraEventsSince', () => {
       '  - Then B',
       '  + Then C',
     ]);
+  });
+});
+
+describe('repoDir', () => {
+  it('returns an existing folder and explains an owner/name given for a folder', () => {
+    expect(repoDir('.')).toBe(process.cwd());
+    expect(() => repoDir('topicushealthcare/zorgdeclaraties-not-here')).toThrow(/owner\/name; --repo takes the folder of a local clone \(e\.g\. --repo \.\/zorgdeclaraties-not-here\)/);
   });
 });

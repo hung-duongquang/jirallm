@@ -1,9 +1,22 @@
 import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { loadProfile } from '../../lib/config.js';
 import { JiraClient, type JiraComment } from '../../lib/jiraClient.js';
 import { parseIssueKey } from '../issueKey.js';
 import { resolveOrg } from '../resolveOrg.js';
+
+/**
+ * The local clone `--repo` names, as an absolute path. git and gh run in it, and a folder that does not
+ * exist made them fail with a bare "spawnSync gh ENOENT" (Windows reports the missing cwd as a missing
+ * program), which reads as gh not being installed. "owner/name" is the usual mix-up.
+ */
+export function repoDir(repo = '.'): string {
+  const dir = path.resolve(repo);
+  if (existsSync(dir)) return dir;
+  const slug = /^[\w.-]+\/[\w.-]+$/.test(repo) ? ` "${repo}" looks like a GitHub owner/name; --repo takes the folder of a local clone (e.g. --repo ./${repo.split('/')[1]}).` : '';
+  throw new Error(`--repo: no folder ${dir}.${slug}`);
+}
 
 export type PrContextOptions = {
   org?: string;
@@ -84,7 +97,7 @@ const defaultDeps: PrContextDeps = {
 };
 
 export async function runPrContext(issueKeyArg: string | undefined, opts: PrContextOptions, deps: PrContextDeps = defaultDeps): Promise<void> {
-  const repo = path.resolve(opts.repo ?? '.');
+  const repo = repoDir(opts.repo);
   const base = opts.base ?? 'origin/main';
   const git = (args: string[]) => {
     try { return deps.git(repo, args).trim(); } catch { return ''; }

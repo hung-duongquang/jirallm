@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { keyFromBranch } from './prContext.js';
+import { keyFromBranch, repoDir } from './prContext.js';
 import type { PrSnapshot } from './prStatus.js';
 
 export type StateOptions = { outputDir?: string; repo?: string; notes?: string };
@@ -124,7 +124,7 @@ export function runState(rawKeys: string[], opts: StateOptions, git: Git = defau
   // --notes only: print only tickets with something local (used by the prompt hook).
   const cards = keys
     .filter((k) => !opts.notes || existsSync(ticketDir(outputDir, k)))
-    .map((k) => ticketState(k, outputDir, opts.repo ? path.resolve(opts.repo) : undefined, git));
+    .map((k) => ticketState(k, outputDir, opts.repo ? repoDir(opts.repo) : undefined, git));
   if (cards.length) console.log(cards.join('\n\n'));
 }
 
