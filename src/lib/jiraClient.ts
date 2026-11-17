@@ -6,6 +6,7 @@ import type { CustomFieldDefs } from './exportFields.js';
 import { COMMON_EPIC_FIELDS, PROJECTABLE_FIELDS, projectIssueFields } from './fieldProjection.js';
 import type { AdfDocument } from './adfMedia.js';
 import { convertADFToMarkdown } from './adfToMarkdown.js';
+import { assertSecureBaseUrl, isSameOrigin } from './baseUrl.js';
 import type { JiraADFDocument } from './adfToMarkdown.js';
 import { markdownToWiki } from './markdownToWiki.js';
 
@@ -17,6 +18,8 @@ export type JiraConfig = {
   userEmail: string;
   /** Overrides for which redirects this client will follow. See {@link RedirectPolicy}. */
   redirects?: RedirectPolicy;
+  /** Permits a plain `http://` non-loopback `baseUrl`. Defaults to `JIRALLM_ALLOW_INSECURE_HTTP=1`. */
+  allowInsecureHttp?: boolean;
 };
 
 export type JiraUser = {
@@ -686,7 +689,8 @@ export const requestWithRedirectPolicy = async (
 
     // The host the caller originally asked for is never an escalation — a Data
     // Center install on a private address must keep working.
-    const isOriginHost = normaliseHost(target.hostname) === normaliseHost(origin.hostname);
+    const isOriginHost =
+      normaliseHost(target.hostname) === normaliseHost(origin.hostname) && target.port === origin.port;
 
     if (target.protocol !== 'https:' && !(isOriginHost && target.protocol === from.protocol)) {
       throw redirectRefused(response, target.href, `scheme "${target.protocol}" is not allowed`);
@@ -718,6 +722,37 @@ export const requestWithRedirectPolicy = async (
 
 const EPIC_LINK_CUSTOM_SCHEMA = 'com.pyxis.greenhopper.jira:gh-epic-link' as const;
 
+const UNSAFE_PATH_SEGMENTS: ReadonlySet<string> = new Set(['', '.', '..']);
+
+const encodePathSegment = (value: string | number): string => {
+  const segment = String(value);
+  if (UNSAFE_PATH_SEGMENTS.has(segment)) {
+    throw new Error(`Refusing to build a Jira URL with the path segment "${segment}".`);
+  }
+  return encodeURIComponent(segment);
+};
+
+/**
+ * Tagged template for REST paths: every interpolated value is one path segment,
+ * percent-encoded, and `''` / `.` / `..` are rejected — `encodeURIComponent`
+ * leaves dots alone and WHATWG URL parsing would collapse them.
+ */
+const apiPath = (literals: TemplateStringsArray, ...segments: Array<string | number>): string =>
+  segments.reduce<string>(
+    (path, segment, index) => `${path}${encodePathSegment(segment)}${literals[index + 1]}`,
+    literals[0]
+  );
+
+const describeOrigin = (raw: string): string => {
+  if (!URL.canParse(raw)) return 'an invalid URL';
+  return `"${new URL(raw).origin}"`;
+};
+
+const withQuery = (path: string, params: URLSearchParams): string => {
+  const query = params.toString();
+  return query ? `${path}?${query}` : path;
+};
+
 export class JiraClient {
   private config: JiraConfig;
   private authHeader: string;
@@ -727,6 +762,7 @@ export class JiraClient {
   private epicLinkFieldIdCache?: string | null;
 
   constructor(config: JiraConfig, apiToken: string) {
+    assertSecureBaseUrl(config.baseUrl, { allowInsecureHttp: config.allowInsecureHttp });
     this.config = config;
     this.authHeader = `Basic ${Buffer.from(`${config.userEmail}:${apiToken}`).toString('base64')}`;
   }
@@ -859,9 +895,12 @@ export class JiraClient {
     return history;
   }
 
+  private restUrl(path: string, version: 2 | 3 = 3): string {
+    return `${this.config.baseUrl}/rest/api/${version}${path}`;
+  }
+
   private async makeRequest<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-    const url = `${this.config.baseUrl}/rest/api/3${endpoint}`;
-    const response = await this.httpRequest(url, {
+    const response = await this.httpRequest(this.restUrl(endpoint), {
       ...options,
       headers: {
         Authorization: this.authHeader,
@@ -899,14 +938,14 @@ export class JiraClient {
     if (opts.issueKey) params.set('issueKey', opts.issueKey);
     if (opts.project) params.set('project', opts.project);
     params.set('maxResults', String(opts.maxResults ?? 50));
-    return this.makeRequest<JiraUser[]>(`/user/assignable/search?${params.toString()}`);
+    return this.makeRequest<JiraUser[]>(withQuery('/user/assignable/search', params));
   }
 
   async searchUsers(query: string, maxResults = 50): Promise<JiraUser[]> {
     const params = new URLSearchParams();
     params.set('query', query);
     params.set('maxResults', String(maxResults));
-    return this.makeRequest<JiraUser[]>(`/user/search?${params.toString()}`);
+    return this.makeRequest<JiraUser[]>(withQuery('/user/search', params));
   }
 
   async fetchIssueDetails(
@@ -937,8 +976,10 @@ export class JiraClient {
     if (storyPointsFieldId) fieldSet.add(storyPointsFieldId);
     if (options.includeLinks) fieldSet.add('issuelinks');
 
-    const fields = [...fieldSet].join(',');
-    const response = await this.makeRequest<JiraIssue>(`/issue/${issueKey}?fields=${fields}`);
+    const params = new URLSearchParams({ fields: [...fieldSet].join(',') });
+    const response = await this.makeRequest<JiraIssue>(
+      withQuery(apiPath`/issue/${issueKey}`, params)
+    );
 
     const comments = includeComments ? await this.fetchIssueComments(issueKey) : [];
     const changelog = includeChangelog ? await this.fetchIssueChangelog(issueKey) : [];
@@ -981,7 +1022,7 @@ export class JiraClient {
 
   async fetchIssueRaw(issueKey: string, expand: string[] = ['names'], fields: string[] = ['*all']): Promise<RawIssue> {
     const params = new URLSearchParams({ fields: fields.join(','), expand: expand.join(',') });
-    return this.makeRequest<RawIssue>(`/issue/${issueKey}?${params.toString()}`);
+    return this.makeRequest<RawIssue>(withQuery(apiPath`/issue/${issueKey}`, params));
   }
 
   private buildTaskData(
@@ -1031,7 +1072,7 @@ export class JiraClient {
       });
       if (opts.rendered) params.set('expand', 'renderedBody');
       const response = await this.makeRequest<JiraCommentsResponse>(
-        `/issue/${issueKey}/comment?${params.toString()}`
+        withQuery(apiPath`/issue/${issueKey}/comment`, params)
       );
       allComments.push(...response.comments);
       total = response.total;
@@ -1042,7 +1083,7 @@ export class JiraClient {
   }
 
   async getComment(issueKey: string, commentId: string): Promise<JiraComment> {
-    return this.makeRequest<JiraComment>(`/issue/${issueKey}/comment/${commentId}`);
+    return this.makeRequest<JiraComment>(apiPath`/issue/${issueKey}/comment/${commentId}`);
   }
 
   async fetchIssueWorklogs(issueKey: string): Promise<WorklogSummary[]> {
@@ -1052,12 +1093,16 @@ export class JiraClient {
     let total: number;
 
     do {
+      const params = new URLSearchParams({
+        startAt: String(startAt),
+        maxResults: String(maxResults),
+      });
       const response = await this.makeRequest<{
         worklogs: Array<Partial<RawJiraWorklog> & Pick<RawJiraWorklog, 'author' | 'started' | 'timeSpent'>>;
         total: number;
         startAt: number;
         maxResults: number;
-      }>(`/issue/${issueKey}/worklog?startAt=${startAt}&maxResults=${maxResults}`);
+      }>(withQuery(apiPath`/issue/${issueKey}/worklog`, params));
 
       for (const worklog of response.worklogs) {
         const entry: WorklogSummary = {
@@ -1082,7 +1127,7 @@ export class JiraClient {
   async fetchIssueChangelog(issueKey: string): Promise<JiraChangelogHistory[]> {
     const response = await this.makeRequest<{
       changelog: { histories: JiraChangelogHistory[] };
-    }>(`/issue/${issueKey}?expand=changelog&fields=none`);
+    }>(`${apiPath`/issue/${issueKey}`}?expand=changelog&fields=none`);
     return response.changelog.histories;
   }
 
@@ -1115,7 +1160,7 @@ export class JiraClient {
     wikiBody: string,
     parentCommentId?: string
   ): Promise<{ id: string }> {
-    const url = `${this.config.baseUrl}/rest/api/2/issue/${issueKey}/comment`;
+    const url = this.restUrl(apiPath`/issue/${issueKey}/comment`, 2);
     const payload: Record<string, unknown> = { body: wikiBody };
     if (parentCommentId) payload.parentId = parentCommentId;
     const response = await this.httpRequest(url, {
@@ -1135,8 +1180,11 @@ export class JiraClient {
   }
 
   private worklogUrl(issueKey: string, worklogId?: string): string {
-    const base = `${this.config.baseUrl}/rest/api/2/issue/${issueKey}/worklog`;
-    return worklogId === undefined ? base : `${base}/${worklogId}`;
+    const path =
+      worklogId === undefined
+        ? apiPath`/issue/${issueKey}/worklog`
+        : apiPath`/issue/${issueKey}/worklog/${worklogId}`;
+    return this.restUrl(path, 2);
   }
 
   private async sendWorklogWrite(
@@ -1212,7 +1260,7 @@ export class JiraClient {
   }
 
   async updateComment(issueKey: string, commentId: string, wikiBody: string): Promise<void> {
-    const url = `${this.config.baseUrl}/rest/api/2/issue/${issueKey}/comment/${commentId}`;
+    const url = this.restUrl(apiPath`/issue/${issueKey}/comment/${commentId}`, 2);
     const response = await this.httpRequest(url, {
       method: 'PUT',
       headers: {
@@ -1228,7 +1276,7 @@ export class JiraClient {
   }
 
   async updateCommentAdf(issueKey: string, commentId: string, adf: AdfDocument): Promise<void> {
-    const url = `${this.config.baseUrl}/rest/api/3/issue/${issueKey}/comment/${commentId}`;
+    const url = this.restUrl(apiPath`/issue/${issueKey}/comment/${commentId}`);
     const response = await this.httpRequest(url, {
       method: 'PUT',
       headers: {
@@ -1245,13 +1293,13 @@ export class JiraClient {
 
   async getIssueDescriptionAdf(issueKey: string): Promise<unknown> {
     const response = await this.makeRequest<{ fields: { description?: unknown } }>(
-      `/issue/${issueKey}?fields=description`
+      `${apiPath`/issue/${issueKey}`}?fields=description`
     );
     return response.fields.description;
   }
 
   async updateIssueDescriptionAdf(issueKey: string, adf: AdfDocument): Promise<void> {
-    const url = `${this.config.baseUrl}/rest/api/3/issue/${issueKey}`;
+    const url = this.restUrl(apiPath`/issue/${issueKey}`);
     const response = await this.httpRequest(url, {
       method: 'PUT',
       headers: {
@@ -1267,7 +1315,7 @@ export class JiraClient {
   }
 
   async deleteComment(issueKey: string, commentId: string): Promise<void> {
-    const url = `${this.config.baseUrl}/rest/api/2/issue/${issueKey}/comment/${commentId}`;
+    const url = this.restUrl(apiPath`/issue/${issueKey}/comment/${commentId}`, 2);
     const response = await this.httpRequest(url, {
       method: 'DELETE',
       headers: { Authorization: this.authHeader, Accept: 'application/json' },
@@ -1310,7 +1358,7 @@ export class JiraClient {
   }
 
   async getBoardConfiguration(boardId: number): Promise<JiraBoardConfiguration> {
-    return this.makeAgileRequest(`/board/${boardId}/configuration`);
+    return this.makeAgileRequest(apiPath`/board/${boardId}/configuration`);
   }
 
   async getBoardColumnStatusIds(boardName: string, columnName: string): Promise<string[]> {
@@ -1381,8 +1429,7 @@ export class JiraClient {
     if (opts.query) params.set('query', opts.query);
     if (opts.startAt !== undefined) params.set('startAt', String(opts.startAt));
     if (opts.limit !== undefined) params.set('maxResults', String(opts.limit));
-    const qs = params.toString();
-    return this.makeRequest<JiraPage<JiraProject>>(`/project/search${qs ? `?${qs}` : ''}`);
+    return this.makeRequest<JiraPage<JiraProject>>(withQuery('/project/search', params));
   }
 
   async listBoards(
@@ -1400,8 +1447,7 @@ export class JiraClient {
     if (opts.name) params.set('name', opts.name);
     if (opts.startAt !== undefined) params.set('startAt', String(opts.startAt));
     if (opts.limit !== undefined) params.set('maxResults', String(opts.limit));
-    const qs = params.toString();
-    return this.makeAgileRequest<JiraPage<JiraBoard>>(`/board${qs ? `?${qs}` : ''}`);
+    return this.makeAgileRequest<JiraPage<JiraBoard>>(withQuery('/board', params));
   }
 
   async listSprints(
@@ -1416,24 +1462,24 @@ export class JiraClient {
     if (opts.state) params.set('state', opts.state);
     if (opts.startAt !== undefined) params.set('startAt', String(opts.startAt));
     if (opts.limit !== undefined) params.set('maxResults', String(opts.limit));
-    const qs = params.toString();
     return this.makeAgileRequest<JiraPage<JiraSprint>>(
-      `/board/${boardId}/sprint${qs ? `?${qs}` : ''}`
+      withQuery(apiPath`/board/${boardId}/sprint`, params)
     );
   }
 
   async listIssueTypes(projectKey?: string): Promise<JiraIssueType[]> {
     if (!projectKey) return this.makeRequest<JiraIssueType[]>('/issuetype');
-    const project = await this.makeRequest<{ id: string }>(`/project/${projectKey}`);
-    return this.makeRequest<JiraIssueType[]>(`/issuetype/project?projectId=${project.id}`);
+    const project = await this.makeRequest<{ id: string }>(apiPath`/project/${projectKey}`);
+    const params = new URLSearchParams({ projectId: project.id });
+    return this.makeRequest<JiraIssueType[]>(withQuery('/issuetype/project', params));
   }
 
   async listComponents(projectKey: string): Promise<JiraComponent[]> {
-    return this.makeRequest<JiraComponent[]>(`/project/${projectKey}/components`);
+    return this.makeRequest<JiraComponent[]>(apiPath`/project/${projectKey}/components`);
   }
 
   async listVersions(projectKey: string): Promise<JiraVersion[]> {
-    return this.makeRequest<JiraVersion[]>(`/project/${projectKey}/versions`);
+    return this.makeRequest<JiraVersion[]>(apiPath`/project/${projectKey}/versions`);
   }
 
   /**
@@ -1450,7 +1496,7 @@ export class JiraClient {
       );
     }
     const response = await this.makeRequest<{ fields: Array<RawMetaField & { fieldId: string }> }>(
-      `/issue/createmeta/${projectKey}/issuetypes/${match.id}`
+      apiPath`/issue/createmeta/${projectKey}/issuetypes/${match.id}`
     );
     return response.fields.map((f) => toScreenField(f.fieldId, f));
   }
@@ -1461,7 +1507,7 @@ export class JiraClient {
    */
   async getEditFields(issueKey: string): Promise<JiraCreateField[]> {
     const response = await this.makeRequest<{ fields: Record<string, RawMetaField> }>(
-      `/issue/${issueKey}/editmeta`
+      apiPath`/issue/${issueKey}/editmeta`
     );
     return Object.entries(response.fields).map(([fieldId, f]) => toScreenField(fieldId, f));
   }
@@ -1481,7 +1527,7 @@ export class JiraClient {
     if (!projectKey) return this.makeRequest<JiraStatus[]>('/status');
     const statuses = await this.makeRequest<
       Array<{ statuses: JiraStatus[] }>
-    >(`/project/${projectKey}/statuses`);
+    >(apiPath`/project/${projectKey}/statuses`);
     const seen = new Map<string, JiraStatus>();
     for (const entry of statuses) {
       for (const s of entry.statuses) seen.set(s.id, s);
@@ -1507,7 +1553,7 @@ export class JiraClient {
 
   async getIssueTransitions(issueKey: string): Promise<JiraTransition[]> {
     const response = await this.makeRequest<{ transitions: JiraTransition[] }>(
-      `/issue/${issueKey}/transitions`
+      apiPath`/issue/${issueKey}/transitions`
     );
     return response.transitions;
   }
@@ -1537,7 +1583,7 @@ export class JiraClient {
   ): Promise<Pick<JiraTransition, 'id' | 'name'>> {
     const match = await this.resolveTransition(issueKey, targetStatus);
     if (opts.dryRun) return { id: match.id, name: match.name };
-    const url = `${this.config.baseUrl}/rest/api/3/issue/${issueKey}/transitions`;
+    const url = this.restUrl(apiPath`/issue/${issueKey}/transitions`);
     const response = await this.httpRequest(url, {
       method: 'POST',
       headers: {
@@ -1587,7 +1633,7 @@ export class JiraClient {
     if (input.versions?.length) fields.versions = toNamedRefs(input.versions);
     if (input.customFields) Object.assign(fields, input.customFields);
 
-    const url = `${this.config.baseUrl}/rest/api/2/issue`;
+    const url = this.restUrl('/issue', 2);
     const response = await this.httpRequest(url, {
       method: 'POST',
       headers: {
@@ -1645,7 +1691,7 @@ export class JiraClient {
       throw new Error('editIssue called with no fields to update.');
     }
 
-    const url = `${this.config.baseUrl}/rest/api/2/issue/${issueKey}`;
+    const url = this.restUrl(apiPath`/issue/${issueKey}`, 2);
     const response = await this.httpRequest(url, {
       method: 'PUT',
       headers: {
@@ -1661,7 +1707,7 @@ export class JiraClient {
   }
 
   async assignIssue(issueKey: string, accountIdOrNull: string | null): Promise<void> {
-    const url = `${this.config.baseUrl}/rest/api/3/issue/${issueKey}/assignee`;
+    const url = this.restUrl(apiPath`/issue/${issueKey}/assignee`);
     const response = await this.httpRequest(url, {
       method: 'PUT',
       headers: {
@@ -1688,7 +1734,7 @@ export class JiraClient {
       outwardIssue: { key: outwardKey },
     };
     if (comment) payload.comment = { body: markdownToWiki(comment) };
-    const url = `${this.config.baseUrl}/rest/api/3/issueLink`;
+    const url = this.restUrl('/issueLink');
     const response = await this.httpRequest(url, {
       method: 'POST',
       headers: {
@@ -1704,7 +1750,7 @@ export class JiraClient {
   }
 
   async removeIssueLink(linkId: string): Promise<void> {
-    const url = `${this.config.baseUrl}/rest/api/3/issueLink/${linkId}`;
+    const url = this.restUrl(apiPath`/issueLink/${linkId}`);
     const response = await this.httpRequest(url, {
       method: 'DELETE',
       headers: { Authorization: this.authHeader, Accept: 'application/json' },
@@ -1716,13 +1762,13 @@ export class JiraClient {
 
   async listWatchers(issueKey: string): Promise<JiraWatcher[]> {
     const response = await this.makeRequest<{ watchers: JiraWatcher[] }>(
-      `/issue/${issueKey}/watchers`
+      apiPath`/issue/${issueKey}/watchers`
     );
     return response.watchers;
   }
 
   async addWatcher(issueKey: string, accountId: string): Promise<void> {
-    const url = `${this.config.baseUrl}/rest/api/3/issue/${issueKey}/watchers`;
+    const url = this.restUrl(apiPath`/issue/${issueKey}/watchers`);
     // Jira quirk: body is a JSON string (account id in quotes), not an object
     const response = await this.httpRequest(url, {
       method: 'POST',
@@ -1739,7 +1785,8 @@ export class JiraClient {
   }
 
   async removeWatcher(issueKey: string, accountId: string): Promise<void> {
-    const url = `${this.config.baseUrl}/rest/api/3/issue/${issueKey}/watchers?accountId=${encodeURIComponent(accountId)}`;
+    const path = apiPath`/issue/${issueKey}/watchers`;
+    const url = this.restUrl(`${path}?accountId=${encodeURIComponent(accountId)}`);
     const response = await this.httpRequest(url, {
       method: 'DELETE',
       headers: { Authorization: this.authHeader, Accept: 'application/json' },
@@ -1756,7 +1803,7 @@ export class JiraClient {
     const arr = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
     form.append('file', new Blob([arr]), basename(filePath));
 
-    const url = `${this.config.baseUrl}/rest/api/3/issue/${issueKey}/attachments`;
+    const url = this.restUrl(apiPath`/issue/${issueKey}/attachments`);
     const response = await this.httpRequest(url, {
       method: 'POST',
       headers: {
@@ -1785,7 +1832,7 @@ export class JiraClient {
       size: number;
       mimeType?: string;
       author?: { displayName?: string };
-    }>(`/attachment/${attachmentId}`);
+    }>(apiPath`/attachment/${attachmentId}`);
     return {
       id: meta.id,
       filename: meta.filename,
@@ -1796,7 +1843,7 @@ export class JiraClient {
   }
 
   async deleteAttachment(attachmentId: string): Promise<void> {
-    const url = `${this.config.baseUrl}/rest/api/3/attachment/${attachmentId}`;
+    const url = this.restUrl(apiPath`/attachment/${attachmentId}`);
     const response = await this.httpRequest(url, {
       method: 'DELETE',
       headers: { Authorization: this.authHeader, Accept: 'application/json' },
@@ -1806,7 +1853,15 @@ export class JiraClient {
     }
   }
 
+  private assertJiraOrigin(attachmentUrl: string): void {
+    if (isSameOrigin(attachmentUrl, this.config.baseUrl)) return;
+    throw new Error(
+      `Refused to download attachment from ${describeOrigin(attachmentUrl)}: it is not the configured Jira origin ${describeOrigin(this.config.baseUrl)}, and the API token is only sent there.`
+    );
+  }
+
   async downloadAttachment(attachmentUrl: string, outputPath: string): Promise<void> {
+    this.assertJiraOrigin(attachmentUrl);
     await mkdir(dirname(outputPath), { recursive: true });
 
     const response = await this.httpRequest(attachmentUrl, {

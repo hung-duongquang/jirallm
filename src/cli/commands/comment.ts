@@ -3,10 +3,11 @@ import { loadProfile } from '../../lib/config.js';
 import { JiraClient, type JiraComment } from '../../lib/jiraClient.js';
 import { markdownToWiki } from '../../lib/markdownToWiki.js';
 import { splitIntoChunks } from '../../lib/chunkMarkdown.js';
-import { parseIssueKey } from '../issueKey.js';
+import { parseIssueKey, parseNumericId } from '../issueKey.js';
 import { resolveOrg } from '../resolveOrg.js';
 import { printJson, shouldOutputJson } from '../jsonOutput.js';
 import { confirmOrAbort } from '../confirm.js';
+import { readPipedStdin } from '../stdin.js';
 import { embedCommentImages, prepareAttachments, previewMedia } from '../attachEmbeds.js';
 import { containsMarkers } from '../../lib/adfMedia.js';
 
@@ -71,19 +72,27 @@ function commentBody(client: JiraClient, comment: JiraComment): string {
   return client.convertADFToMarkdown(comment.body).trim();
 }
 
+const COMMENT_STDIN_HINT =
+  'pass --text or --file, or pipe the body (e.g. `cat note.md | jirallm comment PROJ-123`).';
+
+function readCommentBody(opts: { file?: string; text?: string }): string {
+  const body = readBodySource(opts);
+  if (!body.trim()) throw new Error('Empty comment body.');
+  return body;
+}
+
+function readBodySource(opts: { file?: string; text?: string }): string {
+  if (opts.file) return readFileSync(opts.file, 'utf-8');
+  if (opts.text) return opts.text;
+  return readPipedStdin(COMMENT_STDIN_HINT);
+}
+
 export async function runComment(issueKeyArg: string, opts: CommentOptions): Promise<void> {
   const parsed = parseIssueKey(issueKeyArg);
+  const rootId = opts.replyTo === undefined ? undefined : parseNumericId(opts.replyTo, '--reply-to comment id');
   const org = resolveOrg(parsed.org, opts.org, parsed.projectKey);
 
-  let rawBody: string;
-  if (opts.file) {
-    rawBody = readFileSync(opts.file, 'utf-8');
-  } else if (opts.text) {
-    rawBody = opts.text;
-  } else {
-    rawBody = readFileSync(0, 'utf-8');
-  }
-  if (!rawBody.trim()) throw new Error('Empty comment body.');
+  let rawBody = readCommentBody(opts);
 
   const profile = await loadProfile({ org, project: parsed.projectKey });
   const client = new JiraClient(profile.config, profile.apiToken);
@@ -98,7 +107,6 @@ export async function runComment(issueKeyArg: string, opts: CommentOptions): Pro
 
   const asJson = shouldOutputJson(opts);
   const thread = !opts.noThread;
-  const rootId = opts.replyTo;
 
   if (opts.dryRun) {
     const previews = chunks.map((chunk, i) => {
@@ -137,7 +145,7 @@ export async function runComment(issueKeyArg: string, opts: CommentOptions): Pro
   if (!asJson) console.log(`Posting ${chunks.length} comment(s) to ${parsed.key} on ${org}...`);
 
   const posted: Array<{ id: string; index: number; parent?: string }> = [];
-  let prevId: string | undefined = opts.replyTo;
+  let prevId: string | undefined = rootId;
   for (let i = 0; i < chunks.length; i++) {
     const fullBody = buildHeader(i, chunks.length, rootId) + chunks[i];
     const parentId = thread ? prevId : rootId;
@@ -199,21 +207,14 @@ export async function runCommentList(
 
 export async function runEditComment(
   issueKeyArg: string,
-  commentId: string,
+  commentIdArg: string,
   opts: EditCommentOptions
 ): Promise<void> {
   const parsed = parseIssueKey(issueKeyArg);
+  const commentId = parseNumericId(commentIdArg, 'comment id');
   const org = resolveOrg(parsed.org, opts.org, parsed.projectKey);
 
-  let rawBody: string;
-  if (opts.file) {
-    rawBody = readFileSync(opts.file, 'utf-8');
-  } else if (opts.text) {
-    rawBody = opts.text;
-  } else {
-    rawBody = readFileSync(0, 'utf-8');
-  }
-  if (!rawBody.trim()) throw new Error('Empty comment body.');
+  const rawBody = readCommentBody(opts);
 
   const profile = await loadProfile({ org, project: parsed.projectKey });
   const client = new JiraClient(profile.config, profile.apiToken);
@@ -258,10 +259,11 @@ export async function runEditComment(
 
 export async function runDeleteComment(
   issueKeyArg: string,
-  commentId: string,
+  commentIdArg: string,
   opts: DeleteCommentOptions
 ): Promise<void> {
   const parsed = parseIssueKey(issueKeyArg);
+  const commentId = parseNumericId(commentIdArg, 'comment id');
   const org = resolveOrg(parsed.org, opts.org, parsed.projectKey);
   const profile = await loadProfile({ org, project: parsed.projectKey });
   const client = new JiraClient(profile.config, profile.apiToken);

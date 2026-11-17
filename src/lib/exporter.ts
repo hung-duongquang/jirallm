@@ -21,6 +21,29 @@ import {
   type CustomFieldDefs,
   type FieldSelector,
 } from './exportFields.js';
+import {
+  assertNotSymlink,
+  assertRealPathInside,
+  assignAttachmentFilenames,
+  ensureRealDirectory,
+  entryExists,
+  framesDirName,
+  isRealDirectory,
+  isRegularFile,
+  isSafeIssueKey,
+  removeEntry,
+  resolveContainedPath,
+  writeFileAtomic,
+  writeViaTempFile,
+} from './safePath.js';
+import {
+  createNonce,
+  isControlChar,
+  toSingleLine,
+  untrustedNotice,
+  wrapUntrusted,
+} from './untrusted.js';
+import { readVideoDuration, type VideoDurationProbe } from './videoSize.js';
 
 export type ExportOptions = {
   outputDir: string;
@@ -83,6 +106,7 @@ export type ExportOptions = {
     fps?: number;
     quality?: number;
     maxFrames?: number;
+    maxDurationSeconds?: number;
   };
 };
 
@@ -356,43 +380,78 @@ function linkedIssueKeys(task: JiraTaskData, baseUrl: string): string[] {
   return [...new Set(keys)].filter((key) => key !== self);
 }
 
+
 const DEFAULT_VIDEO_OPTS = {
   fps: 5,
   quality: 85,
   maxFrames: 10,
+} as const;
+
+export const DEFAULT_MAX_VIDEO_DURATION_SECONDS = 30 * 60;
+
+const ATTACHMENTS_DIR = 'attachments';
+const TASK_MD = 'task.md';
+
+type FrameCounts = ReadonlyMap<string, number>;
+
+type RenderContext = {
+  selectedKeys: Set<string>;
+  nonce: string;
+  frameCounts: FrameCounts;
 };
 
-function addFrameLinksToContent(content: string, taskDir: string): string {
-  const videoLinkRegex =
-    /!\[([^\]]*)\]\((attachments\/[^)]+\.(mp4|mov|avi|webm|mkv|m4v|flv|wmv|mpg|mpeg))\)(?:\n📁 \[View \d+ extracted frames\]\(attachments\/[^)]+\))?/gi;
+const VIDEO_LINK_REGEX =
+  /!\[([^\]]*)\]\(attachments\/([^)]+\.(?:mp4|mov|avi|webm|mkv|m4v|flv|wmv|mpg|mpeg))\)(?:\n📁 \[View \d+ extracted frames\]\(attachments\/[^)]+\))?/gi;
 
-  return content.replace(videoLinkRegex, (match: string, _alt: string, videoPath: string) => {
-    const filename = videoPath.split('/').pop();
-    if (!filename) return match;
-
-    const framesDirName = `${filename}-frames`;
-    const framesDir = join(taskDir, 'attachments', framesDirName);
-
-    const videoLinkMatch = match.match(
-      /!\[[^\]]*\]\(attachments\/[^)]+\.(mp4|mov|avi|webm|mkv|m4v|flv|wmv|mpg|mpeg)\)/i
-    );
-    const videoLinkPart = videoLinkMatch ? videoLinkMatch[0] : match;
-
-    if (existsSync(framesDir)) {
-      const frameFiles = readdirSync(framesDir)
-        .filter((f) => f.startsWith('frame-') && f.endsWith('.jpg'))
-        .sort();
-      if (frameFiles.length > 0) {
-        return `${videoLinkPart}\n📁 [View ${frameFiles.length} extracted frames](attachments/${framesDirName}/)`;
-      }
-    }
-
-    return videoLinkPart;
+function addFrameLinksToContent(content: string, frameCounts: FrameCounts): string {
+  return content.replace(VIDEO_LINK_REGEX, (_match: string, alt: string, filename: string) => {
+    const videoLink = `![${alt}](${ATTACHMENTS_DIR}/${filename})`;
+    const count = frameCounts.get(filename) ?? 0;
+    if (count === 0) return videoLink;
+    return `${videoLink}\n📁 [View ${count} extracted frames](${ATTACHMENTS_DIR}/${framesDirName(filename)}/)`;
   });
 }
 
+function countFrames(framesDir: string): number {
+  if (!isRealDirectory(framesDir)) return 0;
+  return readdirSync(framesDir).filter((f) => f.startsWith('frame-') && f.endsWith('.jpg')).length;
+}
+
+function readFrameCounts(attachmentsDir: string, filenames: readonly string[]): FrameCounts {
+  if (!isRealDirectory(attachmentsDir)) return new Map();
+  return new Map(
+    filenames
+      .filter((name) => isVideoFile(name))
+      .map((name) => [name, countFrames(join(attachmentsDir, framesDirName(name)))] as const)
+  );
+}
+
+const YAML_ESCAPES = new Map([
+  ['\\', '\\\\'],
+  ['"', '\\"'],
+  ['\n', '\\n'],
+  ['\r', '\\r'],
+  ['\t', '\\t'],
+  ['\u0085', '\\N'],
+  [' ', '\\L'],
+  [' ', '\\P'],
+]);
+
+const SAFE_YAML_KEY = /^[A-Za-z0-9_.-]+$/;
+
+function escapeYamlChar(ch: string): string {
+  const named = YAML_ESCAPES.get(ch);
+  if (named) return named;
+  if (!isControlChar(ch)) return ch;
+  return `\\u${(ch.codePointAt(0) ?? 0).toString(16).padStart(4, '0')}`;
+}
+
 function yamlQuote(value: string): string {
-  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  return `"${[...value].map(escapeYamlChar).join('')}"`;
+}
+
+function yamlKey(key: string): string {
+  return SAFE_YAML_KEY.test(key) ? key : yamlQuote(key);
 }
 
 function isEmpty(value: unknown): boolean {
@@ -424,12 +483,12 @@ function serializeYamlValue(value: unknown, indent: string): string {
       const serialized = serializeYamlValue(v, `${indent}  `);
       const needsBlock = typeof v === 'object' && v !== null && !Array.isArray(v) && !serialized.startsWith('\n');
       if (typeof v === 'object' && v !== null && !Array.isArray(v)) {
-        out += `\n${indent}${k}:`;
+        out += `\n${indent}${yamlKey(k)}:`;
         out += serialized.startsWith('\n') ? serialized : `\n${indent}  ${serialized}`;
       } else if (Array.isArray(v) && !serialized.startsWith('[')) {
-        out += `\n${indent}${k}:${serialized}`;
+        out += `\n${indent}${yamlKey(k)}:${serialized}`;
       } else {
-        out += `\n${indent}${k}: ${serialized}`;
+        out += `\n${indent}${yamlKey(k)}: ${serialized}`;
       }
       void needsBlock;
     }
@@ -445,13 +504,13 @@ function serializeYamlObjectInline(obj: unknown, indent: string): string {
   const entries = Object.entries(obj).filter(([, v]) => !isEmpty(v));
   if (entries.length === 0) return '{}';
   const [firstKey, firstVal] = entries[0];
-  let out = `${firstKey}: ${serializeYamlValue(firstVal, indent)}`;
+  let out = `${yamlKey(firstKey)}: ${serializeYamlValue(firstVal, indent)}`;
   for (const [k, v] of entries.slice(1)) {
     const serialized = serializeYamlValue(v, indent);
     if (typeof v === 'object' && v !== null && !Array.isArray(v)) {
-      out += `\n${indent}${k}:${serialized.startsWith('\n') ? serialized : `\n${indent}  ${serialized}`}`;
+      out += `\n${indent}${yamlKey(k)}:${serialized.startsWith('\n') ? serialized : `\n${indent}  ${serialized}`}`;
     } else {
-      out += `\n${indent}${k}: ${serialized}`;
+      out += `\n${indent}${yamlKey(k)}: ${serialized}`;
     }
   }
   return out;
@@ -536,55 +595,71 @@ function buildFrontmatterBlock(task: JiraTaskData, selectedKeys: Set<string>): s
 
 function historyLabel(entry: JiraTaskData['history'][number]): string {
   if (entry.type === 'comment') return 'COMMENT';
-  if (entry.type === 'field_change') return `CHANGE (${entry.field})`;
+  if (entry.type === 'field_change') return `CHANGE (${toSingleLine(String(entry.field))})`;
   return 'STATUS CHANGE';
 }
 
-function buildTaskMarkdown(
+const formatDate = (value: string) => toSingleLine(new Date(value).toLocaleString());
+
+const renderUntrusted = (content: string, ctx: RenderContext) =>
+  wrapUntrusted(addFrameLinksToContent(content, ctx.frameCounts), ctx.nonce);
+
+function buildDescriptionSection(task: JiraTaskData, ctx: RenderContext): string {
+  if (!task.description?.trim()) return '';
+  return `## Description\n\n${renderUntrusted(task.description, ctx)}\n\n`;
+}
+
+function buildHistorySection(
   task: JiraTaskData,
-  taskDir: string,
-  selectedKeys: Set<string>,
-  options: Partial<ExportOptions> = {},
-  confluence?: {
-    section: string;
-    resolve: (ref: ConfluenceRef) => ResolvedConfluenceRef | undefined;
-  }
+  ctx: RenderContext,
+  options: Partial<ExportOptions>
 ): string {
-  const frontmatterBody = buildFrontmatterBlock(task, selectedKeys);
-  let md = `---\n${frontmatterBody}\n---\n\n# ${task.title}\n\n`;
-
-  if (task.description?.trim()) {
-    md += `## Description\n\n${addFrameLinksToContent(task.description, taskDir)}\n\n`;
-  }
-  if (confluence) md += confluence.section;
-
   const withStatusChanges = options.withStatusChanges ?? true;
   const withComments = options.withComments ?? true;
   const history = task.history.filter((entry) =>
     entry.type === 'comment' ? withComments : withStatusChanges
   );
+  if (history.length === 0) return '';
+  const entries = history.map(
+    (entry) =>
+      `---\n[${historyLabel(entry)}] ${toSingleLine(entry.author)} — ${formatDate(entry.date)}:\n` +
+      `${renderUntrusted(entry.content, ctx)}\n\n`
+  );
+  return `${withStatusChanges ? '## History' : '## Comments'}\n\n${entries.join('')}`;
+}
 
-  if (history.length > 0) {
-    md += withStatusChanges ? `## History\n\n` : `## Comments\n\n`;
-    for (const entry of history) {
-      const label = historyLabel(entry);
-      const date = new Date(entry.date).toLocaleString();
-      md += `---\n[${label}] ${entry.author} — ${date}:\n`;
-      md += `${addFrameLinksToContent(entry.content, taskDir)}\n\n`;
-    }
-  }
+function buildWorklogEntry(
+  worklog: NonNullable<JiraTaskData['worklogs']>[number],
+  ctx: RenderContext
+): string {
+  const header = `---\n[WORKLOG] ${toSingleLine(worklog.author)} — ${formatDate(worklog.started)}: ${toSingleLine(worklog.timeSpent)}\n`;
+  if (!worklog.comment) return `${header}\n`;
+  return `${header}${renderUntrusted(worklog.comment, ctx)}\n\n`;
+}
 
-  if (task.worklogs?.length) {
-    md += `## Worklog\n\n`;
-    for (const worklog of task.worklogs) {
-      const date = new Date(worklog.started).toLocaleString();
-      md += `---\n[WORKLOG] ${worklog.author} — ${date}: ${worklog.timeSpent}\n`;
-      if (worklog.comment) {
-        md += `${addFrameLinksToContent(worklog.comment, taskDir)}\n`;
-      }
-      md += `\n`;
-    }
-  }
+function buildWorklogSection(task: JiraTaskData, ctx: RenderContext): string {
+  if (!task.worklogs?.length) return '';
+  return `## Worklog\n\n${task.worklogs.map((worklog) => buildWorklogEntry(worklog, ctx)).join('')}`;
+}
+
+type ConfluenceRender = {
+  section: string;
+  resolve: (ref: ConfluenceRef) => ResolvedConfluenceRef | undefined;
+};
+
+function buildTaskMarkdown(
+  task: JiraTaskData,
+  ctx: RenderContext,
+  options: Partial<ExportOptions> = {},
+  confluence?: ConfluenceRender
+): string {
+  const frontmatterBody = buildFrontmatterBlock(task, ctx.selectedKeys);
+  let md =
+    `---\n${frontmatterBody}\n---\n\n${untrustedNotice(ctx.nonce)}\n\n# ${toSingleLine(task.title)}\n\n` +
+    buildDescriptionSection(task, ctx) +
+    (confluence?.section ?? '') +
+    buildHistorySection(task, ctx, options) +
+    buildWorklogSection(task, ctx);
 
   if (options.outputDir && options.localIssueLinks !== false) {
     md = linkLocalIssues(md, {
@@ -597,8 +672,118 @@ function buildTaskMarkdown(
   return md;
 }
 
+// The notice line directly under the frontmatter. Frontmatter values are escaped onto one line,
+// so Jira text cannot end the frontmatter early and plant a notice of its own.
+const NONCE_IN_NOTICE = /^---\r?\n[\s\S]*?\r?\n---\r?\n\r?\n> Text between `<<<jira-data ([0-9a-f]{16})>>>`/;
+
+/**
+ * The nonce of an earlier export of the same issue, so an unchanged issue re-exports to the
+ * same bytes (watch and the UI diff compare task.md with its previous copy). Only local files
+ * carry it, so reusing it does not let a Jira user predict the markers.
+ */
+function previousNonce(previous: string | null): string | undefined {
+  return previous ? NONCE_IN_NOTICE.exec(previous)?.[1] : undefined;
+}
+
+function durationSkipReason(probe: VideoDurationProbe, maxSeconds: number): string | undefined {
+  if (probe.status !== 'known') return undefined;
+  if (probe.seconds <= maxSeconds) return undefined;
+  return `video duration ${Math.round(probe.seconds)}s exceeds the ${maxSeconds}s limit`;
+}
+
+function prepareTaskDir(outputDir: string, taskDir: string): void {
+  mkdirSync(outputDir, { recursive: true });
+  ensureRealDirectory(taskDir);
+  assertRealPathInside(outputDir, taskDir);
+}
+
+const FRAME_ARTIFACT_RE = /^(frame-\d+|raw-(\d+|first|last))\.[a-z0-9]+$/i;
+
+function prepareFramesDir(framesDir: string): void {
+  assertNotSymlink(framesDir);
+  if (!entryExists(framesDir)) return;
+  if (!isRealDirectory(framesDir)) {
+    throw new Error(`Refusing to extract frames: ${framesDir} is not a directory`);
+  }
+  readdirSync(framesDir)
+    .filter((name) => FRAME_ARTIFACT_RE.test(name))
+    .forEach((name) => removeEntry(join(framesDir, name)));
+}
+
+function writeGitignore(outputDir: string): void {
+  const gitignorePath = join(outputDir, '.gitignore');
+  if (entryExists(gitignorePath)) return;
+  try {
+    writeFileSync(gitignorePath, '*\n', { encoding: 'utf-8', flag: 'wx' });
+  } catch (error) {
+    if (!isAlreadyExistsError(error)) throw error;
+  }
+}
+
+const isAlreadyExistsError = (error: unknown) =>
+  error instanceof Error && 'code' in error && error.code === 'EEXIST';
+
+const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+type VideoFrameSettings = {
+  fps: number;
+  quality: number;
+  maxFrames: number;
+  maxDurationSeconds?: number;
+};
+
+async function extractVideoFrames(
+  attPath: string,
+  attachmentsDir: string,
+  filename: string,
+  settings: VideoFrameSettings
+): Promise<VideoExtractionInfo> {
+  const maxSeconds = settings.maxDurationSeconds ?? DEFAULT_MAX_VIDEO_DURATION_SECONDS;
+  const skipReason = durationSkipReason(await readVideoDuration(attPath), maxSeconds);
+  if (skipReason) {
+    console.warn(`  ⚠ ${filename}: skipping frame extraction, ${skipReason}`);
+    return {
+      filename,
+      frameCount: 0,
+      dedupedCount: 0,
+      error: `Frame extraction skipped: ${skipReason}`,
+    };
+  }
+
+  const framesDir = resolveContainedPath(attachmentsDir, framesDirName(filename));
+  prepareFramesDir(framesDir);
+  console.log(
+    `  🎬 ${filename}: extracting frames (fps=${settings.fps}, max=${settings.maxFrames})...`
+  );
+  try {
+    const result = await extractFrames(attPath, framesDir, {
+      fps: settings.fps,
+      format: 'jpeg',
+      quality: settings.quality,
+      maxFrames: settings.maxFrames,
+    });
+    console.log(
+      `  ✓ ${filename}: extracted ${result.extractedCount} frames, kept ${result.keptCount}`
+    );
+    return { filename, frameCount: result.extractedCount, dedupedCount: result.keptCount };
+  } catch (error: unknown) {
+    const msg = errorMessage(error);
+    console.warn(`  ⚠ ${filename}: ${msg}`);
+    return { filename, frameCount: 0, dedupedCount: 0, error: msg };
+  }
+}
+
+function enqueueParent(queue: QueueEntry[], parentKey: string): void {
+  if (!isSafeIssueKey(parentKey)) {
+    console.warn(`Skipping parent with invalid issue key ${JSON.stringify(parentKey)}`);
+    return;
+  }
+  queue.push({ key: parentKey, requested: false });
+}
+
 export class JiraExporter {
   private client: JiraClient;
+
   private baseUrl: string;
   private config: JiraConfig;
   private apiToken: string;
@@ -640,6 +825,12 @@ export class JiraExporter {
       includeWorklog: options.withWorklog ?? false,
     });
 
+    if (!isSafeIssueKey(task.key)) {
+      throw new Error(
+        `Refusing to export: Jira returned an invalid issue key ${JSON.stringify(task.key)}`
+      );
+    }
+
     // On unless switched off: a sub-task (e.g. the FE part of a BE story) is not an
     // issue link, so without this it is missing from the export entirely.
     if (options.includeSubtasks !== false && resolved.friendlyKeys.includes('subtasks')) {
@@ -647,18 +838,30 @@ export class JiraExporter {
     }
 
     const taskDir = join(options.outputDir, task.key.toLowerCase());
-    const existed = existsSync(taskDir);
-    mkdirSync(taskDir, { recursive: true });
+    const existed = entryExists(taskDir);
+    prepareTaskDir(options.outputDir, taskDir);
 
-    const selectedKeys = new Set(resolved.friendlyKeys);
-    const taskMdPath = join(taskDir, 'task.md');
-    const previousContent = existsSync(taskMdPath) ? readFileSync(taskMdPath, 'utf-8') : null;
-    const linkedKeys = linkedIssueKeys(task, this.baseUrl);
+    const attachmentsDir = join(taskDir, ATTACHMENTS_DIR);
+    const attachmentNames = assignAttachmentFilenames(task.attachments);
+    const taskMdPath = join(taskDir, TASK_MD);
+    const previousContent = isRegularFile(taskMdPath) ? readFileSync(taskMdPath, 'utf-8') : null;
+    const linkedKeys = linkedIssueKeys(task, this.baseUrl).filter(isSafeIssueKey);
     // Linked issues about to be exported in this run already count as local copies.
     const writeOptions = context.expandLinks
       ? { ...options, batchKeys: [...(options.batchKeys ?? []), ...linkedKeys] }
       : options;
-    let markdown = buildTaskMarkdown(task, taskDir, selectedKeys, writeOptions);
+    const baseContext = {
+      selectedKeys: new Set(resolved.friendlyKeys),
+      nonce: previousNonce(previousContent) ?? createNonce(),
+    };
+    let confluenceRender: ConfluenceRender | undefined;
+    const render = () =>
+      buildTaskMarkdown(
+        task,
+        { ...baseContext, frameCounts: readFrameCounts(attachmentsDir, attachmentNames) },
+        writeOptions,
+        confluenceRender
+      );
 
     // Confluence pages the issue links to are exported first so task.md can link their copies.
     const confluence = context.confluence ?? this.confluenceRun(options);
@@ -669,93 +872,26 @@ export class JiraExporter {
       const remoteUrls = await Promise.resolve()
         .then(() => this.client.getRemoteLinkUrls(task.key))
         .catch(() => [] as string[]);
-      for (const ref of confluence.refsIn([markdown, ...remoteUrls].join('\n'))) {
+      for (const ref of confluence.refsIn([render(), ...remoteUrls].join('\n'))) {
         items.push(await confluence.fetch(ref, ref.url, task.key, writeOptions.batchKeys ?? []));
       }
       const resolve = (ref: ConfluenceRef) => confluence.resolve(ref, `../${CONFLUENCE_DIR}/`);
-      markdown = buildTaskMarkdown(task, taskDir, selectedKeys, writeOptions, {
-        section: confluenceSection(items, resolve),
-        resolve,
-      });
-    }
-    writeFileSync(taskMdPath, markdown, 'utf-8');
-
-    const videos: VideoExtractionInfo[] = [];
-    if (task.attachments.length > 0) {
-      const attachmentsDir = join(taskDir, 'attachments');
-      mkdirSync(attachmentsDir, { recursive: true });
-
-      const downloaded = new Set<string>();
-      const processedVideos = new Set<string>();
-
-      console.log(`  ↓ ${task.key}: downloading ${task.attachments.length} attachment(s)...`);
-
-      for (const att of task.attachments) {
-        let filename = att.filename;
-        let counter = 1;
-        while (downloaded.has(filename)) {
-          const dot = att.filename.lastIndexOf('.');
-          if (dot !== -1) {
-            filename = `${att.filename.substring(0, dot)}-${counter}${att.filename.substring(dot)}`;
-          } else {
-            filename = `${att.filename}-${counter}`;
-          }
-          counter++;
-        }
-        downloaded.add(filename);
-
-        const attPath = join(attachmentsDir, filename);
-        if (!existsSync(attPath)) {
-          await this.client.downloadAttachment(att.url, attPath);
-        }
-
-        if (
-          options.videoFrames?.enabled &&
-          isVideoFile(filename) &&
-          existsSync(attPath) &&
-          !processedVideos.has(`${task.key}:${att.id}`)
-        ) {
-          const framesDir = join(attachmentsDir, `${filename}-frames`);
-          const opts = { ...DEFAULT_VIDEO_OPTS, ...options.videoFrames };
-          console.log(
-            `  🎬 ${filename}: extracting frames (fps=${opts.fps}, max=${opts.maxFrames})...`
-          );
-          try {
-            const result = await extractFrames(attPath, framesDir, {
-              fps: opts.fps,
-              format: 'jpeg',
-              quality: opts.quality,
-              maxFrames: opts.maxFrames,
-            });
-            console.log(
-              `  ✓ ${filename}: extracted ${result.extractedCount} frames, kept ${result.keptCount}`
-            );
-            videos.push({
-              filename,
-              frameCount: result.extractedCount,
-              dedupedCount: result.keptCount,
-            });
-          } catch (error: unknown) {
-            const msg = error instanceof Error ? error.message : String(error);
-            console.warn(`  ⚠ ${filename}: ${msg}`);
-            videos.push({
-              filename,
-              frameCount: 0,
-              dedupedCount: 0,
-              error: msg,
-            });
-          }
-          processedVideos.add(`${task.key}:${att.id}`);
-        }
-      }
+      confluenceRender = { section: confluenceSection(items, resolve), resolve };
     }
 
-    const finalContent = readFileSync(taskMdPath, 'utf-8');
-    const updated = addFrameLinksToContent(finalContent, taskDir);
-    if (updated !== finalContent) writeFileSync(taskMdPath, updated, 'utf-8');
+    const initialContent = render();
+    writeFileAtomic(taskMdPath, initialContent);
+
+    const videos =
+      task.attachments.length > 0
+        ? await this.exportAttachments(task, attachmentsDir, attachmentNames, options)
+        : [];
+
+    const finalContent = render();
+    if (finalContent !== initialContent) writeFileAtomic(taskMdPath, finalContent);
     // Keep the replaced copy so a reader can diff what changed since the last export.
-    if (previousContent !== null && previousContent !== updated) {
-      writeFileSync(join(taskDir, '.task.previous.md'), previousContent, 'utf-8');
+    if (previousContent !== null && previousContent !== finalContent) {
+      writeFileAtomic(join(taskDir, '.task.previous.md'), previousContent);
     }
 
     return {
@@ -771,6 +907,45 @@ export class JiraExporter {
     };
   }
 
+  private async exportAttachments(
+    task: JiraTaskData,
+    attachmentsDir: string,
+    attachmentNames: readonly string[],
+    options: ExportOptions
+  ): Promise<VideoExtractionInfo[]> {
+    ensureRealDirectory(attachmentsDir);
+    console.log(`  ↓ ${task.key}: downloading ${task.attachments.length} attachment(s)...`);
+
+    const videos: VideoExtractionInfo[] = [];
+    const processedVideos = new Set<string>();
+
+    for (const [index, att] of task.attachments.entries()) {
+      const filename = attachmentNames[index];
+      const attPath = resolveContainedPath(attachmentsDir, filename);
+      await this.ensureAttachment(att.url, attPath);
+
+      const videoKey = `${task.key}:${att.id}`;
+      if (!options.videoFrames?.enabled || !isVideoFile(filename) || processedVideos.has(videoKey)) {
+        continue;
+      }
+      processedVideos.add(videoKey);
+      videos.push(
+        await extractVideoFrames(attPath, attachmentsDir, filename, {
+          ...DEFAULT_VIDEO_OPTS,
+          ...options.videoFrames,
+        })
+      );
+    }
+
+    return videos;
+  }
+
+  private async ensureAttachment(url: string, attPath: string): Promise<void> {
+    assertNotSymlink(attPath);
+    if (isRegularFile(attPath)) return;
+    await writeViaTempFile(attPath, (tempPath) => this.client.downloadAttachment(url, tempPath));
+  }
+
   async exportIssues(issueKeys: string[], options: ExportOptions): Promise<ExportResult> {
     const result: ExportResult = {
       imported: [],
@@ -781,14 +956,8 @@ export class JiraExporter {
     };
     const confluence = this.confluenceRun(options);
 
-    if (!existsSync(options.outputDir)) {
-      mkdirSync(options.outputDir, { recursive: true });
-    }
-
-    const gitignorePath = join(options.outputDir, '.gitignore');
-    if (!existsSync(gitignorePath)) {
-      writeFileSync(gitignorePath, '*\n', 'utf-8');
-    }
+    mkdirSync(options.outputDir, { recursive: true });
+    writeGitignore(options.outputDir);
 
     const seen = new Set<string>();
     const queue: QueueEntry[] = issueKeys.map((key) => ({ key, requested: true }));
@@ -835,7 +1004,7 @@ export class JiraExporter {
           attachmentCount: outcome.attachmentCount,
         });
         if (options.includeParent && outcome.parentKey) {
-          queue.push({ key: outcome.parentKey, requested: false });
+          enqueueParent(queue, outcome.parentKey);
         }
         if (expandLinks) {
           for (const linked of outcome.linkedKeys) {
@@ -844,7 +1013,7 @@ export class JiraExporter {
           }
         }
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
         options.onIssueFailed?.(key, { requested, via, error: message });
         if (!requested) {
           const what = via ? `linked issue (from ${via})` : 'parent';
@@ -859,7 +1028,7 @@ export class JiraExporter {
     // Linked issues that could not be fetched (or were cancelled) were already linked locally;
     // point those links back at Jira unless an earlier export left a local copy.
     const missing = [...failedLinked, ...result.cancelled].filter(
-      (key) => !existsSync(join(options.outputDir, key.toLowerCase(), 'task.md'))
+      (key) => !existsSync(join(options.outputDir, key.toLowerCase(), TASK_MD))
     );
     if (missing.length > 0) {
       for (const path of written) {
@@ -869,7 +1038,7 @@ export class JiraExporter {
           const local = `](../${key.toLowerCase()}/task.md)`;
           next = next.split(local).join(`](${this.baseUrl}/browse/${key})`);
         }
-        if (next !== content) writeFileSync(path, next, 'utf-8');
+        if (next !== content) writeFileAtomic(path, next);
       }
     }
 

@@ -1,5 +1,8 @@
 import { intro, outro, text, password, confirm, select, multiselect, isCancel, cancel, note } from '@clack/prompts';
-import { readFileSync } from 'fs';
+import { z } from 'zod';
+import { readTokenFromStdin } from '../stdin.js';
+import { baseUrlProblem } from '../../lib/baseUrl.js';
+import { VIDEO_FRAME_LIMITS, integerInRangeProblem, type IntegerRange } from '../../lib/configSchema.js';
 import {
   resolveConfigPath,
   readConfig,
@@ -33,6 +36,23 @@ function exitIfCancelled<T>(value: T | symbol): T {
 
 const ORG_NAME_RE = /^[a-zA-Z0-9_.-]+$/;
 const PROJECT_KEY_RE = /^[A-Z][A-Z0-9_]*$/;
+const DOMAIN_LABEL_RE = /^[a-z0-9-]+$/i;
+const emailSchema = z.email();
+
+function isValidEmail(value: string | undefined): value is string {
+  return emailSchema.safeParse(value).success;
+}
+
+function validateBaseUrlInput(value: string | undefined): string | undefined {
+  if (!value) return 'Required';
+  const problem = baseUrlProblem(value);
+  return problem ? `Base URL ${problem}` : undefined;
+}
+
+function validateFrameInput(range: IntegerRange) {
+  return (value: string | undefined): string | undefined =>
+    value ? integerInRangeProblem(value, range) : undefined;
+}
 
 async function promptOrg(existingOrgNames: string[]): Promise<{ name: string; isNew: boolean }> {
   if (existingOrgNames.length === 0) {
@@ -80,6 +100,27 @@ async function promptOrg(existingOrgNames: string[]): Promise<{ name: string; is
   return { name, isNew: true };
 }
 
+async function promptEmail(): Promise<string> {
+  return exitIfCancelled(
+    await text({
+      message:
+        'Jira account email\n\x1b[2mThe email you log into Jira with — used together with the API token for auth.\x1b[22m',
+      placeholder: 'you@example.com',
+      validate: (v) => (isValidEmail(v) ? undefined : 'Looks invalid'),
+    })
+  );
+}
+
+async function promptToken(): Promise<string> {
+  return exitIfCancelled(
+    await password({
+      message:
+        'Jira API token\n\x1b[2mCreate one at https://id.atlassian.com/manage-profile/security/api-tokens. Stored in your OS keychain.\x1b[22m',
+      validate: (v) => (v ? undefined : 'Required'),
+    })
+  );
+}
+
 async function promptOrgFields(name: string): Promise<{
   org: Organization;
   apiToken: string;
@@ -89,21 +130,11 @@ async function promptOrgFields(name: string): Promise<{
       message:
         'Jira base URL\n\x1b[2mThe full URL of your Jira Cloud workspace, including https://.\x1b[22m',
       placeholder: 'https://your-org.atlassian.net',
-      validate: (v) => {
-        if (!v) return 'Required';
-        if (!/^https?:\/\//.test(v)) return 'Must start with http(s)://';
-      },
+      validate: validateBaseUrlInput,
     })
   );
 
-  const userEmail = exitIfCancelled(
-    await text({
-      message:
-        'Jira account email\n\x1b[2mThe email you log into Jira with — used together with the API token for auth.\x1b[22m',
-      placeholder: 'you@example.com',
-      validate: (v) => (v && v.includes('@') ? undefined : 'Looks invalid'),
-    })
-  );
+  const userEmail = await promptEmail();
 
   const includeSubtasks = exitIfCancelled(
     await confirm({
@@ -129,6 +160,7 @@ async function promptOrgFields(name: string): Promise<{
           'Frame extraction FPS\n\x1b[2mHow many frames per second to sample from each video.\x1b[22m',
         defaultValue: '5',
         placeholder: '5',
+        validate: validateFrameInput(VIDEO_FRAME_LIMITS.fps),
       })
     );
     const maxFrames = exitIfCancelled(
@@ -137,6 +169,7 @@ async function promptOrgFields(name: string): Promise<{
           'Max frames kept per video\n\x1b[2mCap on frames kept per video — controls token cost.\x1b[22m',
         defaultValue: '10',
         placeholder: '10',
+        validate: validateFrameInput(VIDEO_FRAME_LIMITS.maxFrames),
       })
     );
     videoFrames = {
@@ -148,13 +181,7 @@ async function promptOrgFields(name: string): Promise<{
     videoFrames = { enabled: false };
   }
 
-  const apiToken = exitIfCancelled(
-    await password({
-      message:
-        'Jira API token\n\x1b[2mCreate one at https://id.atlassian.com/manage-profile/security/api-tokens. Stored in your OS keychain.\x1b[22m',
-      validate: (v) => (v ? undefined : 'Required'),
-    })
-  );
+  const apiToken = await promptToken();
 
   const org: Organization = {
     name,
@@ -211,7 +238,7 @@ async function promptProject(orgName: string, existingKeys: string[]): Promise<P
   return parsed.map((key) => ({ key, outputDir: dir }));
 }
 
-function isNonInteractive(opts: InitOptions): boolean {
+function hasSetupFlags(opts: InitOptions): boolean {
   return Boolean(
     opts.org || opts.baseUrl || opts.email || opts.project || opts.tokenStdin || opts.yes
   );
@@ -222,21 +249,46 @@ function domainLabelFromEmail(email: string): string {
   return domain.split('.')[0] ?? '';
 }
 
-function defaultBaseUrl(domainLabel: string): string {
+function defaultBaseUrl(email: string, domainLabel: string): string {
+  if (!DOMAIN_LABEL_RE.test(domainLabel)) {
+    throw new Error(
+      `Could not derive a Jira base URL from "${email}". Pass --base-url explicitly (e.g. https://your-org.atlassian.net).`
+    );
+  }
   return `https://${domainLabel}.atlassian.net`;
 }
 
-function readTokenFromStdinOrEnv(opts: InitOptions): string {
+function assertValidBaseUrlFlag(baseUrl: string): void {
+  const problem = baseUrlProblem(baseUrl);
+  if (problem) throw new Error(`Invalid --base-url "${baseUrl}": ${problem}.`);
+}
+
+function resolveBaseUrl(opts: InitOptions, email: string, domainLabel: string): string {
+  if (opts.baseUrl === undefined) return defaultBaseUrl(email, domainLabel);
+  assertValidBaseUrlFlag(opts.baseUrl);
+  return opts.baseUrl;
+}
+
+const TOKEN_PIPE_EXAMPLE = '`pbpaste | jirallm init … --token-stdin`';
+
+async function resolveToken(opts: InitOptions): Promise<string> {
   if (opts.tokenStdin) {
-    const raw = readFileSync(0, 'utf-8').trim();
-    if (!raw) throw new Error('--token-stdin was set but no token was received on stdin.');
-    return raw;
+    return readTokenFromStdin({ example: TOKEN_PIPE_EXAMPLE, fallback: 'be prompted for it' });
   }
   const env = process.env.JIRALLM_API_TOKEN?.trim();
   if (env) return env;
+  if (process.stdin.isTTY) return promptToken();
   throw new Error(
-    'No API token provided. Pass --token-stdin (piping the token) or set JIRALLM_API_TOKEN.'
+    `No API token provided. Pipe it with --token-stdin (e.g. ${TOKEN_PIPE_EXAMPLE}) or set JIRALLM_API_TOKEN.`
   );
+}
+
+async function resolveEmail(email: string | undefined): Promise<string> {
+  if (email === undefined && process.stdin.isTTY) return promptEmail();
+  if (!isValidEmail(email)) {
+    throw new Error('Non-interactive init requires a valid --email.');
+  }
+  return email;
 }
 
 async function validateCredentials(config: JiraConfig, apiToken: string): Promise<void> {
@@ -255,18 +307,15 @@ function normalizeProjectKey(input: string): string {
 }
 
 export async function runInit(opts: InitOptions = {}): Promise<void> {
-  if (isNonInteractive(opts)) {
-    await runInitNonInteractive(opts);
+  if (hasSetupFlags(opts)) {
+    await runInitFromFlags(opts);
     return;
   }
   await runInitInteractive();
 }
 
-async function runInitNonInteractive(opts: InitOptions): Promise<void> {
-  const email = opts.email;
-  if (!email || !email.includes('@')) {
-    throw new Error('Non-interactive init requires a valid --email.');
-  }
+async function runInitFromFlags(opts: InitOptions): Promise<void> {
+  const email = await resolveEmail(opts.email);
 
   const domainLabel = domainLabelFromEmail(email);
   const orgName = opts.org ?? domainLabel;
@@ -276,13 +325,10 @@ async function runInitNonInteractive(opts: InitOptions): Promise<void> {
     );
   }
 
-  const baseUrl = opts.baseUrl ?? defaultBaseUrl(domainLabel);
-  if (!/^https?:\/\//.test(baseUrl)) {
-    throw new Error(`Invalid --base-url "${baseUrl}". Must start with http(s)://.`);
-  }
+  const baseUrl = resolveBaseUrl(opts, email, domainLabel);
 
   const projectKey = opts.project ? normalizeProjectKey(opts.project) : undefined;
-  const apiToken = readTokenFromStdinOrEnv(opts);
+  const apiToken = await resolveToken(opts);
 
   await validateCredentials({ baseUrl, userEmail: email }, apiToken);
 

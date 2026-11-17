@@ -1,4 +1,5 @@
 import { jiraIssueKeyFromUrl } from './issueLinks.js';
+import { assignAttachmentFilenames, sanitizeAttachmentFilename } from './safePath.js';
 
 export type JiraADFContent = {
   type: string;
@@ -99,6 +100,37 @@ const renderExtension = (node: JiraADFContent): string => {
   }
   return `*[Confluence macro: ${macroTitle(node)}]*`;
 };
+const MIN_FENCE_LENGTH = 3;
+const SAFE_CODE_LANGUAGE = /^[A-Za-z0-9_+#.-]{1,32}$/;
+const HEADING_LEVEL = { min: 1, max: 6 } as const;
+const UNSAFE_MEDIA_ID_CHARS = /[^A-Za-z0-9_-]/g;
+
+const longestBacktickRun = (text: string) =>
+  (text.match(/`+/g) ?? []).reduce((longest, run) => Math.max(longest, run.length), 0);
+
+const codeFence = (body: string) =>
+  '`'.repeat(Math.max(MIN_FENCE_LENGTH, longestBacktickRun(body) + 1));
+
+const safeCodeLanguage = (language: unknown) =>
+  typeof language === 'string' && SAFE_CODE_LANGUAGE.test(language) ? language : '';
+
+const clampHeadingLevel = (level: unknown) => {
+  if (typeof level !== 'number' || !Number.isFinite(level)) return HEADING_LEVEL.min;
+  return Math.min(HEADING_LEVEL.max, Math.max(HEADING_LEVEL.min, Math.trunc(level)));
+};
+
+const safeMediaId = (id: unknown) =>
+  typeof id === 'string' ? id.replace(UNSAFE_MEDIA_ID_CHARS, '') : '';
+
+function firstSavedNameByFilename(
+  attachments: ReadonlyArray<{ filename: string; savedName: string }>
+): Map<string, string> {
+  const byFilename = new Map<string, string>();
+  for (const att of attachments) {
+    if (!byFilename.has(att.filename)) byFilename.set(att.filename, att.savedName);
+  }
+  return byFilename;
+}
 
 /**
  * Converts a Jira ADF document to Markdown.
@@ -118,22 +150,27 @@ export function convertADFToMarkdown(
 
   const topLevelNodes = childNodesOf(content) ?? [];
 
-  const filenameSet = new Set(attachments.map((att) => att.filename));
+  const savedNames = assignAttachmentFilenames(attachments);
+  const savedAttachments = attachments.map((att, index) => ({
+    ...att,
+    savedName: savedNames[index],
+  }));
+  const savedNameByFilename = firstSavedNameByFilename(savedAttachments);
   // Confluence media reference their attachment by file id.
-  const filenameById = new Map(attachments.map((att) => [att.id, att.filename]));
+  const byId = new Map(savedAttachments.map((att) => [att.id, att]));
   const altMatchedFilenames = new Set<string>();
   const collectAltMatches = (node: JiraADFContent) => {
     if (node.type === 'media' || node.type === 'mediaInline') {
-      const byId = node.attrs?.id ? filenameById.get(node.attrs.id) : undefined;
-      if (byId) altMatchedFilenames.add(byId);
-      else if (node.attrs?.alt && filenameSet.has(node.attrs.alt)) {
+      const matchedById = node.attrs?.id ? byId.get(node.attrs.id) : undefined;
+      if (matchedById) altMatchedFilenames.add(matchedById.filename);
+      else if (node.attrs?.alt && savedNameByFilename.has(node.attrs.alt)) {
         altMatchedFilenames.add(node.attrs.alt);
       }
     }
     childNodesOf(node)?.forEach(collectAltMatches);
   };
   topLevelNodes.forEach(collectAltMatches);
-  const unmatchedAttachments = attachments.filter(
+  const unmatchedAttachments = savedAttachments.filter(
     (att) => !altMatchedFilenames.has(att.filename)
   );
 
@@ -184,16 +221,15 @@ export function convertADFToMarkdown(
     const children = childNodesOf(node);
 
     if ((node.type === 'media' || node.type === 'mediaInline') && node.attrs) {
-      const byId = node.attrs.id ? filenameById.get(node.attrs.id) : undefined;
-      if (byId) return formatMediaLink(byId);
+      const matchedById = node.attrs.id ? byId.get(node.attrs.id) : undefined;
+      if (matchedById) return formatMediaLink(matchedById.savedName);
       const filename = node.attrs.alt;
-      if (filename && filenameSet.has(filename)) return formatMediaLink(filename);
-      if (unmatchedAttachments.length > 0) {
-        const att = unmatchedAttachments.shift()!;
-        return formatMediaLink(att.filename);
-      }
-      if (filename) return formatMediaLink(filename);
-      const mediaId = node.attrs.id;
+      const matchedName = filename ? savedNameByFilename.get(filename) : undefined;
+      if (matchedName) return formatMediaLink(matchedName);
+      const nextUnmatched = unmatchedAttachments.shift();
+      if (nextUnmatched) return formatMediaLink(nextUnmatched.savedName);
+      if (filename) return formatMediaLink(sanitizeAttachmentFilename(filename, node.attrs.id));
+      const mediaId = safeMediaId(node.attrs.id);
       return mediaId ? `![embedded media](media/${mediaId})` : '![embedded media]()';
     }
 
@@ -213,8 +249,8 @@ export function convertADFToMarkdown(
     }
 
     if ((node.type === 'inlineCard' || node.type === 'blockCard') && node.attrs?.url) {
-      const matched = attachments.find((att) => att.url && node.attrs!.url!.includes(att.id));
-      if (matched) return `[${matched.filename}](attachments/${matched.filename})`;
+      const matched = savedAttachments.find((att) => att.url && node.attrs!.url!.includes(att.id));
+      if (matched) return `[${matched.savedName}](attachments/${matched.savedName})`;
       // Jira issue smart links: `[ZOD-123](url)`, which the exporter can repoint at a local copy.
       const issueKey = jiraIssueKeyFromUrl(node.attrs.url);
       if (issueKey) return `[${issueKey}](${node.attrs.url})`;
@@ -242,15 +278,16 @@ export function convertADFToMarkdown(
     }
 
     if (node.type === 'heading' && children) {
-      const level = node.attrs?.level ?? 1;
+      const level = clampHeadingLevel(node.attrs?.level);
       const childContent = children.map((child) => extractText(child)).join('');
       return '#'.repeat(level) + ' ' + childContent;
     }
 
     if (node.type === 'codeBlock') {
-      const lang = node.attrs?.language ?? '';
+      const lang = safeCodeLanguage(node.attrs?.language);
       const childContent = children?.map((child) => extractText(child)).join('') ?? '';
-      return '```' + lang + '\n' + childContent + '\n```';
+      const fence = codeFence(childContent);
+      return fence + lang + '\n' + childContent + '\n' + fence;
     }
 
     if (node.type === 'blockquote' && children) {

@@ -139,7 +139,7 @@ describe('runDeleteComment', () => {
 describe('runComment', () => {
   it('uses English chunk headers with (reply) marker', async () => {
     const body = 'first paragraph here.\n\nsecond paragraph here.';
-    await runComment('PROJ-1', { text: body, noWiki: true, maxChars: '25', replyTo: 'root-9' });
+    await runComment('PROJ-1', { text: body, noWiki: true, maxChars: '25', replyTo: '10009' });
     const bodies = addCommentMock.mock.calls.map((c) => c[1] as string);
     expect(bodies.length).toBeGreaterThan(1);
     expect(bodies[0]).toContain('_Part 1/');
@@ -436,6 +436,60 @@ describe('runEditComment', () => {
       text: 'Po poprawce',
       marks: [{ type: 'em' }],
     });
+  });
+});
+
+describe('comment body from a terminal stdin (issue #28: EAGAIN class)', () => {
+  const originalStdinIsTTY = process.stdin.isTTY;
+
+  afterEach(() => {
+    Object.defineProperty(process.stdin, 'isTTY', { value: originalStdinIsTTY, configurable: true });
+  });
+
+  it.each([
+    ['comment', () => runComment('PROJ-1', {})],
+    ['comment:edit', () => runEditComment('PROJ-1', '55', {})],
+  ])('%s without --text/--file on a TTY fails with a one-line hint and calls no Jira API', async (_label, run) => {
+    Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
+
+    await expect(run()).rejects.toThrow(
+      'stdin is a terminal — pass --text or --file, or pipe the body (e.g. `cat note.md | jirallm comment PROJ-123`).'
+    );
+    expect(addCommentMock).not.toHaveBeenCalled();
+    expect(getCommentMock).not.toHaveBeenCalled();
+    expect(updateCommentMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('comment id validation', () => {
+  const TRAVERSAL_ID = '../../issue/PROJ-9?deleteSubtasks=true';
+
+  it.each([
+    ['comment:rm', () => runDeleteComment('PROJ-1', TRAVERSAL_ID, { yes: true })],
+    ['comment:rm --dry-run', () => runDeleteComment('PROJ-1', TRAVERSAL_ID, { dryRun: true })],
+    ['comment:edit', () => runEditComment('PROJ-1', TRAVERSAL_ID, { text: 'x' })],
+    ['comment:edit --dry-run', () => runEditComment('PROJ-1', TRAVERSAL_ID, { text: 'x', dryRun: true })],
+  ])('%s rejects a traversal-shaped comment id without calling Jira', async (_label, run) => {
+    await expect(run()).rejects.toThrow(
+      `Invalid comment id "${TRAVERSAL_ID}". Expected a numeric id`
+    );
+    expect(getCommentMock).not.toHaveBeenCalled();
+    expect(updateCommentMock).not.toHaveBeenCalled();
+    expect(deleteCommentMock).not.toHaveBeenCalled();
+    expect(logs).toEqual([]);
+  });
+
+  it.each([['root-9'], ['1/../2'], [' 5']])('comment rejects a non-numeric --reply-to %j', async (replyTo) => {
+    await expect(runComment('PROJ-1', { text: 'hi', replyTo, dryRun: true })).rejects.toThrow(
+      /Invalid --reply-to comment id/
+    );
+    expect(addCommentMock).not.toHaveBeenCalled();
+    expect(logs).toEqual([]);
+  });
+
+  it('threads a numeric --reply-to onto the first posted chunk', async () => {
+    await runComment('PROJ-1', { text: 'hi', noWiki: true, replyTo: '10001' });
+    expect(addCommentMock).toHaveBeenCalledWith('PROJ-1', 'hi', '10001');
   });
 });
 
