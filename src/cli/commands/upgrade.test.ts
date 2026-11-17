@@ -211,7 +211,7 @@ describe('runUpgrade', () => {
 });
 
 describe('moveLockedNativeFiles', () => {
-  it('moves sharp files of an installed copy on Windows only', () => {
+  it('moves native files of an installed copy and its leftover npm backups, on Windows only', () => {
     const base = mkdtempSync(path.join(tmpdir(), 'jl-upg-'));
     const root = path.join(base, 'node_modules', 'jirallm');
     const lib = path.join(root, 'node_modules', '@img', 'sharp-win32-x64', 'lib');
@@ -219,7 +219,16 @@ describe('moveLockedNativeFiles', () => {
     writeFileSync(path.join(lib, 'libvips-42.dll'), '');
     expect(moveLockedNativeFiles(root, 'linux')).toBe(0);
     expect(moveLockedNativeFiles(base, 'win32')).toBe(0);
-    expect(moveLockedNativeFiles(root, 'win32')).toBe(1);
+    const keyring = path.join(root, 'node_modules', '@napi-rs', 'keyring-win32-x64-msvc');
+    mkdirSync(keyring, { recursive: true });
+    writeFileSync(path.join(keyring, 'keyring.win32-x64-msvc.node'), '');
+    writeFileSync(path.join(keyring, 'index.js'), '');
+    const backup = path.join(base, 'node_modules', '.jirallm-abc', 'node_modules', 'x');
+    mkdirSync(backup, { recursive: true });
+    writeFileSync(path.join(backup, 'x.node'), '');
+    expect(moveLockedNativeFiles(root, 'win32')).toBe(3);
     expect(readdirSync(lib)).toEqual([]);
+    expect(readdirSync(keyring)).toEqual(['index.js']);
+    expect(readdirSync(path.join(base, 'node_modules'))).toEqual(['jirallm']);
   });
 });

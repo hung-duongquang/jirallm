@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
@@ -48,24 +48,59 @@ function readPackageMeta(): { name: string; version: string } {
 /** The installed package's root (dist/cli/commands/upgrade.js → ../../..). */
 const packageRoot = () => path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
+/** Native modules and libraries (*.node, *.dll) under `dir`. */
+function nativeFiles(dir: string): string[] {
+  const found: string[] = [];
+  const walk = (d: string) => {
+    let entries;
+    try {
+      entries = readdirSync(d, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (/\.(node|dll)$/i.test(e.name)) found.push(p);
+    }
+  };
+  walk(dir);
+  return found;
+}
+
 /**
- * Windows: a running jirallm older than 0.40.4 loaded sharp at start (a watch, `jirallm resume`, a
- * `changes --follow`), and its DLLs stay locked, so npm fails with EBUSY replacing the install. A loaded
- * DLL can still be moved within the drive: they go to a temp folder, and the old process keeps using them.
+ * Windows: a running jirallm (a watch, `jirallm resume`, a `changes --follow`) keeps its native modules
+ * loaded (the keyring; sharp before 0.40.4), and npm fails with EBUSY replacing the install. A loaded
+ * file can still be moved within the drive: they go to a temp folder, and the old process keeps using
+ * them. The same goes for npm's backup folders (`.jirallm-*`) a failed install left, which npm reuses;
+ * those are removed once emptied of locked files.
  */
 export function moveLockedNativeFiles(root: string = packageRoot(), platform: string = process.platform): number {
-  const lib = path.join(root, 'node_modules', '@img', 'sharp-win32-x64', 'lib');
+  const parent = path.dirname(root);
   // Only an installed copy (<global>/node_modules/jirallm), never a source checkout's dependencies.
-  if (platform !== 'win32' || path.basename(path.dirname(root)) !== 'node_modules' || !existsSync(lib)) return 0;
+  if (platform !== 'win32' || path.basename(parent) !== 'node_modules') return 0;
+  let backups: string[] = [];
+  try {
+    backups = readdirSync(parent).filter((d) => d.startsWith(`.${path.basename(root)}-`)).map((d) => path.join(parent, d));
+  } catch {
+    // No backups.
+  }
   const park = path.join(os.tmpdir(), 'jirallm-locked-dlls', String(Date.now()));
   let moved = 0;
-  for (const f of readdirSync(lib)) {
+  for (const file of [root, ...backups].flatMap((d) => nativeFiles(path.join(d, 'node_modules')))) {
     try {
       mkdirSync(park, { recursive: true });
-      renameSync(path.join(lib, f), path.join(park, f));
+      renameSync(file, path.join(park, `${moved}-${path.basename(file)}`));
       moved++;
     } catch {
       // npm reports what still blocks it.
+    }
+  }
+  for (const b of backups) {
+    try {
+      rmSync(b, { recursive: true, force: true });
+    } catch {
+      // npm reports it if it matters.
     }
   }
   return moved;
