@@ -14,7 +14,7 @@ import {
 } from '../../lib/config.js';
 import { setToken } from '../../lib/credentials.js';
 import { JiraClient, type JiraConfig } from '../../lib/jiraClient.js';
-import { checkFfmpeg } from 'framewise';
+import { checkFfmpeg } from '../../lib/framewise.js';
 import { detectOS, hasHomebrew } from '../../lib/platform.js';
 
 export type InitOptions = {

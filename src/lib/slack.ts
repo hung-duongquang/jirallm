@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { extractFrames, isVideoFile } from 'framewise';
+import { extractFrames, isVideoFile } from './framewise.js';
 import { getSecret } from './credentials.js';
 
 export const SLACK_TOKEN_ACCOUNT = 'slack:token';

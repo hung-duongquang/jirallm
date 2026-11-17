@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { resolveFfmpegBinary } from 'framewise';
+import { resolveFfmpegBinary } from './framewise.js';
 import type { ImageSize } from './imageSize.js';
 
 const execFileAsync = promisify(execFile);

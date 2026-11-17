@@ -15,7 +15,7 @@ import {
   type ConfluenceRef,
   type ResolvedConfluenceRef,
 } from './confluenceLinks.js';
-import { extractFrames, isVideoFile } from 'framewise';
+import { extractFrames, isVideoFile } from './framewise.js';
 import {
   resolveFieldSet,
   type CustomFieldDefs,

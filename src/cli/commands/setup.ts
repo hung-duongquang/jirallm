@@ -1,5 +1,5 @@
 import { intro, outro, confirm, note, isCancel, cancel } from '@clack/prompts';
-import { checkFfmpeg, resolveFfmpegBinary } from 'framewise';
+import { checkFfmpeg, resolveFfmpegBinary } from '../../lib/framewise.js';
 import {
   detectJsPackageManagerFromUserAgent,
   detectOS,

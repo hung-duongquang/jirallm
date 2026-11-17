@@ -1,6 +1,6 @@
 {
   "name": "jirallm",
-  "version": "0.40.3",
+  "version": "0.40.4",
   "description": "Export Jira issues as LLM-ready context bundles — markdown, attachments, video frames",
   "type": "module",
   "main": "dist/index.js",

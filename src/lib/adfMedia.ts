@@ -1,4 +1,4 @@
-import { isVideoFile } from 'framewise';
+import { isVideoFile } from './framewise.js';
 import { readImageSize, type ImageSize } from './imageSize.js';
 import { readVideoSize } from './videoSize.js';
 

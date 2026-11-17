@@ -13,7 +13,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('framewise', () => ({
+vi.mock('./framewise.js', () => ({
   isVideoFile: vi.fn(() => false),
   extractFrames: vi.fn(),
 }));
@@ -22,7 +22,7 @@ vi.mock('./videoSize.js', () => ({
   readVideoDuration: vi.fn(async () => ({ status: 'known', seconds: 10 })),
 }));
 
-import { extractFrames, isVideoFile } from 'framewise';
+import { extractFrames, isVideoFile } from './framewise.js';
 import { JiraExporter } from './exporter.js';
 import type { JiraTaskData } from './jiraClient.js';
 import { readVideoDuration } from './videoSize.js';

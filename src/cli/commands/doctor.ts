@@ -1,5 +1,5 @@
 import { intro, outro, note } from '@clack/prompts';
-import { checkFfmpeg, resolveFfmpegBinary } from 'framewise';
+import { checkFfmpeg, resolveFfmpegBinary } from '../../lib/framewise.js';
 import { detectOS, getFfmpegInstallHint } from '../../lib/platform.js';
 import {
   readConfig,
