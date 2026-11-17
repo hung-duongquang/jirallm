@@ -23,6 +23,7 @@ import {
   threadTitle,
 } from '../../lib/slack.js';
 import { printJson } from '../jsonOutput.js';
+import { readTask } from './state.js';
 import { logChanges } from './watch.js';
 
 export type SlackOptions = {
@@ -39,10 +40,33 @@ export type SlackOptions = {
   title?: boolean;
 };
 
-/** One line naming the thread, most telling part first: `<first line of its first message> · #channel`. */
+/**
+ * One line naming the thread, most telling part first: `<first line of its first message> · #channel`.
+ * A group DM's channel name lists everyone (mpdm-a--b--c-1), which only pushes the title out of sight.
+ */
 export function slackTitleLine(channelName: string | undefined, title: string): string {
-  const where = !channelName ? '' : channelName === 'direct message' ? ' · DM' : ` · #${channelName}`;
+  const where = !channelName
+    ? ''
+    : channelName === 'direct message'
+      ? ' · DM'
+      : channelName.startsWith('mpdm-')
+        ? ' · group DM'
+        : ` · #${channelName}`;
   return `${title}${where}`;
+}
+
+const TICKET_LINK = /^(?:https?:\/\/)?[\w.-]+\/browse\/([A-Z][A-Z0-9]+-\d+)\S*$/;
+
+/**
+ * A thread that opens with nothing but a ticket link is named after the ticket: "ZOD-4243 <summary>"
+ * from its export when there is one, else "ZOD-4243". Otherwise two such threads both read
+ * "topicushealthcare.atlassian.net/browse/…" in /resume.
+ */
+export function ticketThreadTitle(title: string, outputDir: string | undefined): string {
+  const key = TICKET_LINK.exec(title)?.[1];
+  if (!key) return title;
+  const summary = outputDir ? readTask(path.join(outputDir, key.toLowerCase(), 'task.md'))?.title : undefined;
+  return summary ? `${key} ${summary}` : key;
 }
 
 /**
@@ -52,7 +76,8 @@ export function slackTitleLine(channelName: string | undefined, title: string): 
 export async function runSlack(url: string, opts: SlackOptions): Promise<void> {
   if (opts.title) {
     const { channelName, messages, names } = await loadSlackThread(url, undefined, { channel: false });
-    console.log(slackTitleLine(channelName, threadTitle(messages, names)));
+    const title = ticketThreadTitle(threadTitle(messages, names), opts.outputDir ?? workspaceOutputDir());
+    console.log(slackTitleLine(channelName, title));
     return;
   }
   if (opts.outputDir && !opts.json) {

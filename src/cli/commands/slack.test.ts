@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { exportSlackThread, SlackClient } from '../../lib/slack.js';
-import { refreshAfterRead, runSlackSearch, slackTitleLine, workspaceOutputDir } from './slack.js';
+import { refreshAfterRead, runSlackSearch, slackTitleLine, ticketThreadTitle, workspaceOutputDir } from './slack.js';
 import { changesReport, seenMarkerPath } from './watch.js';
 
 describe('slackTitleLine', () => {
@@ -18,6 +18,18 @@ describe('slackTitleLine', () => {
     expect(slackTitleLine('healthcare-claim-invoicing', 'ZOD-3165 export')).toBe('ZOD-3165 export · #healthcare-claim-invoicing');
     expect(slackTitleLine('direct message', 'hi')).toBe('hi · DM');
     expect(slackTitleLine(undefined, 'hi')).toBe('hi');
+    expect(slackTitleLine('mpdm-trung--hung--linh-1', 'hi')).toBe('hi · group DM');
+  });
+});
+
+describe('ticketThreadTitle', () => {
+  it('names a thread that opens with only a ticket link after the ticket', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'jl-title-'));
+    mkdirSync(path.join(dir, 'zod-4243'));
+    writeFileSync(path.join(dir, 'zod-4243', 'task.md'), '---\nkey: "ZOD-4243"\n---\n\n# Allow the regression job\n');
+    expect(ticketThreadTitle('topicushealthcare.atlassian.net/browse/ZOD-4243', dir)).toBe('ZOD-4243 Allow the regression job');
+    expect(ticketThreadTitle('https://x.atlassian.net/browse/ZOD-9', dir)).toBe('ZOD-9');
+    expect(ticketThreadTitle('Please check ZOD-4243', dir)).toBe('Please check ZOD-4243');
   });
 });
 
