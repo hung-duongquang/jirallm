@@ -31,6 +31,24 @@ describe('prompt hook', () => {
     promptHook(env, 'look at ZOD-1 please');
     expect(readFileSync(path.join(sessions, 's1.keys'), 'utf8')).toBe('ZOD-1');
   });
+
+  it('follows the PR and ticket an exported Slack thread names, not those of channel messages outside it', () => {
+    const { project, sessions, env } = workspace();
+    const dir = path.join(project, 'jira-export', 'slack', 'c1-1700000000000001');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      path.join(dir, 'thread.md'),
+      [
+        '---', 'slack:', '  title: "x"', '---',
+        '## Trung · 2026-11-17 14:38', '', 'resolve the comments in this PR (ZOD-1)',
+        '[github.com/o/r/pull/3270#…](https://github.com/o/r/pull/3270#pullrequestreview-1)', '',
+        '# In the channel, outside the thread', '', 'unrelated https://github.com/o/r/pull/9999',
+      ].join('\n')
+    );
+    promptHook(env, 'https://ws.slack.com/archives/C1/p1700000000000001');
+    expect(readFileSync(path.join(sessions, 's1.follow'), 'utf8').split('\n')).toEqual(['slack/c1-1700000000000001', 'pr/3270']);
+    expect(readFileSync(path.join(sessions, 's1.keys'), 'utf8')).toBe('ZOD-1');
+  });
 });
 
 describe('monitor', () => {

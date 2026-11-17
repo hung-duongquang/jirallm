@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { intro, outro, password, isCancel, cancel } from '@clack/prompts';
@@ -38,6 +38,8 @@ export type SlackOptions = {
   since?: string;
   /** Print only `<thread title> · #channel` (the plugin's prompt hook names Claude Code sessions with it). */
   title?: boolean;
+  /** Claude Code session that reads the thread (default: $CLAUDE_CODE_SESSION_ID): it follows the PRs and tickets the thread names. */
+  session?: string;
 };
 
 /**
@@ -80,14 +82,18 @@ export async function runSlack(url: string, opts: SlackOptions): Promise<void> {
     console.log(slackTitleLine(channelName, title));
     return;
   }
+  const session = opts.session ?? process.env.CLAUDE_CODE_SESSION_ID;
   if (opts.outputDir && !opts.json) {
-    const thread = await exportSlackThread(url, { outputDir: opts.outputDir, files: opts.files, channel: opts.channel, frames: opts.frames });
+    const loaded = await loadSlackThread(url, undefined, { channel: opts.channel });
+    const thread = await exportSlackThread(url, { outputDir: opts.outputDir, files: opts.files, channel: opts.channel, frames: opts.frames, loaded });
+    followThreadRefs(loaded.messages.map((m) => m.text ?? ''), opts.outputDir, session);
     for (const err of thread.fileErrors) console.error(`# ${err}`);
     console.log(thread.path);
     return;
   }
   const loaded = await loadSlackThread(url, undefined, { channel: opts.channel });
   const { link, url: messageUrl, channelName, messages, channelMessages, names } = loaded;
+  followThreadRefs(messages.map((m) => m.text ?? ''), workspaceOutputDir(session), session);
   if (opts.json) {
     printJson({ link, channelName, users: Object.fromEntries(names), messages, channelMessages });
   } else {
@@ -98,6 +104,48 @@ export async function runSlack(url: string, opts: SlackOptions): Promise<void> {
 }
 
 const SESSION_ID = /^[\w-]{1,100}$/;
+const MAX_THREAD_KEYS = 3;
+
+/**
+ * A Slack thread given to a session often only points at the work ("resolve the comments in this PR"
+ * with the PR link in the message), and a prompt that is just the thread's link names neither. The
+ * session then follows the PRs linked in the thread's messages and the tickets they name (of projects
+ * with exported tickets, at most 3 new ones), as if the prompt had named them, so their CI, reviews and
+ * Jira changes reach it. Channel messages outside the thread are left out: they can be unrelated.
+ */
+export function followThreadRefs(
+  texts: string[],
+  outputDir: string | undefined,
+  session: string | undefined,
+  sessionsDir = path.join(os.tmpdir(), 'jirallm-sessions')
+): void {
+  if (!session || !SESSION_ID.test(session)) return;
+  const text = texts.join('\n');
+  const prs = [...new Set([...text.matchAll(/github\.com\/[\w.-]+\/[\w.-]+\/pull\/(\d+)/g)].map((m) => `pr/${m[1]}`))];
+  let projects = new Set<string>();
+  try {
+    if (outputDir) projects = new Set(readdirSync(outputDir).map((f) => /^([a-z][a-z0-9]*)-\d+$/.exec(f)?.[1]).filter((p): p is string => !!p));
+  } catch {
+    // No export folder: no keys.
+  }
+  const keys = [...new Set(text.match(/\b[A-Z][A-Z0-9]+-\d+\b/g) ?? [])].filter((k) => projects.has(k.split('-')[0]!.toLowerCase()));
+  const add = (file: string, items: string[], max = Infinity) => {
+    if (!items.length) return;
+    const p = path.join(sessionsDir, `${session}.${file}`);
+    const had = existsSync(p) ? readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
+    const fresh = items.filter((i) => !had.includes(i)).slice(0, max);
+    if (fresh.length) {
+      mkdirSync(sessionsDir, { recursive: true });
+      writeFileSync(p, [...had, ...fresh].join('\n'));
+    }
+  };
+  try {
+    add('follow', prs);
+    add('keys', keys, MAX_THREAD_KEYS);
+  } catch {
+    // Following is a bonus.
+  }
+}
 
 /**
  * The workspace's export folder: the project of this Claude Code session (its handshake in

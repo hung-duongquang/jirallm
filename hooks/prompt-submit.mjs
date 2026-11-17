@@ -141,14 +141,48 @@ function followLinks(prompt, sessionId) {
     const item = `pr/${m[1] ?? m[2]}`;
     if (!followed.includes(item) && !added.includes(item)) added.push(item);
   }
+  const threadKeys = [];
   for (const { item, url, command, exported } of links) {
     if (followed.includes(item) || added.includes(item)) continue;
     added.push(item);
-    if (!exported()) jirallmDetached([command, url, '--output-dir', outputDir]);
+    if (command !== 'slack') {
+      if (!exported()) jirallmDetached([command, url, '--output-dir', outputDir]);
+    } else if (!exported()) {
+      // The export also makes this session follow the PRs and tickets the thread names (--session).
+      jirallmDetached([command, url, '--output-dir', outputDir, '--session', sessionId]);
+    } else {
+      // Already exported (watch found it): the same from the local copy, without fetching it again.
+      const refs = threadRefs(path.join(outputDir, item, 'thread.md'));
+      for (const pr of refs.prs) if (!followed.includes(pr) && !added.includes(pr)) added.push(pr);
+      threadKeys.push(...refs.keys);
+    }
+  }
+  if (threadKeys.length) {
+    try {
+      newTicketKeys(threadKeys.join(' '), sessionId);
+    } catch {
+      // Keys are a bonus.
+    }
   }
   if (!added.length) return;
   mkdirSync(sessionsDir, { recursive: true });
   writeFileSync(file, [...followed, ...added].join('\n'));
+}
+
+/**
+ * PR links and ticket keys in an exported thread's own messages (thread.md up to the section of
+ * channel messages outside the thread, which can be unrelated). A thread like "resolve the comments in
+ * this PR" names its PR only there, not in the prompt that links the thread.
+ */
+function threadRefs(threadFile) {
+  try {
+    const text = readFileSync(threadFile, 'utf8').split(/^# In the channel, outside the thread/m)[0].replace(/^---[\s\S]*?\n---\n/, '');
+    const prs = [...new Set([...text.matchAll(/github\.com\/[\w.-]+\/[\w.-]+\/pull\/(\d+)/g)].map((m) => `pr/${m[1]}`))];
+    const keys = [...new Set(text.match(new RegExp(ISSUE_KEY, 'g')) ?? [])];
+    return { prs, keys };
+  } catch {
+    return { prs: [], keys: [] };
+  }
 }
 
 /** Names the session in `jirallm ui` (Claude sessions): its Slack thread title, else its first prompt. */

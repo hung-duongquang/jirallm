@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { exportSlackThread, SlackClient } from '../../lib/slack.js';
-import { refreshAfterRead, runSlackSearch, slackTitleLine, ticketThreadTitle, workspaceOutputDir } from './slack.js';
+import { followThreadRefs, refreshAfterRead, runSlackSearch, slackTitleLine, ticketThreadTitle, workspaceOutputDir } from './slack.js';
 import { changesReport, seenMarkerPath } from './watch.js';
 
 describe('slackTitleLine', () => {
@@ -99,5 +99,21 @@ describe('reading an exported thread with new replies', () => {
     writeFileSync(path.join(sessions, 's1.start'), `${project}\n2026-11-16T10:00:00Z\n`);
     expect(workspaceOutputDir('s1', root, sessions)).toBe(path.join(project, 'jira-export'));
     expect(workspaceOutputDir(undefined, path.join(project, 'a', 'b'), sessions)).toBe(path.join(project, 'jira-export'));
+  });
+});
+
+describe('followThreadRefs', () => {
+  it('makes the session follow the PRs linked and tickets named in the thread', () => {
+    const out = mkdtempSync(path.join(tmpdir(), 'jl-refs-'));
+    mkdirSync(path.join(out, 'zod-1'));
+    const sessions = mkdtempSync(path.join(tmpdir(), 'jl-refs-s-'));
+    writeFileSync(path.join(sessions, 's1.follow'), 'slack/c1-1');
+    followThreadRefs(['resolve <https://github.com/o/r/pull/3270#pullrequestreview-1|the PR> for ZOD-1, UTF-8 ok'], out, 's1', sessions);
+    expect(readFileSync(path.join(sessions, 's1.follow'), 'utf8')).toBe('slack/c1-1\npr/3270');
+    expect(readFileSync(path.join(sessions, 's1.keys'), 'utf8')).toBe('ZOD-1');
+    followThreadRefs(['again https://github.com/o/r/pull/3270'], out, 's1', sessions);
+    expect(readFileSync(path.join(sessions, 's1.follow'), 'utf8')).toBe('slack/c1-1\npr/3270');
+    followThreadRefs(['https://github.com/o/r/pull/1'], out, undefined, sessions);
+    expect(existsSync(path.join(sessions, 'undefined.follow'))).toBe(false);
   });
 });

@@ -1729,6 +1729,7 @@ program
   .option('--no-frames', 'With --output-dir: download videos but skip extracting their frames (needs ffmpeg)')
   .option('--since <when>', 'Print only replies after this day (YYYY-MM-DD), local time ("YYYY-MM-DD HH:MM") or Slack ts; the first message is always printed')
   .option('--title', 'Print only a one-line title "<first line of the thread> · #channel" (names Claude Code sessions)')
+  .option('--session <id>', 'Claude Code session reading the thread (default: $CLAUDE_CODE_SESSION_ID): it then follows the PRs linked and tickets named in the thread')
   .option('--json', 'Print the raw Slack messages and resolved user names as JSON')
   .addHelpText('after', `
 A link to a reply shows the whole thread; the linked message is marked.
