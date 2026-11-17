@@ -61,17 +61,23 @@ Set up credentials by running `node dist/cli/index.js init` (writes `~/.config/j
 5. Open a PR using the [pull request template](./.github/PULL_REQUEST_TEMPLATE.md) and describe the motivation and trade-offs
 6. Be ready to iterate on review feedback
 
-## Releasing (maintainers)
+## Collaborators
 
-Releases are automated via `.github/workflows/release.yml`, triggered when a `v*.*.*` tag is pushed.
+Collaborators have write access: push branches (or small fixes) straight to this repo instead of forking, and cut releases as below. The repo owner adds a new collaborator under Settings → Collaborators (role **Write**), or with `gh api -X PUT repos/hung-duongquang/jirallm/collaborators/<login> -f permission=push`.
 
-1. Run `pnpm release` — this runs `doryski-release` (from the `@doryski/release` dev dependency), which cuts a dated `CHANGELOG.md` section, bumps `package.json`, commits both, creates the `vX.Y.Z` tag, and pushes the branch and the tag to trigger the CI publish workflow
-   - The changelog section is promoted from `## [Unreleased]` when it has content, and generated from the conventional commits since the last tag when it does not. `--no-changelog` skips the step
-   - Defaults to a patch bump of the latest tag; pass `--release-version 1.2.0` for anything else
-   - `--dry-run` previews without changes; `--yes` skips the confirmation prompt
-2. The release workflow then verifies the tag matches `package.json`, builds, runs tests via `prepublishOnly`, publishes to npm with provenance, and creates a GitHub Release with auto-generated notes
+## Releasing (collaborators)
 
-A repository secret named `NPM_TOKEN` (an npm automation token with publish access) is required for npm publishing to succeed.
+There is no npm publish. Users install from the generated `release` branch (`npm install -g github:hung-duongquang/jirallm#release`), and the GitHub Pages site is the generated `gh-pages` branch. Never edit either by hand.
+
+1. Make sure `main` is up to date and pushed: `git pull`, then `git push origin main`
+2. Bump the version in **both** `package.json` and `.claude-plugin/plugin.json` (Claude Code caches the plugin by version, so an unchanged version makes `claude plugin update` a no-op). Bump `vscode/package.json` only when `vscode/` changed
+3. Build right before publishing, because the script packs the local `dist/` as is: `npx pnpm@10 build` (use pnpm 10; npm resolves newer deps and `tsc` fails)
+4. Run the tests: `npx pnpm@10 test`
+5. Publish: `node scripts/publish-branches.mjs origin`. This force-pushes fresh `release` and `gh-pages` commits
+6. Optionally tag it: `git tag vX.Y.Z && git push origin vX.Y.Z`, then `gh release create vX.Y.Z --generate-notes`
+7. Update your own install: `npm install -g github:hung-duongquang/jirallm#release` (stop a running `jirallm ui` / `watch` first, or Windows reports EBUSY), then `claude plugin marketplace update jirallm && claude plugin update jirallm@jirallm`
+
+The daily update check in `jirallm` reads the `release` branch, so users see the new version within a few minutes.
 
 ## Reporting security issues
 
