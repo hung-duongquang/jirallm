@@ -1881,7 +1881,7 @@ program
   .option('--dry-run', 'List what would be re-exported without writing')
   .option('--prs <repo>', 'Also track my open GitHub PRs in this repo (gh): CI failures, reviews, review threads awaiting me')
   .option('--jira-every <minutes>', 'Check Jira/Confluence at most every N minutes (run every minute for PRs, every 5 for Jira)')
-  .option('--no-slack', 'Skip checking exported Slack threads (checked only when `slack:auth` is set up)')
+  .option('--no-slack', 'Skip checking exported Slack threads and searching Slack for new messages about the tickets of running Claude sessions (checked only when `slack:auth` is set up)')
   .option('--slack-every <minutes>', 'Check exported Slack threads for new replies at most every N minutes (default 5; threads quiet for 14 days are skipped)')
   .option('--notify', 'Show a Windows toast when there are changes (click opens the PR, ticket or Slack thread)')
   .option('--quiet', 'Print nothing when nothing changed (the scheduled task uses this)')

@@ -6,6 +6,7 @@ import { ConfluenceClient, exportConfluencePage } from '../../lib/confluence.js'
 import { JiraExporter } from '../../lib/exporter.js';
 import { JiraClient, jiraMillis, latestCommentUpdate, type JqlIssue } from '../../lib/jiraClient.js';
 import { exportSlackThread, hasSlackToken, loadSlackAuth, parseSlackUrl, SlackClient, threadFrontmatter, type SlackMessage } from '../../lib/slack.js';
+import { slackMentionChanges } from './slackMentions.js';
 import { defaultGh, describePrChange, fetchPrState, myOpenPrs, notifiedPrs, repoSlug, snapshotOf, toast, type Gh, type PrSnapshot } from './prStatus.js';
 
 export type WatchOptions = {
@@ -805,6 +806,12 @@ export async function runWatch(opts: WatchOptions): Promise<void> {
     const lastSlack = existsSync(slackMarker) ? Date.parse(readFileSync(slackMarker, 'utf8').trim()) : NaN;
     if (watchSlack && !(Date.now() - lastSlack < slackEvery * 60_000 - 30_000)) {
       changes.push(...(await slackChanges(outputDir, opts.dryRun)));
+      // After the replies round: a thread it exports has no "new replies" to report twice.
+      try {
+        changes.push(...(await slackMentionChanges(outputDir, new SlackClient(await loadSlackAuth()), { dryRun: opts.dryRun })));
+      } catch (err) {
+        changes.push({ line: `slack mentions: check failed (${String(err instanceof Error ? err.message : err).split('\n')[0]})`, error: true });
+      }
       if (!opts.dryRun) {
         mkdirSync(outputDir, { recursive: true });
         writeFileSync(slackMarker, new Date().toISOString());
