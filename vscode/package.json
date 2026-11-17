@@ -1,7 +1,7 @@
 {
   "name": "jirallm-sessions",
   "publisher": "jirallm",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "displayName": "jirallm sessions",
   "description": "Opens the Claude Code sessions that `jirallm ui` resumes in a VS Code terminal.",
   "license": "MIT",

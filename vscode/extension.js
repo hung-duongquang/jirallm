@@ -19,6 +19,16 @@ function log(line) {
 
 const SESSION_ID = /^[\w-]{1,100}$/;
 
+/**
+ * The icon Claude Code's own extension gives its terminals (its claude-logo.svg), so a resumed session
+ * looks like any other Claude terminal; the plain terminal icon when that extension is not installed.
+ */
+function claudeIcon() {
+  const ext = vscode.extensions.getExtension('anthropic.claude-code');
+  const logo = ext && path.join(ext.extensionPath, 'resources', 'claude-logo.svg');
+  return logo && fs.existsSync(logo) ? vscode.Uri.file(logo) : new vscode.ThemeIcon('terminal');
+}
+
 exports.activate = (context) => {
   log(`activated in ${vscode.workspace.name ?? '(no folder)'}`);
   context.subscriptions.push(
@@ -37,7 +47,7 @@ exports.activate = (context) => {
         const terminal = vscode.window.createTerminal({
           name: `claude: ${title}`,
           cwd: cwd && fs.existsSync(cwd) ? cwd : undefined,
-          iconPath: new vscode.ThemeIcon('debug-restart'),
+          iconPath: claudeIcon(),
         });
         terminal.show();
         terminal.sendText(`jirallm resume ${id}`);
