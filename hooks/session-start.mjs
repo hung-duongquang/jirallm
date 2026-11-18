@@ -109,7 +109,14 @@ if (!versionOut) {
       // monitor runs in the same Claude Code process (same CLAUDE_PID), so it finds its own session even when
       // several start at once (`jirallm resume` after a reboot) and when `claude --resume` switches ids.
       const transcript = typeof input.transcript_path === 'string' ? input.transcript_path : '';
-      const lines = [process.env.CLAUDE_PROJECT_DIR || process.cwd(), input.source ?? '', transcript, process.env.CLAUDE_PID ?? ''];
+      // 5th line: the app it runs in (cli, claude-desktop, …), which `jirallm doctor` reports.
+      const lines = [
+        process.env.CLAUDE_PROJECT_DIR || process.cwd(),
+        input.source ?? '',
+        transcript,
+        process.env.CLAUDE_PID ?? '',
+        process.env.CLAUDE_CODE_ENTRYPOINT ?? '',
+      ];
       writeFileSync(path.join(sessionsDir, `${session}.start`), lines.join('\n'));
     } catch {
       // Without the handshake the monitor stays idle; the prompt hook still delivers changes.

@@ -356,3 +356,24 @@ describe('runDoctor checkJira config-level branches', () => {
     expect(jira?.detail).toContain('read failed');
   });
 });
+
+describe('checkClaudePlugin', () => {
+  it('says whether the plugin is installed, its hooks ran, in which app, and whether a monitor served it', async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const path = await import('node:path');
+    const { checkClaudePlugin } = await import('./doctor.js');
+    const home = mkdtempSync(path.join(tmpdir(), 'jl-doc-home-'));
+    const sessions = mkdtempSync(path.join(tmpdir(), 'jl-doc-s-'));
+    expect(checkClaudePlugin(home, sessions).detail).toContain('not installed');
+
+    mkdirSync(path.join(home, '.claude', 'plugins'), { recursive: true });
+    writeFileSync(path.join(home, '.claude', 'plugins', 'installed_plugins.json'), '{"plugins":{"jirallm@jirallm":[]}}');
+    expect(checkClaudePlugin(home, sessions).detail).toContain('have not run');
+
+    writeFileSync(path.join(sessions, 's1.start'), 'C:/p\nstartup\n\n123\nclaude-desktop');
+    expect(checkClaudePlugin(home, sessions)).toMatchObject({ severity: 'warn', detail: expect.stringContaining('claude-desktop), but no monitor') });
+    writeFileSync(path.join(sessions, 's1.monitor'), '456');
+    expect(checkClaudePlugin(home, sessions)).toMatchObject({ severity: 'pass', detail: expect.stringContaining('claude-desktop') });
+  });
+});

@@ -1,4 +1,8 @@
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { intro, outro, note } from '@clack/prompts';
+import { pluginInstalled } from './upgrade.js';
 import { checkFfmpeg, resolveFfmpegBinary } from '../../lib/framewise.js';
 import { detectOS, getFfmpegInstallHint } from '../../lib/platform.js';
 import {
@@ -219,6 +223,53 @@ async function checkJira(org?: string, project?: string): Promise<CheckResult[]>
   return Promise.all(orgs.map((name) => checkJiraOrg(name)));
 }
 
+const PLUGIN_INSTALL =
+  'Install it: `claude plugin marketplace add hung-duongquang/jirallm` and `claude plugin install jirallm@jirallm`\n' +
+  '(in Claude Desktop: the + next to the prompt box of a Code session → plugins).';
+
+/**
+ * Whether the Claude Code plugin works where the user runs Claude: installed, its session hooks ran (the
+ * newest session's handshake, with the app it runs in), and a monitor served that session. Claude
+ * Desktop's plain chat runs no plugins; its Code tab may, which this shows on the user's own machine.
+ */
+export function checkClaudePlugin(
+  home: string = os.homedir(),
+  sessionsDir: string = path.join(os.tmpdir(), 'jirallm-sessions'),
+  now = Date.now()
+): CheckResult {
+  const name = 'Claude Code plugin';
+  if (!pluginInstalled(home)) return { name, severity: 'warn', detail: 'not installed: changes reach Claude only when asked', hint: PLUGIN_INSTALL };
+  let newest: { id: string; at: number } | undefined;
+  try {
+    for (const f of readdirSync(sessionsDir)) {
+      if (!f.endsWith('.start')) continue;
+      const at = statSync(path.join(sessionsDir, f)).mtimeMs;
+      if (!newest || at > newest.at) newest = { id: f.slice(0, -'.start'.length), at };
+    }
+  } catch {
+    // No sessions yet.
+  }
+  if (!newest || now - newest.at > 14 * 86_400_000) {
+    return {
+      name,
+      severity: 'warn',
+      detail: 'installed, but its hooks have not run in the last 14 days',
+      hint: 'Start a Claude Code session (CLI, or a Code session in Claude Desktop; plain Desktop chat runs no plugins), then run doctor again.',
+    };
+  }
+  const app = readFileSync(path.join(sessionsDir, `${newest.id}.start`), 'utf8').split('\n')[4]?.trim() || 'unknown app';
+  const monitored = existsSync(path.join(sessionsDir, `${newest.id}.monitor`));
+  const when = new Date(newest.at).toLocaleString('sv-SE').slice(0, 16);
+  return monitored
+    ? { name, severity: 'pass', detail: `hooks and monitor ran for the last session (${when}, ${app})` }
+    : {
+        name,
+        severity: 'warn',
+        detail: `hooks ran for the last session (${when}, ${app}), but no monitor served it`,
+        hint: 'Changes then reach Claude with each prompt, not while it works. If the session is still starting, wait a minute and run doctor again.',
+      };
+}
+
 export async function runDoctor(
   opts: { org?: string; project?: string; strict?: boolean; json?: boolean } = {}
 ): Promise<void> {
@@ -229,6 +280,7 @@ export async function runDoctor(
   results.push(checkConfig());
   results.push(...(await checkJira(opts.org, opts.project)));
   results.push(await checkSlack());
+  results.push(checkClaudePlugin());
 
   if (opts.json) {
     process.stdout.write(`${JSON.stringify(results)}\n`);

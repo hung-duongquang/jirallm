@@ -41,6 +41,9 @@ function readStart(file) {
 
 /** Claude Code's pid, which it gives to its hooks and plugin processes alike. */
 const CLAUDE_PID = /^\d+$/.test(process.env.CLAUDE_PID ?? '') ? process.env.CLAUDE_PID : '';
+/** The session id, when Claude Code passes it to plugin processes (undocumented; set for the Bash tool). */
+const OWN_SESSION_ID = /^[\w-]{1,100}$/.test(process.env.CLAUDE_CODE_SESSION_ID ?? '') ? process.env.CLAUDE_CODE_SESSION_ID : '';
+const APP = process.env.CLAUDE_CODE_ENTRYPOINT ?? '';
 
 /**
  * The session of the Claude Code process this monitor runs in: the newest handshake written by a hook of
@@ -51,7 +54,12 @@ const CLAUDE_PID = /^\d+$/.test(process.env.CLAUDE_PID ?? '') ? process.env.CLAU
 function ownSession() {
   if (!CLAUDE_PID) return undefined;
   // Only handshakes from about our start on: an old one can carry a reused pid.
-  return startsSince(startedAt - 120_000).find((s) => s.claudePid === CLAUDE_PID)?.id;
+  const own = startsSince(startedAt - 120_000).filter((s) => s.claudePid === CLAUDE_PID);
+  // An app that hosts several sessions in one process (Claude Desktop may) gives them all one pid; the
+  // session id Claude Code passes then tells ours apart. Not in the CLI: there the newest is right, as
+  // `claude --resume` switches from the session the monitor started with to the resumed one.
+  const byId = OWN_SESSION_ID && APP && APP !== 'cli' && own.find((s) => s.id === OWN_SESSION_ID)?.id;
+  return byId || own[0]?.id;
 }
 
 /** Marks the session as served by this monitor (the UI shows it running; another monitor gives way). */

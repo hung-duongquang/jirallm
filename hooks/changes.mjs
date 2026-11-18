@@ -36,6 +36,9 @@ const sessionsDir = path.join(os.tmpdir(), 'jirallm-sessions');
  * current. In the background: the hook does not wait for it.
  */
 export function refreshResumeTasks() {
+  // VS Code tasks only serve sessions of the CLI; Claude Desktop lists its own sessions.
+  const app = process.env.CLAUDE_CODE_ENTRYPOINT;
+  if (app && app !== 'cli') return;
   if (existsSync(outputDir)) jirallmDetached(['resume', '--vscode', path.dirname(outputDir)]);
 }
 
