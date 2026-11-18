@@ -22,6 +22,8 @@ const SLACK_URL = /https:\/\/[\w-]+\.slack\.com\/(?:archives|files)\/[^\s<>)"'\]
 const ISSUE_KEY = /\b[A-Z][A-Z0-9]+-\d+\b/;
 const MAX_TITLE = 80;
 const MAX_STATE_KEYS = 3;
+/** "<Slack link> and below" (also "& below", "và bên dưới"): follow the channel after the message too. */
+const BELOW = /(?:\band|\+|&)\s*below\b|\bbelow (?:it|that)\b|\b(?:và|va)\s+(?:bên|ben)\s+(?:dưới|duoi)\b/i;
 
 /** Follow items (`run/<owner>/<repo>/<id>`) of GitHub Actions run links, as runWatch.ts names them. */
 const runItems = (text) => [
@@ -140,6 +142,9 @@ function followLinks(prompt, sessionId) {
     const threadTs = /[?&]thread_ts=(\d+)\.(\d+)/.exec(m[0]);
     const item = `slack/${m[1].toLowerCase()}-${threadTs ? threadTs[1] + threadTs[2] : m[2]}`;
     links.push({ item, url: m[0], command: 'slack', exported: () => existsSync(path.join(outputDir, item)) });
+    // "<link> and below": the channel after the message too, until the conversation goes quiet (watch).
+    const below = `below/${item.slice('slack/'.length)}`;
+    if (BELOW.test(prompt) && !followed.includes(below) && !added.includes(below)) added.push(below);
   }
   for (const m of prompt.matchAll(CONFLUENCE_PAGE)) {
     const id = m[1] ?? m[2];

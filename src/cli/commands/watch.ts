@@ -10,6 +10,7 @@ import { exportSlackThread, hasSlackToken, loadSlackAuth, parseSlackUrl, SlackCl
 import { isRunning } from './resume.js';
 import { runChanges as actionRunChanges } from './runWatch.js';
 import { followedRepoPrs, followThreadLinks, REPO_PR_ITEM, repoPrChanges, splitByRepo } from './repoPrWatch.js';
+import { belowChanges, followedBelow } from './slackBelow.js';
 import { runningSessionKeys, slackMentionChanges } from './slackMentions.js';
 import { checksSignature, defaultGh, describePrChange, fetchPrState, myOpenPrs, notifiedPrs, repoSlug, snapshotOf, toast, type Gh, type PrSnapshot } from './prStatus.js';
 
@@ -735,7 +736,8 @@ function followedNames(keys: string[]): string {
   const threads = keys.filter(isThread).length;
   const pages = keys.filter(isPage).length;
   const names = keys
-    .filter((k) => !isThread(k) && !isPage(k))
+    // "below/<dir>" goes with its "slack/<dir>" thread, counted there.
+    .filter((k) => !isThread(k) && !isPage(k) && !/^below\//i.test(k))
     .map((k) => k.replace(/^pr\/(\d+)$/i, 'PR #$1').replace(/^pr\/[\w.-]+\/([\w.-]+)\/(\d+)$/i, '$1#$2').replace(/^run\/[\w.-]+\/[\w.-]+\/(\d+)$/i, 'run $1'));
   if (threads) names.push(threads === 1 ? 'its Slack thread' : `${threads} Slack threads`);
   if (pages) names.push(pages === 1 ? 'its Confluence page' : `${pages} Confluence pages`);
@@ -912,6 +914,11 @@ export async function runWatch(opts: WatchOptions): Promise<void> {
       // is waiting on in a session should not wait for the next round (up to --slack-every minutes).
       const followed = followedSlackThreads();
       if (followed.size) changes.push(...(await slackChanges(outputDir, opts.dryRun, undefined, Date.now(), followed)));
+    }
+    if (watchSlack) {
+      // "<link> and below": the channel after a followed message, every run while its conversation goes on.
+      const below = followedBelow();
+      if (below.size) changes.push(...(await belowChanges(outputDir, opts.dryRun, new SlackClient(await loadSlackAuth()), below)));
     }
     // PR and run links posted later in a thread a session follows: the session follows them as well.
     if (!opts.dryRun) followThreadLinks(outputDir);

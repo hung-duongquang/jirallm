@@ -50,6 +50,18 @@ describe('prompt hook', () => {
     expect(readFileSync(path.join(sessions, 's1.keys'), 'utf8')).toBe('ZOD-1');
   });
 
+  it('follows the channel below a Slack link only when asked ("and below")', () => {
+    const { sessions, env } = workspace();
+    promptHook(env, 'https://ws.slack.com/archives/C1/p1700000000000001');
+    expect(readFileSync(path.join(sessions, 's1.follow'), 'utf8')).toBe('slack/c1-1700000000000001');
+    promptHook(env, 'https://ws.slack.com/archives/C2/p1700000000000002 and below');
+    expect(readFileSync(path.join(sessions, 's1.follow'), 'utf8').split('\n').sort()).toEqual([
+      'below/c2-1700000000000002',
+      'slack/c1-1700000000000001',
+      'slack/c2-1700000000000002',
+    ]);
+  });
+
   it('follows a GitHub Actions run linked in the prompt', () => {
     const { sessions, env } = workspace();
     promptHook(env, 'watch https://github.com/o/aws/actions/runs/44 until it is deployed');
