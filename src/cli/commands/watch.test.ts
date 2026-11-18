@@ -183,6 +183,8 @@ describe('prChanges for PRs a running session reviews', () => {
 
     // The session ended: PR #8 is still open, so nothing is reported; a merged PR #9 is.
     expect(prChanges('.', dir, false, fakeGh({ 9: 'MERGED' }).gh, { keys: [], prs: [] }).map((c) => c.line)).toEqual(['PR #9: merged']);
+    // Kept as finished, so the sessions that followed it drop it later.
+    expect(JSON.parse(readFileSync(path.join(dir, '.prs.json'), 'utf8')).finished).toEqual({ 9: 'merged' });
   });
 
   it('makes no extra call while no session follows anything', () => {

@@ -20,6 +20,7 @@ import { runAuthSet, runAuthRm, runAuthList, runAuthStatus } from './commands/au
 import { runOrgsList, runOrgsRemove, runProjectRemove } from './commands/orgs.js';
 import { runDoctor } from './commands/doctor.js';
 import { runFeedback } from './commands/feedback.js';
+import { runUnfollow } from './commands/follows.js';
 import { runSetup } from './commands/setup.js';
 import {
   runComment,
@@ -643,6 +644,16 @@ program
     await runFeedback(text, opts);
   })
   .addHelpText('after', '\nExamples:\n  $ jirallm feedback "the monitor told me about ZOD-1 in a session about ZOD-2"\n  $ jirallm feedback --print "slack:copy loses the bullet list"\n');
+
+program
+  .command('unfollow [targets...]')
+  .description('Stop a Claude Code session following a Slack thread (and the channel below it), a PR or an Actions run: a link pasted only to discuss it, or a topic that moved on. Finished PRs, runs and quiet "below" windows are dropped by watch on its own. Without targets: list what the session follows')
+  .option('--session <id>', 'Claude Code session (default: $CLAUDE_CODE_SESSION_ID)')
+  .option('--list', 'Only list what the session follows')
+  .action((targets: string[], opts: { session?: string; list?: boolean }) => {
+    runUnfollow(targets, opts);
+  })
+  .addHelpText('after', '\nExamples:\n  $ jirallm unfollow https://ws.slack.com/archives/C1/p1700000000000001\n  $ jirallm unfollow "PR #3270" run/o/aws/44\n  $ jirallm unfollow --list\n');
 
 program
   .command('setup')

@@ -11,6 +11,7 @@ import { isRunning } from './resume.js';
 import { runChanges as actionRunChanges } from './runWatch.js';
 import { followedRepoPrs, followThreadLinks, REPO_PR_ITEM, repoPrChanges, splitByRepo } from './repoPrWatch.js';
 import { belowChanges, followedBelow } from './slackBelow.js';
+import { finishedItems, retireFollows } from './follows.js';
 import { runningSessionKeys, slackMentionChanges } from './slackMentions.js';
 import { checksSignature, defaultGh, describePrChange, fetchPrState, myOpenPrs, notifiedPrs, repoSlug, snapshotOf, toast, type Gh, type PrSnapshot } from './prStatus.js';
 
@@ -289,7 +290,28 @@ export function followedPrs(gh: Gh, cwd: string, follow: SessionFollows, mine: S
 
 /** A change line for CHANGES.md, with the page a notification should open; `error` lines are only printed. */
 export type PrChange = { line: string; url?: string; error?: boolean };
-type PrsState = { meta?: { lastModified?: string; checkedAt?: string; repo?: string; repoPath?: string }; prs: Record<string, PrSnapshot> };
+type PrsState = {
+  meta?: { lastModified?: string; checkedAt?: string; repo?: string; repoPath?: string };
+  prs: Record<string, PrSnapshot>;
+  /** PRs that merged or closed (number → state), for dropping them from the sessions' follows. */
+  finished?: Record<string, string>;
+};
+
+/** Ticket statuses past "a PR merged": no reminder to move the ticket on. */
+const DONE_STATUS = /resolved|done|closed|released|gesloten|afgerond|opgeleverd/i;
+
+/**
+ * "; ZOD-1 is still In Review (last export): if this PR finishes it, offer to move it on" when a
+ * merged PR's ticket has not moved past it yet, per its local export.
+ */
+export function mergedTicketHint(outputDir: string, key: string | undefined): string {
+  if (!key) return '';
+  const file = path.join(outputDir, key.toLowerCase(), 'task.md');
+  if (!existsSync(file)) return '';
+  const status = frontmatter(readFileSync(file, 'utf-8')).status;
+  if (!status || DONE_STATUS.test(status)) return '';
+  return `; ${key} is still ${status} (last export): if this PR finishes it, offer to move the ticket on (the team's status after a merge, e.g. Resolved)`;
+}
 
 /** `owner/name` of the repo `watch --prs` checks, as its last run stored it. */
 function prsRepo(outputDir: string): string | undefined {
@@ -322,6 +344,8 @@ export function prChanges(
   const firstLine = (err: unknown) => String(err instanceof Error ? err.message : err).split('\n')[0];
   const changes: PrChange[] = [];
   const next: Record<string, PrSnapshot> = {};
+  // The last 100 finished PRs: enough for the follows of the sessions that named them to be dropped.
+  const finished: Record<string, string> = Object.fromEntries(Object.entries(state.finished ?? {}).slice(-100));
   const startedAt = new Date().toISOString();
   let meta = state.meta ?? {};
   try {
@@ -354,7 +378,8 @@ export function prChanges(
       try { pr = (JSON.parse(gh(cwd, ['pr', 'view', n, '--json', 'state'])) as { state: string }).state.toLowerCase(); } catch { /* keep "closed" */ }
       // Someone else's PR that no running session follows any more: still open, nothing to report.
       if (pr === 'open') continue;
-      changes.push({ line: `PR #${n}${old.key ? ` (${old.key})` : ''}: ${pr}`, url: old.url });
+      finished[n] = pr;
+      changes.push({ line: `PR #${n}${old.key ? ` (${old.key})` : ''}: ${pr}${pr === 'merged' ? mergedTicketHint(outputDir, old.key) : ''}`, url: old.url });
     }
     meta = { repo: slug, repoPath: cwd, lastModified: notified.lastModified, checkedAt: startedAt };
   } catch (err) {
@@ -362,7 +387,7 @@ export function prChanges(
   }
   if (!dryRun) {
     mkdirSync(outputDir, { recursive: true });
-    writeFileSync(file, JSON.stringify({ meta, prs: next } satisfies PrsState, null, 1));
+    writeFileSync(file, JSON.stringify({ meta, prs: next, finished } satisfies PrsState, null, 1));
   }
   return changes;
 }
@@ -927,6 +952,11 @@ export async function runWatch(opts: WatchOptions): Promise<void> {
     changes.push(...actionRunChanges(outputDir, opts.dryRun));
     // PR links into other repos (an infra or deploy PR waiting for approval): read by URL, no checkout.
     changes.push(...repoPrChanges(outputDir, opts.dryRun, splitByRepo(followedRepoPrs(), opts.prs ? prsRepo(outputDir) : undefined).other));
+    // Follows of finished PRs, runs and "below" windows end an hour after watch saw them finished.
+    if (!opts.dryRun) {
+      const retired = retireFollows(finishedItems(outputDir));
+      if (retired.length && !opts.quiet) console.log(`${stamp} no longer followed (finished): ${retired.join(', ')}`);
+    }
     const errors = changes.filter((c) => c.error);
     const real = changes.filter((c) => !c.error);
     if (errors.length) console.log(`${stamp} ${errors.map((c) => c.line).join('; ')}`);
