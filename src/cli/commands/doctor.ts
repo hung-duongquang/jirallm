@@ -23,7 +23,7 @@ const symbols: Record<Severity, string> = {
   warn: '\x1b[33m⚠\x1b[0m',
 };
 
-type CheckResult = {
+export type CheckResult = {
   name: string;
   severity: Severity;
   detail: string;
@@ -270,17 +270,23 @@ export function checkClaudePlugin(
       };
 }
 
+/** All checks, without printing (`jirallm feedback` attaches them). */
+export async function doctorResults(opts: { org?: string; project?: string } = {}): Promise<CheckResult[]> {
+  return [
+    checkNode(),
+    await checkFfmpegStatus(),
+    await checkKeychain(),
+    checkConfig(),
+    ...(await checkJira(opts.org, opts.project)),
+    await checkSlack(),
+    checkClaudePlugin(),
+  ];
+}
+
 export async function runDoctor(
   opts: { org?: string; project?: string; strict?: boolean; json?: boolean } = {}
 ): Promise<void> {
-  const results: CheckResult[] = [];
-  results.push(checkNode());
-  results.push(await checkFfmpegStatus());
-  results.push(await checkKeychain());
-  results.push(checkConfig());
-  results.push(...(await checkJira(opts.org, opts.project)));
-  results.push(await checkSlack());
-  results.push(checkClaudePlugin());
+  const results = await doctorResults(opts);
 
   if (opts.json) {
     process.stdout.write(`${JSON.stringify(results)}\n`);

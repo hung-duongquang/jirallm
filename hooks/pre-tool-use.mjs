@@ -16,8 +16,9 @@ export const WRITES = [
   [/\bgh\s+issue\s+(comment|close|edit|create)\b/, 'changes a GitHub issue'],
   [/\bgh\s+api\b(?=.*(-X|--method)\s*(POST|PATCH|PUT|DELETE)\b)(?=.*\/(pulls|issues|comments|reviews)\b)/i, 'writes to GitHub through the API'],
   [/\bgh\s+api\s+graphql\b(?=.*\bmutation\b)/, 'runs a GitHub GraphQL mutation'],
+  [/\bjirallm\s+feedback\b/, 'files a jirallm bug report'],
 ];
-const SAFE = /--dry-run\b|--help\b|\s-h\b|\btransition\b.*--list\b/;
+const SAFE = /--dry-run\b|--help\b|\s-h\b|\btransition\b.*--list\b|\bfeedback\b.*--print\b/;
 
 /** What the command writes, or '' when it only reads. */
 export function writeReason(command) {

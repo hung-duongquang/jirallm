@@ -19,6 +19,7 @@ import { runInit } from './commands/init.js';
 import { runAuthSet, runAuthRm, runAuthList, runAuthStatus } from './commands/auth.js';
 import { runOrgsList, runOrgsRemove, runProjectRemove } from './commands/orgs.js';
 import { runDoctor } from './commands/doctor.js';
+import { runFeedback } from './commands/feedback.js';
 import { runSetup } from './commands/setup.js';
 import {
   runComment,
@@ -632,6 +633,16 @@ program
     await runDoctor({ org: opts.org, project: opts.project, strict: opts.strict, json: opts.json });
   })
   .addHelpText('after', '\nExamples:\n  $ jirallm doctor --org acme\n  $ jirallm doctor --org acme --strict --json\n');
+
+program
+  .command('feedback <text...>')
+  .description('Report a jirallm bug or ask for an improvement: files an issue in the private feedback repo with versions, the app, doctor results and the follows and last deliveries of the session (clipboard when gh is missing)')
+  .option('--session <id>', 'Claude Code session it is about (default: $CLAUDE_CODE_SESSION_ID)')
+  .option('--print', 'Only print the report, file nothing')
+  .action(async (text: string[], opts: { session?: string; print?: boolean }) => {
+    await runFeedback(text, opts);
+  })
+  .addHelpText('after', '\nExamples:\n  $ jirallm feedback "the monitor told me about ZOD-1 in a session about ZOD-2"\n  $ jirallm feedback --print "slack:copy loses the bullet list"\n');
 
 program
   .command('setup')
