@@ -21,6 +21,7 @@ import { runOrgsList, runOrgsRemove, runProjectRemove } from './commands/orgs.js
 import { runDoctor } from './commands/doctor.js';
 import { runFeedback } from './commands/feedback.js';
 import { runUnfollow } from './commands/follows.js';
+import { runSlackHot } from './commands/slackHot.js';
 import { runSetup } from './commands/setup.js';
 import {
   runComment,
@@ -743,6 +744,15 @@ Examples:
   $ jirallm ui --open --repo acme/app --output-dir ./context
 `
   );
+
+program
+  .command('slack:hot', { hidden: true })
+  .description("For the Claude Code plugin's monitor: checks the Slack threads the session follows that had activity in the last 30 minutes now, and logs their new replies")
+  .requiredOption('--session <id>', 'Claude Code session')
+  .option('--output-dir <dir>', 'Export folder', './jira-export')
+  .action(async (opts: { session: string; outputDir: string }) => {
+    await runSlackHot(opts);
+  });
 
 program
   .command('update-notice', { hidden: true })

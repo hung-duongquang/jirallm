@@ -13,7 +13,7 @@ const SESSION_ID = /^[\w-]{1,100}$/;
 export function jirallm(args, timeout) {
   const r =
     process.platform === 'win32'
-      ? spawnSync(['jirallm', ...args].map((a) => (/[\s"&|<>^]/.test(a) ? `"${a}"` : a)).join(' '), { encoding: 'utf8', shell: true, timeout })
+      ? spawnSync(['jirallm', ...args].map((a) => (/[\s"&|<>^]/.test(a) ? `"${a}"` : a)).join(' '), { encoding: 'utf8', shell: true, timeout, windowsHide: true })
       : spawnSync('jirallm', args, { encoding: 'utf8', timeout });
   return r.status === 0 ? r.stdout.trim() : '';
 }
@@ -82,6 +82,38 @@ export function sessionKeys(sessionId) {
   if (!sessionId || !SESSION_ID.test(sessionId)) return [];
   const dir = path.join(os.tmpdir(), 'jirallm-sessions');
   return [...lines(path.join(dir, `${sessionId}.keys`)), ...lines(path.join(dir, `${sessionId}.follow`))];
+}
+
+/** Mirrors HOT_MINUTES of src/cli/commands/slackHot.ts. */
+const HOT_MS = 30 * 60_000;
+
+/**
+ * True when a Slack thread the session follows (or the channel below one) had activity in the last
+ * 30 minutes: a conversation going on now, which the monitor then checks every few seconds itself
+ * (`jirallm slack:hot`) instead of waiting for the scheduled watch. Only reads files.
+ */
+export function hasHotThread(sessionId, now = Date.now()) {
+  if (!sessionId || !SESSION_ID.test(sessionId)) return false;
+  const follows = lines(path.join(os.tmpdir(), 'jirallm-sessions', `${sessionId}.follow`));
+  let below;
+  for (const item of follows) {
+    const [, kind, dir] = /^(slack|below)\/([\w-]+)$/i.exec(item) ?? [];
+    if (!kind) continue;
+    try {
+      if (kind.toLowerCase() === 'below') {
+        below ??= JSON.parse(readFileSync(path.join(outputDir, '.slack-below.json'), 'utf8'));
+        const s = below[dir.toLowerCase()];
+        if (s && !s.closed && now - Number(s.newest) * 1000 < HOT_MS) return true;
+        continue;
+      }
+      const md = readFileSync(path.join(outputDir, 'slack', dir.toLowerCase(), 'thread.md'), 'utf8');
+      const at = /^\s*lastReplyAt:\s*"([^"]+)"/m.exec(md)?.[1];
+      if (at && now - Date.parse(at) < HOT_MS) return true;
+    } catch {
+      // Not exported yet, or no below state yet.
+    }
+  }
+  return false;
 }
 
 const newerThan = (file, marker) => !existsSync(marker) || statSync(file).mtimeMs > statSync(marker).mtimeMs;

@@ -528,7 +528,7 @@ function readBySession(outputDir: string, session: string | undefined): Set<stri
  * `readBy`, that session read the change itself: it is not handed to it again.
  */
 export function logChanges(outputDir: string, lines: string[], readBy?: string, now = new Date()): string {
-  const stamp = now.toLocaleString('sv-SE').slice(0, 16);
+  const stamp = now.toLocaleString('sv-SE').slice(0, 19);
   mkdirSync(outputDir, { recursive: true });
   appendFileSync(path.join(outputDir, CHANGES_FILE), `\n## ${stamp}\n\n${lines.map((l) => `- ${l}`).join('\n')}\n`);
   if (readBy) {
@@ -906,7 +906,7 @@ export async function runWatch(opts: WatchOptions): Promise<void> {
   const jiraMarker = path.join(outputDir, JIRA_MARKER);
   const slackMarker = path.join(outputDir, SLACK_MARKER);
   for (;;) {
-    const stamp = new Date().toLocaleString('sv-SE').slice(0, 16);
+    const stamp = new Date().toLocaleString('sv-SE').slice(0, 19);
     const lastJira = existsSync(jiraMarker) ? Date.parse(readFileSync(jiraMarker, 'utf8').trim()) : NaN;
     const jiraDue = jiraEvery === undefined || !(Date.now() - lastJira < jiraEvery * 60_000 - 30_000);
     const changes: PrChange[] = [];

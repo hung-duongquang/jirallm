@@ -20,10 +20,13 @@ const projectDir = path.resolve(process.argv[2] || process.cwd());
 // after the session started: it serves that session, no handshake guessing.
 const given = process.argv[3] === '--session' && /^[\w-]{1,100}$/.test(process.argv[4] ?? '') ? process.argv[4] : undefined;
 process.env.CLAUDE_PROJECT_DIR = projectDir;
-const { outputDir, pushChanges } = await import('./changes.mjs');
+const { outputDir, pushChanges, hasHotThread, jirallm } = await import('./changes.mjs');
 
 const sessionsDir = path.join(os.tmpdir(), 'jirallm-sessions');
 const POLL_MS = 30_000;
+// A followed Slack thread with activity in the last 30 min: checked by this monitor every 10 s.
+const HOT_POLL_MS = 10_000;
+let hotCheckedAt = 0;
 const HANDSHAKE_WAIT_MS = 90_000;
 const startedAt = Date.now();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -161,7 +164,13 @@ for (let i = 0; ; i++) {
   } else {
     session = followResume(session, claimedAt);
   }
+  const hot = hasHotThread(session);
+  if (hot && Date.now() - hotCheckedAt >= HOT_POLL_MS) {
+    hotCheckedAt = Date.now();
+    // Logs new replies to CHANGES.md, which pushChanges hands to the session right after.
+    jirallm(['slack:hot', '--session', session, '--output-dir', outputDir], 25_000);
+  }
   const report = pushChanges(session);
   if (report) console.log(report);
-  await sleep(i < 20 ? 3000 : POLL_MS); // Both are cheap: pushChanges only stats files until CHANGES.md moves.
+  await sleep(i < 20 ? 3000 : hot ? HOT_POLL_MS : POLL_MS); // Both are cheap: pushChanges only stats files until CHANGES.md moves.
 }
