@@ -89,3 +89,32 @@ describe('monitor', () => {
     }
   });
 });
+
+describe('Claude Desktop (runs hooks, starts no plugin monitors)', () => {
+  const sessionStart = (env: NodeJS.ProcessEnv) =>
+    spawnSync(process.execPath, ['hooks/session-start.mjs'], {
+      env,
+      input: JSON.stringify({ session_id: 'd1', source: 'startup' }),
+      encoding: 'utf8',
+      timeout: 20000,
+    });
+
+  it('asks Claude to start the monitor for its session; the CLI is told it runs already', () => {
+    const { env } = workspace();
+    const desktop = JSON.parse(sessionStart({ ...env, CLAUDE_CODE_ENTRYPOINT: 'claude-desktop' }).stdout);
+    expect(desktop.hookSpecificOutput.additionalContext).toMatch(/start it yourself now[\s\S]*monitor\.mjs" "[^"]+" --session d1`/);
+    const cli = JSON.parse(sessionStart({ ...env, CLAUDE_CODE_ENTRYPOINT: 'cli' }).stdout);
+    expect(cli.hookSpecificOutput.additionalContext).not.toContain('start it yourself');
+  });
+
+  it('a monitor given --session serves that session without a handshake', async () => {
+    const { project, sessions, env } = workspace();
+    const monitor = spawn(process.execPath, ['hooks/monitor.mjs', project, '--session', 'late'], { env, stdio: 'ignore' });
+    try {
+      for (let i = 0; i < 50 && !existsSync(path.join(sessions, 'late.monitor')); i++) await new Promise((r) => setTimeout(r, 100));
+      expect(readFileSync(path.join(sessions, 'late.monitor'), 'utf8')).toBe(String(monitor.pid));
+    } finally {
+      monitor.kill();
+    }
+  });
+});

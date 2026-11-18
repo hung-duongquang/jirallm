@@ -16,6 +16,9 @@ import os from 'node:os';
 import path from 'node:path';
 
 const projectDir = path.resolve(process.argv[2] || process.cwd());
+// `--session <id>`: started by Claude itself (Claude Desktop starts no plugin monitors), possibly long
+// after the session started: it serves that session, no handshake guessing.
+const given = process.argv[3] === '--session' && /^[\w-]{1,100}$/.test(process.argv[4] ?? '') ? process.argv[4] : undefined;
 process.env.CLAUDE_PROJECT_DIR = projectDir;
 const { outputDir, pushChanges } = await import('./changes.mjs');
 
@@ -131,7 +134,7 @@ function followResume(current, claimedAt) {
 
 if (!existsSync(outputDir)) process.exit(0); // jirallm is not used in this workspace.
 
-let session;
+let session = given;
 while (!session && Date.now() - startedAt < HANDSHAKE_WAIT_MS) {
   // Without CLAUDE_PID (older Claude Code): the newest unclaimed handshake, which can pick another
   // session's when several start within seconds.
@@ -142,12 +145,14 @@ if (!session) {
   // Quietly: a notification about plumbing is noise. Changes still arrive with each prompt.
   process.exit(0);
 }
-if (CLAUDE_PID) claimOwn(session);
+if (CLAUDE_PID || given) claimOwn(session);
 
 const claimedAt = Date.now();
 for (let i = 0; ; i++) {
   // Check for a resume often at first (it follows the throwaway session within seconds), then each poll.
-  if (CLAUDE_PID) {
+  if (given) {
+    // Serves the session it was given.
+  } else if (CLAUDE_PID) {
     const own = ownSession();
     if (own && own !== session) {
       session = own;
