@@ -46,7 +46,7 @@ describe('prompt hook', () => {
       ].join('\n')
     );
     promptHook(env, 'https://ws.slack.com/archives/C1/p1700000000000001');
-    expect(readFileSync(path.join(sessions, 's1.follow'), 'utf8').split('\n')).toEqual(['slack/c1-1700000000000001', 'pr/3270']);
+    expect(readFileSync(path.join(sessions, 's1.follow'), 'utf8').split('\n')).toEqual(['slack/c1-1700000000000001', 'pr/o/r/3270']);
     expect(readFileSync(path.join(sessions, 's1.keys'), 'utf8')).toBe('ZOD-1');
   });
 

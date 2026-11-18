@@ -237,6 +237,8 @@ export async function runPrStatus(pr: string | undefined, opts: PrStatusOptions,
 
 /** One line per open PR of mine, for `watch`: compact state compared between runs. */
 export type PrSnapshot = { number: number; title: string; url?: string; sig?: string; key?: string; head: string;
+  /** `owner/name` of a PR outside the repo `watch --prs` checks; change lines then name it. */
+  repo?: string;
   /** Someone else's PR that I review: `awaiting` counts the author's replies to my threads. */
   reviewing?: boolean; failed: string[]; pending: number; reviews: Record<string, string>; awaiting: number; comments: number };
 
@@ -258,7 +260,8 @@ export function snapshotOf(s: PrState): PrSnapshot {
 
 /** What changed for one PR between two watch runs, as a CHANGES.md line (undefined when nothing did). */
 export function describePrChange(prev: PrSnapshot | undefined, cur: PrSnapshot): string | undefined {
-  const label = `PR #${cur.number}${cur.key ? ` (${cur.key})` : ''}`;
+  const tags = [cur.repo, cur.key].filter(Boolean);
+  const label = `PR #${cur.number}${tags.length ? ` (${tags.join(', ')})` : ''}`;
   const parts: string[] = [];
   const settled = cur.pending === 0;
   if (!prev) {

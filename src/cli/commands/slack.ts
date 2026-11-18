@@ -23,6 +23,7 @@ import {
   threadTitle,
 } from '../../lib/slack.js';
 import { printJson } from '../jsonOutput.js';
+import { prItems } from './repoPrWatch.js';
 import { runItems } from './runWatch.js';
 import { readTask } from './state.js';
 import { logChanges } from './watch.js';
@@ -122,7 +123,7 @@ export function followThreadRefs(
 ): void {
   if (!session || !SESSION_ID.test(session)) return;
   const text = texts.join('\n');
-  const prs = [...new Set([...text.matchAll(/github\.com\/[\w.-]+\/[\w.-]+\/pull\/(\d+)/g)].map((m) => `pr/${m[1]}`)), ...runItems(text)];
+  const prs = [...prItems(text), ...runItems(text)];
   let projects = new Set<string>();
   try {
     if (outputDir) projects = new Set(readdirSync(outputDir).map((f) => /^([a-z][a-z0-9]*)-\d+$/.exec(f)?.[1]).filter((p): p is string => !!p));

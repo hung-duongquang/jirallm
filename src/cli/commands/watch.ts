@@ -9,6 +9,7 @@ import { JiraClient, jiraMillis, latestCommentUpdate, type JqlIssue } from '../.
 import { exportSlackThread, hasSlackToken, loadSlackAuth, parseSlackUrl, SlackClient, threadFrontmatter, type SlackMessage } from '../../lib/slack.js';
 import { isRunning } from './resume.js';
 import { runChanges as actionRunChanges } from './runWatch.js';
+import { followedRepoPrs, followThreadLinks, REPO_PR_ITEM, repoPrChanges, splitByRepo } from './repoPrWatch.js';
 import { runningSessionKeys, slackMentionChanges } from './slackMentions.js';
 import { checksSignature, defaultGh, describePrChange, fetchPrState, myOpenPrs, notifiedPrs, repoSlug, snapshotOf, toast, type Gh, type PrSnapshot } from './prStatus.js';
 
@@ -237,20 +238,22 @@ async function runOnce(profile: ResolvedProfile, opts: WatchOptions, outputDir: 
 }
 
 /** What running Claude Code sessions follow besides my own PRs: their ticket keys and PRs they named (`pr/<n>`). */
-export type SessionFollows = { keys: string[]; prs: number[] };
+export type SessionFollows = { keys: string[]; prs: number[]; /** PR links, `pr/<owner>/<repo>/<n>` */ repoPrs?: string[] };
 
 export function runningSessionFollows(outputDir: string, sessionsDir = path.join(os.tmpdir(), 'jirallm-sessions')): SessionFollows {
   const prs = new Set<number>();
+  const repoPrs = new Set<string>();
   if (existsSync(sessionsDir)) {
     for (const f of readdirSync(sessionsDir)) {
       if (!f.endsWith('.follow') || !isRunning(f.slice(0, -'.follow'.length), sessionsDir)) continue;
       for (const l of readFileSync(path.join(sessionsDir, f), 'utf8').split(/\r?\n/)) {
         const n = /^pr\/(\d+)$/.exec(l.trim())?.[1];
         if (n) prs.add(Number(n));
+        if (REPO_PR_ITEM.test(l.trim())) repoPrs.add(l.trim());
       }
     }
   }
-  return { keys: [...runningSessionKeys(outputDir, sessionsDir).keys()], prs: [...prs] };
+  return { keys: [...runningSessionKeys(outputDir, sessionsDir).keys()], prs: [...prs], repoPrs: [...repoPrs] };
 }
 
 /** Export folders (`<channel>-<ts>`) of the Slack threads running sessions follow (`slack/<dir>` in .follow). */
@@ -287,6 +290,15 @@ export function followedPrs(gh: Gh, cwd: string, follow: SessionFollows, mine: S
 export type PrChange = { line: string; url?: string; error?: boolean };
 type PrsState = { meta?: { lastModified?: string; checkedAt?: string; repo?: string; repoPath?: string }; prs: Record<string, PrSnapshot> };
 
+/** `owner/name` of the repo `watch --prs` checks, as its last run stored it. */
+function prsRepo(outputDir: string): string | undefined {
+  try {
+    return (JSON.parse(readFileSync(path.join(outputDir, PRS_FILE), 'utf8')) as PrsState).meta?.repo;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * CI and review changes on my open PRs in the repo at `repo` since the last run (state in .prs.json):
  * new check failures, CI back to green, new reviews, review threads awaiting me, comments, merged/closed.
@@ -316,7 +328,10 @@ export function prChanges(
     const since = meta.checkedAt ? new Date(Date.parse(meta.checkedAt) - 120_000).toISOString() : undefined;
     const notified = notifiedPrs(gh, cwd, slug, meta.lastModified, since);
     const mine = myOpenPrs(gh, cwd);
-    for (const { number: n, sig } of [...mine, ...followedPrs(gh, cwd, follow, new Set(mine.map((p) => p.number)))]) {
+    // A PR link into this repo (`pr/<owner>/<repo>/<n>`) is followed here; links to other repos in repoPrWatch.ts.
+    const linked = splitByRepo(follow.repoPrs ?? [], slug).local;
+    const all = { ...follow, prs: [...new Set([...follow.prs, ...linked])] };
+    for (const { number: n, sig } of [...mine, ...followedPrs(gh, cwd, all, new Set(mine.map((p) => p.number)))]) {
       const old = prev[n];
       if (old && old.sig === sig && notified.prs && !notified.prs.includes(n)) {
         next[n] = old;
@@ -721,7 +736,7 @@ function followedNames(keys: string[]): string {
   const pages = keys.filter(isPage).length;
   const names = keys
     .filter((k) => !isThread(k) && !isPage(k))
-    .map((k) => k.replace(/^pr\/(\d+)$/i, 'PR #$1').replace(/^run\/[\w.-]+\/[\w.-]+\/(\d+)$/i, 'run $1'));
+    .map((k) => k.replace(/^pr\/(\d+)$/i, 'PR #$1').replace(/^pr\/[\w.-]+\/([\w.-]+)\/(\d+)$/i, '$1#$2').replace(/^run\/[\w.-]+\/[\w.-]+\/(\d+)$/i, 'run $1'));
   if (threads) names.push(threads === 1 ? 'its Slack thread' : `${threads} Slack threads`);
   if (pages) names.push(pages === 1 ? 'its Confluence page' : `${pages} Confluence pages`);
   return names.join(', ');
@@ -733,6 +748,12 @@ export function concerns(line: string, keys: string[]): boolean {
     // A PR the session named ("pr/12") matches its change lines ("PR #12 (ZOD-1): …").
     const pr = /^pr\/(\d+)$/i.exec(k)?.[1];
     if (pr) return new RegExp(`PR #${pr}(?![0-9])`).test(line);
+    // A PR link ("pr/o/r/12") matches "PR #12 (o/r, …): …", and "PR #12 (ZOD-1): …" of the watched repo.
+    const linked = /^pr\/([\w.-]+\/[\w.-]+)\/(\d+)$/i.exec(k);
+    if (linked) {
+      const m = new RegExp(`PR #${linked[2]}(?![0-9])(?: \\(([\\w.-]+/[\\w.-]+)[,)])?`).exec(line);
+      return !!m && (!m[1] || m[1].toLowerCase() === linked[1]!.toLowerCase());
+    }
     // A followed Actions run ("run/o/r/12") matches "Run 12 (o/r …): …".
     const run = /^run\/[\w.-]+\/[\w.-]+\/(\d+)$/i.exec(k)?.[1];
     return run ? new RegExp(`Run ${run}(?![0-9])`).test(line) :new RegExp(`(^|[^A-Z0-9-])${k}(?![0-9])`, 'i').test(line);
@@ -892,9 +913,13 @@ export async function runWatch(opts: WatchOptions): Promise<void> {
       const followed = followedSlackThreads();
       if (followed.size) changes.push(...(await slackChanges(outputDir, opts.dryRun, undefined, Date.now(), followed)));
     }
+    // PR and run links posted later in a thread a session follows: the session follows them as well.
+    if (!opts.dryRun) followThreadLinks(outputDir);
     if (opts.prs) changes.push(...prChanges(opts.prs, outputDir, opts.dryRun));
     // Actions runs a session follows (a deploy waiting for approval): only `gh api` calls, no repo needed.
     changes.push(...actionRunChanges(outputDir, opts.dryRun));
+    // PR links into other repos (an infra or deploy PR waiting for approval): read by URL, no checkout.
+    changes.push(...repoPrChanges(outputDir, opts.dryRun, splitByRepo(followedRepoPrs(), opts.prs ? prsRepo(outputDir) : undefined).other));
     const errors = changes.filter((c) => c.error);
     const real = changes.filter((c) => !c.error);
     if (errors.length) console.log(`${stamp} ${errors.map((c) => c.line).join('; ')}`);

@@ -109,12 +109,12 @@ describe('followThreadRefs', () => {
     const sessions = mkdtempSync(path.join(tmpdir(), 'jl-refs-s-'));
     writeFileSync(path.join(sessions, 's1.follow'), 'slack/c1-1');
     followThreadRefs(['resolve <https://github.com/o/r/pull/3270#pullrequestreview-1|the PR> for ZOD-1, UTF-8 ok'], out, 's1', sessions);
-    expect(readFileSync(path.join(sessions, 's1.follow'), 'utf8')).toBe('slack/c1-1\npr/3270');
+    expect(readFileSync(path.join(sessions, 's1.follow'), 'utf8')).toBe('slack/c1-1\npr/o/r/3270');
     expect(readFileSync(path.join(sessions, 's1.keys'), 'utf8')).toBe('ZOD-1');
     followThreadRefs(['again https://github.com/o/r/pull/3270'], out, 's1', sessions);
-    expect(readFileSync(path.join(sessions, 's1.follow'), 'utf8')).toBe('slack/c1-1\npr/3270');
+    expect(readFileSync(path.join(sessions, 's1.follow'), 'utf8')).toBe('slack/c1-1\npr/o/r/3270');
     followThreadRefs(['<https://github.com/o/aws/actions/runs/44|rolt uit naar productie> approve bro'], out, 's1', sessions);
-    expect(readFileSync(path.join(sessions, 's1.follow'), 'utf8')).toBe('slack/c1-1\npr/3270\nrun/o/aws/44');
+    expect(readFileSync(path.join(sessions, 's1.follow'), 'utf8')).toBe('slack/c1-1\npr/o/r/3270\nrun/o/aws/44');
     followThreadRefs(['https://github.com/o/r/pull/1'], out, undefined, sessions);
     expect(existsSync(path.join(sessions, 'undefined.follow'))).toBe(false);
   });

@@ -28,6 +28,11 @@ const runItems = (text) => [
   ...new Set([...text.matchAll(/github\.com\/([\w.-]+)\/([\w.-]+)\/actions\/runs\/(\d+)/g)].map((m) => `run/${m[1]}/${m[2]}/${m[3]}`)),
 ];
 
+/** Follow items (`pr/<owner>/<repo>/<n>`) of PR links, as repoPrWatch.ts names them. */
+const prItems = (text) => [
+  ...new Set([...text.matchAll(/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)/g)].map((m) => `pr/${m[1]}/${m[2]}/${m[3]}`)),
+];
+
 const PR_REF =/\/pull\/(\d+)\b|\b(?:PR|pull request)\s*#?(\d+)\b|(?:^|\s)#(\d{3,})\b/gi;
 
 /**
@@ -143,9 +148,10 @@ function followLinks(prompt, sessionId) {
     links.push({ item: `confluence/${id}`, url: m[0], command: 'page', exported });
   }
   // A PR named outright (a PR link, "PR #12", "pull request 12"; not a bare "#12"): `watch --prs`
-  // follows its CI and reviews for this session also when it is someone else's PR (a review).
-  for (const m of prompt.matchAll(/\/pull\/(\d+)\b|\b(?:PR|pull request)\s*#?(\d+)\b/gi)) {
-    const item = `pr/${m[1] ?? m[2]}`;
+  // follows its CI and reviews for this session also when it is someone else's PR (a review). A link
+  // keeps its repo (`pr/<owner>/<repo>/<n>`): a PR in another repo is read there, not as #n of ours.
+  for (const m of prompt.matchAll(/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)\b|\b(?:PR|pull request)\s*#?(\d+)\b/gi)) {
+    const item = m[3] ? `pr/${m[1]}/${m[2]}/${m[3]}` : `pr/${m[4]}`;
     if (!followed.includes(item) && !added.includes(item)) added.push(item);
   }
   // A GitHub Actions run (a deploy waiting for approval): `watch` reports its approvals and result.
@@ -186,7 +192,7 @@ function followLinks(prompt, sessionId) {
 function threadRefs(threadFile) {
   try {
     const text = readFileSync(threadFile, 'utf8').split(/^# In the channel, outside the thread/m)[0].replace(/^---[\s\S]*?\n---\n/, '');
-    const prs = [...new Set([...text.matchAll(/github\.com\/[\w.-]+\/[\w.-]+\/pull\/(\d+)/g)].map((m) => `pr/${m[1]}`)), ...runItems(text)];
+    const prs = [...prItems(text), ...runItems(text)];
     const keys = [...new Set(text.match(new RegExp(ISSUE_KEY, 'g')) ?? [])];
     return { prs, keys };
   } catch {
