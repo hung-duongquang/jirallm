@@ -49,6 +49,16 @@ describe('prompt hook', () => {
     expect(readFileSync(path.join(sessions, 's1.follow'), 'utf8').split('\n')).toEqual(['slack/c1-1700000000000001', 'pr/3270']);
     expect(readFileSync(path.join(sessions, 's1.keys'), 'utf8')).toBe('ZOD-1');
   });
+
+  it('tells Claude the user is back after a time away, and only then', () => {
+    const { sessions, env } = workspace();
+    expect(promptHook(env, 'hello').stdout).not.toContain('back after');
+    writeFileSync(path.join(sessions, 's1.last'), new Date(Date.now() - 15 * 3600000).toISOString());
+    const back = JSON.parse(promptHook(env, 'where were we').stdout);
+    expect(back.hookSpecificOutput.additionalContext).toMatch(/The user is back after 15 h \d+ min away/);
+    expect(back.systemMessage).toContain('welcome back');
+    expect(promptHook(env, 'go on').stdout).not.toContain('back after');
+  });
 });
 
 describe('monitor', () => {

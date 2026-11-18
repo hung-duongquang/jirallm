@@ -10,6 +10,8 @@
 // 3. The first time a prompt names a ticket key that has a local folder in jira-export, its state
 //    card (`jirallm state --notes`: Jira status, my PRs, worktree, own files, notes) is added, once
 //    per key per session, so ticket facts live with the ticket instead of in a memory index.
+// 4. When the user's previous prompt was 2 hours or a calendar day ago (end of day, a reboot), Claude is
+//    told how long they were away and gets fresh state cards of the session's tickets.
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -191,6 +193,54 @@ function saveUiTitle(sessionId, text) {
   if (line) writeFileSync(path.join(sessionsDir, `${sessionId}.title`), line.length > MAX_TITLE ? `${line.slice(0, MAX_TITLE - 1)}…` : line);
 }
 
+const AWAY_MS = 2 * 60 * 60 * 1000;
+
+const when = (d) =>
+  d.toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+function span(ms) {
+  const h = Math.floor(ms / 3600000);
+  return h >= 24 ? `${Math.floor(h / 24)} day(s) ${h % 24} h` : `${h} h ${Math.floor((ms % 3600000) / 60000)} min`;
+}
+
+/**
+ * Claude sees no clock: a session resumed the next morning, or after a reboot, carries on as if the user
+ * never left. When the user's previous prompt (else the transcript's last write) is 2 hours or a calendar
+ * day ago, this says how long they were away, and the session's tickets get a fresh state card.
+ */
+function awayNote(sessionId, transcript, now = new Date()) {
+  mkdirSync(sessionsDir, { recursive: true });
+  const file = path.join(sessionsDir, `${sessionId}.last`);
+  let last;
+  try {
+    last = new Date(readFileSync(file, 'utf8').trim());
+  } catch {
+    try {
+      if (transcript) last = statSync(transcript).mtime;
+    } catch {
+      // A new session.
+    }
+  }
+  writeFileSync(file, now.toISOString());
+  if (!last || Number.isNaN(last.getTime())) return '';
+  const gap = now.getTime() - last.getTime();
+  if (gap < AWAY_MS && last.toDateString() === now.toDateString()) return '';
+  return (
+    `The user is back after ${span(gap)} away (previous prompt ${when(last)}, now ${when(now)}). ` +
+    'Treat what this conversation knew about PRs, CI, reviews, tickets and Slack as possibly outdated: ' +
+    'the changes and ticket states below are current. Where the user picks up earlier work, check its state before acting on it.'
+  );
+}
+
+/** The session's followed tickets (at most 5), for fresh state cards after a time away. */
+function sessionKeys(sessionId) {
+  try {
+    return readFileSync(path.join(sessionsDir, `${sessionId}.keys`), 'utf8').split('\n').filter(Boolean).slice(0, 5);
+  } catch {
+    return [];
+  }
+}
+
 // A background task's notification (a monitor event, a finished command) comes in as a prompt too. What it
 // names is not what the user works on: a monitor of another session once named that session's tickets, and
 // this one followed them from then on. Only the user's own words add tickets, links and a title.
@@ -213,11 +263,19 @@ try {
   // Following is a bonus too.
 }
 
+let away = '';
+try {
+  if (userPrompt) away = awayNote(input.session_id, input.transcript_path);
+} catch {
+  // The note is a bonus too.
+}
+
 let cards = '';
 let cardKeys = [];
 try {
   if (userPrompt) {
-    cardKeys = newTicketKeys(userPrompt, input.session_id);
+    const added = newTicketKeys(userPrompt, input.session_id);
+    cardKeys = away ? [...new Set([...sessionKeys(input.session_id), ...added])] : added;
     if (cardKeys.length) cards = jirallm(['state', ...cardKeys, '--notes', '--output-dir', outputDir], 10000);
   }
 } catch {
@@ -225,8 +283,12 @@ try {
 }
 
 const changes = unseenChanges(input.session_id, true);
-const context = [cards && `jirallm ticket state (local):\n\n${cards}`, changes].filter(Boolean).join('\n\n');
-const message = [changes && changesMessage(changes), cards && `🗂 jirallm: state of ${cardKeys.join(', ')} added`]
+const context = [away, cards && `jirallm ticket state (local):\n\n${cards}`, changes].filter(Boolean).join('\n\n');
+const message = [
+  away && '🌅 jirallm: welcome back, Claude was told how long you were away',
+  changes && changesMessage(changes),
+  cards && `🗂 jirallm: state of ${cardKeys.join(', ')} added`,
+]
   .filter(Boolean)
   .join(' · ');
 if (title || context) {
