@@ -253,6 +253,20 @@ export function runningSessionFollows(outputDir: string, sessionsDir = path.join
   return { keys: [...runningSessionKeys(outputDir, sessionsDir).keys()], prs: [...prs] };
 }
 
+/** Export folders (`<channel>-<ts>`) of the Slack threads running sessions follow (`slack/<dir>` in .follow). */
+export function followedSlackThreads(sessionsDir = path.join(os.tmpdir(), 'jirallm-sessions')): Set<string> {
+  const dirs = new Set<string>();
+  if (!existsSync(sessionsDir)) return dirs;
+  for (const f of readdirSync(sessionsDir)) {
+    if (!f.endsWith('.follow') || !isRunning(f.slice(0, -'.follow'.length), sessionsDir)) continue;
+    for (const l of readFileSync(path.join(sessionsDir, f), 'utf8').split(/\r?\n/)) {
+      const dir = /^slack\/([\w-]+)$/i.exec(l.trim())?.[1];
+      if (dir) dirs.add(dir.toLowerCase());
+    }
+  }
+  return dirs;
+}
+
 /**
  * Open PRs of others that a running session works on: a PR it named, or one whose title or branch holds
  * one of its ticket keys (reviewing Trung's PR for ZOD-1 follows its CI and reviews like my own PRs).
@@ -347,11 +361,13 @@ export async function slackChanges(
   outputDir: string,
   dryRun: boolean | undefined,
   client?: SlackClient,
-  now = Date.now()
+  now = Date.now(),
+  only?: Set<string>
 ): Promise<PrChange[]> {
   const root = path.join(outputDir, 'slack');
   if (!existsSync(root)) return [];
   const threads = readdirSync(root, { withFileTypes: true }).flatMap((d) => {
+    if (only && !only.has(d.name.toLowerCase())) return [];
     const file = path.join(root, d.name, 'thread.md');
     const ts = /-(\d{10})(\d{6})$/.exec(d.name);
     if (!d.isDirectory() || !ts || !existsSync(file)) return [];
@@ -870,6 +886,11 @@ export async function runWatch(opts: WatchOptions): Promise<void> {
         mkdirSync(outputDir, { recursive: true });
         writeFileSync(slackMarker, new Date().toISOString());
       }
+    } else if (watchSlack) {
+      // Between full rounds, threads a running session follows are checked every run: a reply someone
+      // is waiting on in a session should not wait for the next round (up to --slack-every minutes).
+      const followed = followedSlackThreads();
+      if (followed.size) changes.push(...(await slackChanges(outputDir, opts.dryRun, undefined, Date.now(), followed)));
     }
     if (opts.prs) changes.push(...prChanges(opts.prs, outputDir, opts.dryRun));
     // Actions runs a session follows (a deploy waiting for approval): only `gh api` calls, no repo needed.

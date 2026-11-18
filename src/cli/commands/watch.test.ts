@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { changeEntries, changesReport, commentsChangedSince, concerns, describeChange, frontmatter, prChanges, slackChanges, unseenCount } from './watch.js';
+import { changeEntries, changesReport, commentsChangedSince, concerns, describeChange, followedSlackThreads, frontmatter, prChanges, slackChanges, unseenCount } from './watch.js';
 import type { SlackClient } from '../../lib/slack.js';
 
 const task = (status: string, comments: string) =>
@@ -227,6 +227,28 @@ describe('slackChanges', () => {
     writeFileSync(path.join(dir, 'slack', 'c1-1793000000000100', 'thread.md'), thread('2026-11-01T10:00:00Z', '1793000500.000100'));
     const client = { call: async () => ({ ok: true, messages: [{ ts: '1793000000.000100' }] }) } as unknown as SlackClient;
     expect(await slackChanges(dir, false, client, Date.parse('2026-11-02T10:00:00Z'))).toEqual([]);
+  });
+
+  it('checks only the threads given (those running sessions follow) between full rounds', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'slackwatch-'));
+    for (const t of ['c1-1793000000000100', 'c1-1793000000000200']) {
+      mkdirSync(path.join(dir, 'slack', t), { recursive: true });
+      writeFileSync(path.join(dir, 'slack', t, 'thread.md'), thread('2026-11-01T10:00:00Z', '1793000500.000100'));
+    }
+    const calls: Record<string, string>[] = [];
+    const client = { call: async (_m: string, p: Record<string, string>) => (calls.push(p), { ok: true, messages: [] }) } as unknown as SlackClient;
+    await slackChanges(dir, true, client, Date.parse('2026-11-02T10:00:00Z'), new Set(['c1-1793000000000200']));
+    expect(calls).toHaveLength(1);
+  });
+});
+
+describe('followedSlackThreads', () => {
+  it('names the threads of running sessions only', () => {
+    const sessions = mkdtempSync(path.join(tmpdir(), 'slackwatch-s-'));
+    writeFileSync(path.join(sessions, 'live.follow'), 'slack/C1-17\npr/3\nrun/o/r/4');
+    writeFileSync(path.join(sessions, 'live.monitor'), String(process.pid));
+    writeFileSync(path.join(sessions, 'gone.follow'), 'slack/c2-18');
+    expect([...followedSlackThreads(sessions)]).toEqual(['c1-17']);
   });
 });
 
