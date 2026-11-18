@@ -8,6 +8,7 @@ import { JiraExporter } from '../../lib/exporter.js';
 import { JiraClient, jiraMillis, latestCommentUpdate, type JqlIssue } from '../../lib/jiraClient.js';
 import { exportSlackThread, hasSlackToken, loadSlackAuth, parseSlackUrl, SlackClient, threadFrontmatter, type SlackMessage } from '../../lib/slack.js';
 import { isRunning } from './resume.js';
+import { runChanges as actionRunChanges } from './runWatch.js';
 import { runningSessionKeys, slackMentionChanges } from './slackMentions.js';
 import { checksSignature, defaultGh, describePrChange, fetchPrState, myOpenPrs, notifiedPrs, repoSlug, snapshotOf, toast, type Gh, type PrSnapshot } from './prStatus.js';
 
@@ -702,7 +703,9 @@ function followedNames(keys: string[]): string {
   const isPage = (k: string) => k.toLowerCase().startsWith('confluence/');
   const threads = keys.filter(isThread).length;
   const pages = keys.filter(isPage).length;
-  const names = keys.filter((k) => !isThread(k) && !isPage(k)).map((k) => k.replace(/^pr\/(\d+)$/i, 'PR #$1'));
+  const names = keys
+    .filter((k) => !isThread(k) && !isPage(k))
+    .map((k) => k.replace(/^pr\/(\d+)$/i, 'PR #$1').replace(/^run\/[\w.-]+\/[\w.-]+\/(\d+)$/i, 'run $1'));
   if (threads) names.push(threads === 1 ? 'its Slack thread' : `${threads} Slack threads`);
   if (pages) names.push(pages === 1 ? 'its Confluence page' : `${pages} Confluence pages`);
   return names.join(', ');
@@ -713,7 +716,10 @@ export function concerns(line: string, keys: string[]): boolean {
   return keys.some((k) => {
     // A PR the session named ("pr/12") matches its change lines ("PR #12 (ZOD-1): …").
     const pr = /^pr\/(\d+)$/i.exec(k)?.[1];
-    return pr ? new RegExp(`PR #${pr}(?![0-9])`).test(line) : new RegExp(`(^|[^A-Z0-9-])${k}(?![0-9])`, 'i').test(line);
+    if (pr) return new RegExp(`PR #${pr}(?![0-9])`).test(line);
+    // A followed Actions run ("run/o/r/12") matches "Run 12 (o/r …): …".
+    const run = /^run\/[\w.-]+\/[\w.-]+\/(\d+)$/i.exec(k)?.[1];
+    return run ? new RegExp(`Run ${run}(?![0-9])`).test(line) :new RegExp(`(^|[^A-Z0-9-])${k}(?![0-9])`, 'i').test(line);
   });
 }
 
@@ -866,6 +872,8 @@ export async function runWatch(opts: WatchOptions): Promise<void> {
       }
     }
     if (opts.prs) changes.push(...prChanges(opts.prs, outputDir, opts.dryRun));
+    // Actions runs a session follows (a deploy waiting for approval): only `gh api` calls, no repo needed.
+    changes.push(...actionRunChanges(outputDir, opts.dryRun));
     const errors = changes.filter((c) => c.error);
     const real = changes.filter((c) => !c.error);
     if (errors.length) console.log(`${stamp} ${errors.map((c) => c.line).join('; ')}`);

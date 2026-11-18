@@ -23,7 +23,12 @@ const ISSUE_KEY = /\b[A-Z][A-Z0-9]+-\d+\b/;
 const MAX_TITLE = 80;
 const MAX_STATE_KEYS = 3;
 
-const PR_REF = /\/pull\/(\d+)\b|\b(?:PR|pull request)\s*#?(\d+)\b|(?:^|\s)#(\d{3,})\b/gi;
+/** Follow items (`run/<owner>/<repo>/<id>`) of GitHub Actions run links, as runWatch.ts names them. */
+const runItems = (text) => [
+  ...new Set([...text.matchAll(/github\.com\/([\w.-]+)\/([\w.-]+)\/actions\/runs\/(\d+)/g)].map((m) => `run/${m[1]}/${m[2]}/${m[3]}`)),
+];
+
+const PR_REF =/\/pull\/(\d+)\b|\b(?:PR|pull request)\s*#?(\d+)\b|(?:^|\s)#(\d{3,})\b/gi;
 
 /**
  * Ticket keys of the PRs the prompt names (a PR link, "PR #3151", "#3151"), from the PR list
@@ -143,6 +148,8 @@ function followLinks(prompt, sessionId) {
     const item = `pr/${m[1] ?? m[2]}`;
     if (!followed.includes(item) && !added.includes(item)) added.push(item);
   }
+  // A GitHub Actions run (a deploy waiting for approval): `watch` reports its approvals and result.
+  for (const item of runItems(prompt)) if (!followed.includes(item) && !added.includes(item)) added.push(item);
   const threadKeys = [];
   for (const { item, url, command, exported } of links) {
     if (followed.includes(item) || added.includes(item)) continue;
@@ -179,7 +186,7 @@ function followLinks(prompt, sessionId) {
 function threadRefs(threadFile) {
   try {
     const text = readFileSync(threadFile, 'utf8').split(/^# In the channel, outside the thread/m)[0].replace(/^---[\s\S]*?\n---\n/, '');
-    const prs = [...new Set([...text.matchAll(/github\.com\/[\w.-]+\/[\w.-]+\/pull\/(\d+)/g)].map((m) => `pr/${m[1]}`))];
+    const prs = [...new Set([...text.matchAll(/github\.com\/[\w.-]+\/[\w.-]+\/pull\/(\d+)/g)].map((m) => `pr/${m[1]}`)), ...runItems(text)];
     const keys = [...new Set(text.match(new RegExp(ISSUE_KEY, 'g')) ?? [])];
     return { prs, keys };
   } catch {

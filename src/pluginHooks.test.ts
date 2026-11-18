@@ -50,6 +50,12 @@ describe('prompt hook', () => {
     expect(readFileSync(path.join(sessions, 's1.keys'), 'utf8')).toBe('ZOD-1');
   });
 
+  it('follows a GitHub Actions run linked in the prompt', () => {
+    const { sessions, env } = workspace();
+    promptHook(env, 'watch https://github.com/o/aws/actions/runs/44 until it is deployed');
+    expect(readFileSync(path.join(sessions, 's1.follow'), 'utf8')).toBe('run/o/aws/44');
+  });
+
   it('tells Claude the user is back after a time away, and only then', () => {
     const { sessions, env } = workspace();
     expect(promptHook(env, 'hello').stdout).not.toContain('back after');
