@@ -25,6 +25,14 @@ try {
 }
 const session = typeof input.session_id === 'string' && SESSION_ID.test(input.session_id) ? input.session_id : '';
 
+// Deleted in `jirallm ui` and now resumed (/resume, claude --resume): listed again, records intact. In
+// any folder, also one without jira-export (where nothing else here runs): the resume says it is wanted.
+try {
+  if (session) rmSync(path.join(sessionsDir, `${session}.hidden`), { force: true });
+} catch {
+  // It just stays out of the list.
+}
+
 /** Keys whose state card this session was given (written by the prompt hook). */
 function sessionKeys() {
   const file = path.join(sessionsDir, `${session}.keys`);
@@ -119,8 +127,6 @@ if (!versionOut) {
         process.env.CLAUDE_CODE_ENTRYPOINT ?? '',
       ];
       writeFileSync(path.join(sessionsDir, `${session}.start`), lines.join('\n'));
-      // Deleted in `jirallm ui` and now resumed (/resume, claude --resume): listed again, records intact.
-      rmSync(path.join(sessionsDir, `${session}.hidden`), { force: true });
     } catch {
       // Without the handshake the monitor stays idle; the prompt hook still delivers changes.
     }
