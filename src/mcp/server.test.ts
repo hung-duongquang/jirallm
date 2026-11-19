@@ -42,10 +42,15 @@ describe('jirallm mcp', () => {
     const tools = (await client.listTools()).tools;
     const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
     for (const n of ['jira_read', 'jira_search', 'slack_read', 'slack_search', 'confluence_read', 'sharepoint_read']) expect(byName[n]?.annotations?.readOnlyHint, n).toBe(true);
+    // With the card they only preview: no client prompt before them, the card is the one approval.
     for (const n of ['jira_comment', 'jira_transition', 'jira_edit']) {
-      expect(byName[n]?.annotations?.destructiveHint, n).toBe(true);
+      expect(byName[n]?.annotations, n).toMatchObject({ readOnlyHint: true, destructiveHint: false });
       expect(byName[n]?._meta, n).toEqual({ ui: { resourceUri: CARD_URI } });
     }
+    expect(byName.jira_apply?.annotations?.destructiveHint).toBe(true);
+    // Without it they write, so the client asks first.
+    const plain = Object.fromEntries((await (await connect(false)).client.listTools()).tools.map((t) => [t.name, t]));
+    for (const n of ['jira_comment', 'jira_transition', 'jira_edit']) expect(plain[n]?.annotations, n).toMatchObject({ readOnlyHint: false, destructiveHint: true });
     expect(byName.jira_apply?._meta).toEqual({ ui: { visibility: ['app'] } });
     const card = await client.readResource({ uri: CARD_URI });
     expect(card.contents[0]).toMatchObject({ mimeType: UI_MIME });

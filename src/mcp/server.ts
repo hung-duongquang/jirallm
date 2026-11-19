@@ -14,7 +14,7 @@ import { appendFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmS
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer, type RegisteredTool } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { APPROVAL_CARD_HTML } from './approvalCard.js';
@@ -145,8 +145,12 @@ export function createServer(opts: ServerOptions = {}): McpServer {
   // Every tool call and its outcome go to <tmp>/jirallm-mcp.log (an MCP client shows no server output), so a
   // card that does nothing can be traced: did the call arrive, what did it answer.
   const log = opts.log ?? mcpLog;
+  const previewTools: RegisteredTool[] = [];
   server.server.oninitialized = () => {
     const caps = server.server.getClientCapabilities();
+    // With the card these tools only preview (the card is the approval), so the client need not ask first:
+    // asking there too made two approvals of one change (Claude Desktop's "Allow once", then the card).
+    if (showsCards()) for (const t of previewTools) t.update({ annotations: { ...t.annotations, readOnlyHint: true, destructiveHint: false } });
     log({ event: 'initialized', client: server.server.getClientVersion(), extensions: Object.keys(caps?.extensions ?? {}), cards: showsCards() });
   };
   const register = server.registerTool.bind(server) as (name: string, config: unknown, cb: (...a: unknown[]) => Promise<CallToolResult>) => unknown;
@@ -299,7 +303,7 @@ export function createServer(opts: ServerOptions = {}): McpServer {
     };
   };
 
-  server.registerTool(
+  const commentTool = server.registerTool(
     'jira_comment',
     {
       title: 'Comment on a Jira ticket',
@@ -310,7 +314,7 @@ export function createServer(opts: ServerOptions = {}): McpServer {
     },
     async (a) => propose(writes.comment(a))
   );
-  server.registerTool(
+  const transitionTool = server.registerTool(
     'jira_transition',
     {
       title: 'Move a Jira ticket to another status',
@@ -321,7 +325,7 @@ export function createServer(opts: ServerOptions = {}): McpServer {
     },
     async (a) => propose(writes.transition(a))
   );
-  server.registerTool(
+  const editTool = server.registerTool(
     'jira_edit',
     {
       title: 'Edit a Jira ticket',
@@ -342,6 +346,8 @@ export function createServer(opts: ServerOptions = {}): McpServer {
       return propose(writes.edit(a));
     }
   );
+
+  previewTools.push(commentTool, transitionTool, editTool);
 
   // ---- tools only the approval card calls -----------------------------------------------------------
   const appOnly = { ui: { visibility: ['app'] } };
