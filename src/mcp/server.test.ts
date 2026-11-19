@@ -24,7 +24,7 @@ function fakeCli() {
 
 async function connect(ui: boolean, now = () => 0, pendingDir = mkdtempSync(path.join(tmpdir(), 'jl-pending-'))) {
   const cli = fakeCli();
-  const server = createServer({ run: cli.run, now, log: () => {}, pendingDir });
+  const server = createServer({ run: cli.run, now, log: () => {}, pendingDir, ...(ui && { ui: true }) });
   const client = new Client(
     { name: 'test', version: '1' },
     { capabilities: ui ? { extensions: { [UI_EXTENSION]: { mimeTypes: [UI_MIME] } } } : {} }
@@ -105,6 +105,17 @@ describe('jirallm mcp', () => {
     expect(bad.isError).toBe(true);
     expect(bad._meta?.approvalId).toBeUndefined();
     expect(calls.filter((c) => !c.args.includes('--dry-run'))).toEqual([]);
+  });
+
+  it('a client that only announces MCP Apps gets no card unless JIRALLM_MCP_UI=1 (Claude Desktop showed none)', async () => {
+    const cli = fakeCli();
+    const server = createServer({ run: cli.run, log: () => {}, pendingDir: mkdtempSync(path.join(tmpdir(), 'jl-pending-')) });
+    const client = new Client({ name: 'desktop', version: '1' }, { capabilities: { extensions: { [UI_EXTENSION]: { mimeTypes: [UI_MIME] } } } });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(a), client.connect(b)]);
+    const r = (await client.callTool({ name: 'jira_comment', arguments: { key: 'ZOD-8', text: 'hi' } })) as { content: { text: string }[] };
+    expect(cli.calls).toEqual([{ args: ['comment', 'ZOD-8', '--file', expect.any(String)], body: 'hi' }]);
+    expect(r.content[0]!.text).toBe('comment ZOD-8 ok');
   });
 
   it('without the card: the write is made directly (the client asks, as it is marked destructive)', async () => {

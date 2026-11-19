@@ -308,11 +308,16 @@ jirallm mcp --uninstall
 
 - **Read:** `jira_read`, `jira_search`, `jira_transitions`, `slack_read`, `slack_search`, `confluence_read`, `confluence_search`, `sharepoint_read`.
 - **Write:** `jira_comment`, `jira_transition`, `jira_edit`.
-  - In a client that shows MCP Apps (Claude Desktop, claude.ai), the tool only previews the change with the command's `--dry-run`. It then shows an approval card in the chat.
-  - The change is made only when the person presses **Approve** in the card. The card calls `jira_apply`, which only the card can call (visibility `app`), so the model cannot approve its own write.
-  - In other clients the write is made directly. It is marked as changing data, so the client asks first.
+  - They are marked as changing data, so the app asks before each call. Claude Desktop shows "Claude wants to use Comment on a Jira ticket" with the ticket and the text.
+  - That prompt is the one approval: after **Allow once**, the change is made. Choose **Deny** to stop it.
+- **Optional approval card** (`JIRALLM_MCP_UI=1`, for apps that display MCP Apps):
+  - The write tool only previews the change with the command's `--dry-run`, and shows a card with **Approve** / **Cancel**.
+  - The card calls `jira_apply`, which only the card can call (visibility `app`).
+  - It is off by default: Claude Desktop's Chat tab announced MCP Apps but did not show the card (Desktop 6.6395).
+  - Pending approvals are files in `<tmp>/jirallm-mcp-pending`, because Desktop runs one server for Claude and another for the chat view.
+- **Log:** each call is logged to `<tmp>/jirallm-mcp.log`.
 
-The tools run the CLI (same config, same keychain tokens), so `jirallm init` and `jirallm slack:auth` are all the setup there is. The plugin's push features (the background monitor, ticket cards in prompts) are Claude Code only. In the Chat tab, Claude reads what changed when asked. `--install` also prints the command for other MCP clients. Set `JIRALLM_MCP_UI=0` to skip the card even in clients that can show it.
+The tools run the CLI (same config, same keychain tokens), so `jirallm init` and `jirallm slack:auth` are all the setup there is. The plugin's push features (the background monitor, ticket cards in prompts) are Claude Code only. In the Chat tab, Claude reads what changed when asked. `--install` also prints the command for other MCP clients. 
 
 ## For agents (CLI commands)
 

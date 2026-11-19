@@ -212,7 +212,10 @@ export function createServer(opts: ServerOptions = {}): McpServer {
 
   const showsCards = () => {
     if (opts.ui !== undefined) return opts.ui;
-    if (process.env.JIRALLM_MCP_UI === '0') return false;
+    // Off unless asked for: Claude Desktop's Chat tab announces MCP Apps but did not show the card (2026-11-19,
+    // Desktop 6.6395: the card's page was read, its script never ran), and it asks "Allow once" before every
+    // tool call anyway. That prompt, showing the ticket and the text, is then the one approval.
+    if (process.env.JIRALLM_MCP_UI !== '1') return false;
     const ext = server.server.getClientCapabilities()?.extensions?.[UI_EXTENSION] as { mimeTypes?: string[] } | undefined;
     return Boolean(ext && (!ext.mimeTypes || ext.mimeTypes.includes(UI_MIME)));
   };
@@ -322,7 +325,7 @@ export function createServer(opts: ServerOptions = {}): McpServer {
   const cardMeta = { ui: { resourceUri: CARD_URI } };
   const write = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true } as const;
   const approvalNote =
-    'In a client that shows the approval card, nothing is written by this call: the person sees a preview and the change is made only when they press Approve in the card. Then tell them briefly to review the card; do not call the tool again for the same change and do not say it is done.';
+    'The person approves the call in their app (its permission prompt shows these arguments), so write exactly what they agreed to. If the result says it is waiting for approval in a card, nothing is written yet: tell them briefly to review the card, do not call the tool again for the same change and do not say it is done.';
 
   const propose = async (w: WriteRequest): Promise<CallToolResult> => {
     if (!showsCards()) return answer(await runWrite(run, w, false));
