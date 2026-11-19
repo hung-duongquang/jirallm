@@ -297,6 +297,23 @@ claude plugin install jirallm@jirallm
 
 Restart Claude Code afterwards. `claude plugin update jirallm@jirallm` picks up a newer skill. The skill is the text `jirallm agent-guide` prints; `pnpm build` copies it to `skills/jirallm/SKILL.md`.
 
+## MCP server (Claude Desktop's Chat tab and other MCP clients)
+
+Where the plugin does not run, such as the Chat tab of Claude Desktop, `jirallm mcp` gives Claude the same commands as MCP tools:
+
+```bash
+jirallm mcp --install     # adds jirallm to Claude Desktop; then quit Desktop from the tray icon and start it again
+jirallm mcp --uninstall
+```
+
+- **Read:** `jira_read`, `jira_search`, `jira_transitions`, `slack_read`, `slack_search`, `confluence_read`, `confluence_search`, `sharepoint_read`.
+- **Write:** `jira_comment`, `jira_transition`, `jira_edit`.
+  - In a client that shows MCP Apps (Claude Desktop, claude.ai), the tool only previews the change with the command's `--dry-run`. It then shows an approval card in the chat.
+  - The change is made only when the person presses **Approve** in the card. The card calls `jira_apply`, which only the card can call (visibility `app`), so the model cannot approve its own write.
+  - In other clients the write is made directly. It is marked as changing data, so the client asks first.
+
+The tools run the CLI (same config, same keychain tokens), so `jirallm init` and `jirallm slack:auth` are all the setup there is. The plugin's push features (the background monitor, ticket cards in prompts) are Claude Code only. In the Chat tab, Claude reads what changed when asked. `--install` also prints the command for other MCP clients. Set `JIRALLM_MCP_UI=0` to skip the card even in clients that can show it.
+
 ## For agents (CLI commands)
 
 Every command supports `--json` (and automatically switches to JSON when stdout is not a TTY), so they're safe to pipe into `jq` or feed back into an agent. Write commands echo what they created, so success can be confirmed from the command itself without a follow-up read. Every write command also supports `--dry-run`.

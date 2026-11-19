@@ -657,6 +657,22 @@ program
   .addHelpText('after', '\nExamples:\n  $ jirallm unfollow https://ws.slack.com/archives/C1/p1700000000000001\n  $ jirallm unfollow "PR #3270" run/o/aws/44\n  $ jirallm unfollow --list\n');
 
 program
+  .command('mcp')
+  .description('Run jirallm as an MCP server (stdio) for MCP clients such as the Chat tab of Claude Desktop: Jira, Slack, Confluence and SharePoint tools; Jira changes show an approval card (MCP Apps) and are made only on Approve. --install adds it to Claude Desktop')
+  .option('--install', 'Add jirallm to Claude Desktop (claude_desktop_config.json) and print the command for other clients')
+  .option('--uninstall', 'Remove jirallm from Claude Desktop')
+  .action(async (opts: { install?: boolean; uninstall?: boolean }) => {
+    if (opts.install || opts.uninstall) {
+      const { runMcpInstall } = await import('../mcp/install.js');
+      runMcpInstall({ uninstall: opts.uninstall });
+      return;
+    }
+    const { runMcpServer } = await import('../mcp/server.js');
+    await runMcpServer(pkg.version);
+  })
+  .addHelpText('after', '\nExamples:\n  $ jirallm mcp --install     # then restart Claude Desktop\n  $ jirallm mcp --uninstall\n');
+
+program
   .command('setup')
   .description('Install missing system dependencies (currently: ffmpeg) with cascading consent')
   .option('--bundled', 'Install ffmpeg-static globally instead of system ffmpeg')
