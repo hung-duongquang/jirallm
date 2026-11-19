@@ -53,12 +53,15 @@ export const APPROVAL_CARD_HTML = `<!doctype html>
   if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.dataset.theme = 'dark';
   const status = (msg, kind) => { const s = $('status'); s.textContent = msg; s.className = 'status' + (kind ? ' ' + kind : ''); };
   const textOf = (r) => ((r && r.content) || []).filter((c) => c.type === 'text').map((c) => c.text).join('\\n');
+  // What the card sees goes to the server log (jirallm-mcp.log), the only trace of a card that does nothing.
+  const report = (event, detail) => request('tools/call', { name: 'jira_card_event', arguments: { event, detail: String(detail || '').slice(0, 500) } }).catch(() => {});
   const done = () => { $('approve').disabled = true; $('cancel').disabled = true; };
 
   function show(result) {
     const sc = (result && result.structuredContent) || {};
     const meta = (result && result._meta) || {};
     approvalId = typeof meta.approvalId === 'string' ? meta.approvalId : '';
+    report('tool-result', (approvalId ? 'with approval id' : 'no approval id') + (result && result.isError ? ', error' : '') + '; keys ' + Object.keys(result || {}).join(','));
     title = sc.title || 'Jira change';
     $('title').textContent = title;
     if (typeof sc.body === 'string') { $('body').textContent = sc.body; $('bodyWrap').hidden = false; }
@@ -70,11 +73,13 @@ export const APPROVAL_CARD_HTML = `<!doctype html>
 
   async function act(tool, verb) {
     done();
+    report('click', verb);
     status(verb === 'approved' ? 'Writing to Jira…' : 'Cancelling…');
     let r;
     try { r = await request('tools/call', { name: tool, arguments: { id: approvalId } }); }
-    catch (e) { status('Failed: ' + ((e && e.message) || e), 'bad'); return; }
+    catch (e) { status('Failed: ' + ((e && e.message) || e), 'bad'); report('call failed', (e && e.message) || e); return; }
     const msg = textOf(r);
+    report('call result', (r && r.isError ? 'error: ' : 'ok: ') + msg.slice(0, 200));
     status(r && r.isError ? msg : verb === 'approved' ? '✓ ' + msg.split('\\n')[0] : msg, r && r.isError ? 'bad' : verb === 'approved' ? 'ok' : '');
     // Claude learns the outcome on its next turn.
     request('ui/update-model-context', { content: [{ type: 'text', text: 'jirallm approval card: the user ' + verb + ' "' + title + '". Result: ' + msg }] }).catch(() => {});
@@ -101,7 +106,7 @@ export const APPROVAL_CARD_HTML = `<!doctype html>
   new ResizeObserver(() => notify('ui/notifications/size-changed', { width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight })).observe(document.body);
 
   request('ui/initialize', { protocolVersion: '2026-01-26', clientInfo: { name: 'jirallm-approval-card', version: '1' }, appCapabilities: { availableDisplayModes: ['inline'] } })
-    .then((r) => { setTheme(r && r.hostContext); notify('ui/notifications/initialized', {}); })
+    .then((r) => { setTheme(r && r.hostContext); notify('ui/notifications/initialized', {}); report('initialized', (r && r.hostInfo && r.hostInfo.name) || ''); })
     .catch(() => status('This app cannot show the approval card.', 'bad'));
 })();
 </script>

@@ -22,9 +22,9 @@ function fakeCli() {
   return { calls, run };
 }
 
-async function connect(ui: boolean, now = () => 0) {
+async function connect(ui: boolean, now = () => 0, pendingDir = mkdtempSync(path.join(tmpdir(), 'jl-pending-'))) {
   const cli = fakeCli();
-  const server = createServer({ run: cli.run, now, log: () => {} });
+  const server = createServer({ run: cli.run, now, log: () => {}, pendingDir });
   const client = new Client(
     { name: 'test', version: '1' },
     { capabilities: ui ? { extensions: { [UI_EXTENSION]: { mimeTypes: [UI_MIME] } } } : {} }
@@ -74,6 +74,18 @@ describe('jirallm mcp', () => {
     expect(calls[1]).toEqual({ args: ['comment', 'ZOD-1', '--file', expect.any(String)], body: 'Looks **good**' });
     expect((await call('jira_apply', { id })).isError).toBe(true); // once only
     expect(calls).toHaveLength(2);
+  });
+
+  it('the card may talk to another server process than the one that proposed (Claude Desktop runs two)', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'jl-pending-'));
+    const agent = await connect(true, () => 0, dir);
+    const view = await connect(true, () => 0, dir);
+    const r = await agent.call('jira_comment', { key: 'ZOD-7', text: 'hi' });
+    const applied = await view.call('jira_apply', { id: r._meta?.approvalId });
+    expect(applied.content[0]!.text).toMatch(/^Done: Comment on ZOD-7/);
+    expect(view.calls).toEqual([{ args: ['comment', 'ZOD-7', '--file', expect.any(String)], body: 'hi' }]);
+    expect((await agent.call('jira_apply', { id: r._meta?.approvalId })).isError).toBe(true);
+    expect(agent.calls).toHaveLength(1); // only the dry run
   });
 
   it('cancel writes nothing; an hour-old preview is refused; a failed preview leaves nothing pending', async () => {

@@ -10,7 +10,7 @@
 // output match the commands exactly.
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -78,6 +78,45 @@ function withTextFile<T>(content: string, use: (file: string) => Promise<T>): Pr
 /** A pending write: the CLI arguments and the text the card shows, until the person approves or cancels. */
 type Pending = { args: string[]; body?: string; bodyFlag?: string; title: string; key: string; at: number };
 
+/**
+ * Pending writes, one file each. Not in memory: Claude Desktop starts one server for Claude's tool calls
+ * (which proposes the write) and another for the chat view (whose card approves it), so the approval
+ * must be readable by every server process of this user. Taking one renames it first, so it runs once.
+ */
+export function pendingStore(dir: string, ttlMs: number, now: () => number) {
+  const file = (id: string) => path.join(dir, `${id}.json`);
+  return {
+    set(id: string, p: Pending): void {
+      mkdirSync(dir, { recursive: true });
+      for (const f of readdirSync(dir)) {
+        try {
+          if (now() - statSync(path.join(dir, f)).mtimeMs > 2 * ttlMs) rmSync(path.join(dir, f), { force: true });
+        } catch {
+          // Taken meanwhile.
+        }
+      }
+      writeFileSync(file(id), JSON.stringify(p), 'utf8');
+    },
+    /** The pending write, removed so a second Approve finds nothing; undefined when gone or never there. */
+    take(id: string): Pending | undefined {
+      if (!/^[0-9a-f-]{36}$/i.test(id)) return undefined;
+      const claimed = `${file(id)}.${process.pid}.taken`;
+      try {
+        renameSync(file(id), claimed);
+      } catch {
+        return undefined;
+      }
+      try {
+        return JSON.parse(readFileSync(claimed, 'utf8')) as Pending;
+      } catch {
+        return undefined;
+      } finally {
+        rmSync(claimed, { force: true });
+      }
+    },
+  };
+}
+
 export type WriteRequest = { key: string; title: string; args: string[]; body?: string; bodyFlag?: string };
 
 /** CLI arguments of each write, with the long text (comment, description) passed as a file. */
@@ -122,6 +161,8 @@ export type ServerOptions = {
   now?: () => number;
   version?: string;
   log?: (entry: Record<string, unknown>) => void;
+  /** Where pending approvals are kept (shared by every server process); default <tmp>/jirallm-mcp-pending. */
+  pendingDir?: string;
 };
 
 const LOG_FILE = path.join(tmpdir(), 'jirallm-mcp.log');
@@ -139,7 +180,7 @@ export function mcpLog(entry: Record<string, unknown>): void {
 export function createServer(opts: ServerOptions = {}): McpServer {
   const run = opts.run ?? runCli;
   const now = opts.now ?? Date.now;
-  const pending = new Map<string, Pending>();
+  const pending = pendingStore(opts.pendingDir ?? path.join(tmpdir(), 'jirallm-mcp-pending'), APPROVAL_TTL_MS, now);
   const server = new McpServer({ name: 'jirallm', version: opts.version ?? '0' });
 
   // Every tool call and its outcome go to <tmp>/jirallm-mcp.log (an MCP client shows no server output), so a
@@ -361,8 +402,7 @@ export function createServer(opts: ServerOptions = {}): McpServer {
       _meta: appOnly,
     },
     async (a) => {
-      const p = pending.get(a.id);
-      pending.delete(a.id);
+      const p = pending.take(a.id);
       if (!p) return text('This change was already applied or cancelled.', true);
       if (now() - p.at > APPROVAL_TTL_MS) return text('This preview is more than an hour old: ask Claude for a fresh one.', true);
       const r = await runWrite(run, p, false);
@@ -379,10 +419,21 @@ export function createServer(opts: ServerOptions = {}): McpServer {
       _meta: appOnly,
     },
     async (a) => {
-      const p = pending.get(a.id);
-      pending.delete(a.id);
+      const p = pending.take(a.id);
       return text(p ? `Cancelled: ${p.title}. Nothing was written.` : 'Nothing to cancel.');
     }
+  );
+
+  server.registerTool(
+    'jira_card_event',
+    {
+      title: 'Approval card diagnostics',
+      description: 'Called by the approval card to note what it shows and what happened (written to jirallm-mcp.log). Not for the model.',
+      inputSchema: { event: z.string().max(60), detail: z.string().max(500).optional() },
+      annotations: { readOnlyHint: true },
+      _meta: appOnly,
+    },
+    async () => text('ok')
   );
 
   server.registerResource(
