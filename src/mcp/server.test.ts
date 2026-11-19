@@ -24,7 +24,7 @@ function fakeCli() {
 
 async function connect(ui: boolean, now = () => 0) {
   const cli = fakeCli();
-  const server = createServer({ run: cli.run, now });
+  const server = createServer({ run: cli.run, now, log: () => {} });
   const client = new Client(
     { name: 'test', version: '1' },
     { capabilities: ui ? { extensions: { [UI_EXTENSION]: { mimeTypes: [UI_MIME] } } } : {} }

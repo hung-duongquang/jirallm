@@ -10,7 +10,7 @@
 // output match the commands exactly.
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -121,13 +121,49 @@ export type ServerOptions = {
   ui?: boolean;
   now?: () => number;
   version?: string;
+  log?: (entry: Record<string, unknown>) => void;
 };
+
+const LOG_FILE = path.join(tmpdir(), 'jirallm-mcp.log');
+
+/** Appends one JSON line; starts over past 1 MB. Never fails a call. */
+export function mcpLog(entry: Record<string, unknown>): void {
+  try {
+    if (existsSync(LOG_FILE) && statSync(LOG_FILE).size > 1_000_000) writeFileSync(LOG_FILE, '');
+    appendFileSync(LOG_FILE, `${JSON.stringify({ at: new Date().toISOString(), pid: process.pid, ...entry })}\n`);
+  } catch {
+    // Logging is a bonus.
+  }
+}
 
 export function createServer(opts: ServerOptions = {}): McpServer {
   const run = opts.run ?? runCli;
   const now = opts.now ?? Date.now;
   const pending = new Map<string, Pending>();
   const server = new McpServer({ name: 'jirallm', version: opts.version ?? '0' });
+
+  // Every tool call and its outcome go to <tmp>/jirallm-mcp.log (an MCP client shows no server output), so a
+  // card that does nothing can be traced: did the call arrive, what did it answer.
+  const log = opts.log ?? mcpLog;
+  server.server.oninitialized = () => {
+    const caps = server.server.getClientCapabilities();
+    log({ event: 'initialized', client: server.server.getClientVersion(), extensions: Object.keys(caps?.extensions ?? {}), cards: showsCards() });
+  };
+  const register = server.registerTool.bind(server) as (name: string, config: unknown, cb: (...a: unknown[]) => Promise<CallToolResult>) => unknown;
+  (server as { registerTool: unknown }).registerTool = (name: string, config: unknown, cb: (...a: unknown[]) => Promise<CallToolResult>) =>
+    register(name, config, async (...a: unknown[]) => {
+      const args = a[0] as Record<string, unknown>;
+      log({ event: 'call', tool: name, args: Object.fromEntries(Object.entries(args ?? {}).map(([k, v]) => [k, typeof v === 'string' ? v.slice(0, 120) : v])) });
+      try {
+        const r = await cb(...a);
+        const first = r.content?.[0];
+        log({ event: 'result', tool: name, isError: Boolean(r.isError), card: Boolean(r._meta?.approvalId), text: first && first.type === 'text' ? first.text.slice(0, 200) : '' });
+        return r;
+      } catch (e) {
+        log({ event: 'error', tool: name, error: String(e) });
+        throw e;
+      }
+    });
 
   const showsCards = () => {
     if (opts.ui !== undefined) return opts.ui;
@@ -347,7 +383,7 @@ export function createServer(opts: ServerOptions = {}): McpServer {
     'approval-card',
     CARD_URI,
     { title: 'jirallm approval card', mimeType: UI_MIME, description: 'Shows a proposed Jira change with Approve and Cancel.' },
-    async () => ({ contents: [{ uri: CARD_URI, mimeType: UI_MIME, text: APPROVAL_CARD_HTML }] })
+    async () => (log({ event: 'card read' }), { contents: [{ uri: CARD_URI, mimeType: UI_MIME, text: APPROVAL_CARD_HTML }] })
   );
 
   return server;
