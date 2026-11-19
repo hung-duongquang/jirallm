@@ -116,6 +116,18 @@ export function hasHotThread(sessionId, now = Date.now()) {
   return false;
 }
 
+const GREETING =
+  /^(?:hi|hello|hey|hoi|hallo|yo|morning|good (?:morning|afternoon|evening)|goedemorgen|goedemiddag|(?:xin )?ch[aà]o|hi there|hello there)(?: (?:claude|again|all|everyone|team|b[aạ]n))?$/i;
+
+/**
+ * True for a bare greeting ("Hi", "Hello Claude", "chào"): the prompt hook then adds no ticket changes or
+ * away note, so Claude answers at once instead of acting on context nobody asked about.
+ */
+export function isGreeting(prompt) {
+  const text = String(prompt).trim().replace(/[\s!.,:)(👋🙂😊]+$/u, '').replace(/\s+/g, ' ');
+  return text.length <= 30 && GREETING.test(text);
+}
+
 const newerThan = (file, marker) => !existsSync(marker) || statSync(file).mtimeMs > statSync(marker).mtimeMs;
 
 /**

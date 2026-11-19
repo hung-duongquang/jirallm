@@ -12,10 +12,12 @@
 //    per key per session, so ticket facts live with the ticket instead of in a memory index.
 // 4. When the user's previous prompt was 2 hours or a calendar day ago (end of day, a reboot), Claude is
 //    told how long they were away and gets fresh state cards of the session's tickets.
+// A bare greeting ("Hi", "chào") gets none of this: Claude answers it at once instead of acting on
+// ticket changes nobody asked about. The changes stay unseen and the away note waits for the next prompt.
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { changesMessage, jirallm, jirallmDetached, outputDir, refreshResumeTasks, unseenChanges } from './changes.mjs';
+import { changesMessage, isGreeting, jirallm, jirallmDetached, outputDir, refreshResumeTasks, unseenChanges } from './changes.mjs';
 
 const sessionsDir = path.join(os.tmpdir(), 'jirallm-sessions');
 const SLACK_URL = /https:\/\/[\w-]+\.slack\.com\/(?:archives|files)\/[^\s<>)"'\]]+/;
@@ -264,6 +266,9 @@ function sessionKeys(sessionId) {
 // this one followed them from then on. Only the user's own words add tickets, links and a title.
 const userPrompt = typeof input.prompt === 'string' && !/^\s*<task-notification>/.test(input.prompt) ? input.prompt : undefined;
 
+// A greeting gets no context; only the session title and UI name below.
+const greeting = typeof userPrompt === 'string' && isGreeting(userPrompt);
+
 let title = '';
 try {
   const first = typeof userPrompt === 'string' && isFirstPrompt(input.session_id);
@@ -283,7 +288,7 @@ try {
 
 let away = '';
 try {
-  if (userPrompt) away = awayNote(input.session_id, input.transcript_path);
+  if (userPrompt && !greeting) away = awayNote(input.session_id, input.transcript_path);
 } catch {
   // The note is a bonus too.
 }
@@ -300,7 +305,7 @@ try {
   // The card is a bonus too.
 }
 
-const changes = unseenChanges(input.session_id, true);
+const changes = greeting ? '' : unseenChanges(input.session_id, true);
 const context = [away, cards && `jirallm ticket state (local):\n\n${cards}`, changes].filter(Boolean).join('\n\n');
 const message = [
   away && '🌅 jirallm: welcome back, Claude was told how long you were away',
