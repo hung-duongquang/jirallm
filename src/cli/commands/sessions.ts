@@ -1,4 +1,4 @@
-import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { isMarkedOpen, isRunning } from './resume.js';
@@ -88,26 +88,25 @@ export function firstPrompt(transcript: string, maxBytes = 256 * 1024): string {
   return '';
 }
 
+/** Marks a session deleted from the sessions view; its SessionStart hook removes it on a resume. */
+const hiddenFile = (id: string, sessionsDir: string) => path.join(sessionsDir, `${id}.hidden`);
+
 /**
- * Removes everything jirallm keeps about a session, so it leaves the sessions view: its handshake,
- * keys, title, followed links, reopen mark and monitor pid (sessionsDir) and its delivery log,
- * receipts and seen markers (outputDir/.changes.seen.d). Claude Code's own transcript stays, so
- * `claude --resume <id>` still works; resuming it starts the records afresh. A running session is
- * refused: its hooks would write the records back at once. Returns the number of files removed.
+ * Deletes a session from the sessions view: it is hidden (`<id>.hidden`) and no longer reopened after
+ * a reboot (its reopen mark goes). Its records stay: tickets, followed links, title, delivery log and
+ * seen markers. A later `/resume` or `claude --resume <id>` then carries on exactly as a resume from the
+ * view would (same tickets, follows and changes), and its SessionStart hook drops the hidden mark, so it
+ * is listed again. A running session is refused. Returns the number of files written or removed.
  */
 export function removeSession(id: string, outputDir: string, sessionsDir = path.join(os.tmpdir(), 'jirallm-sessions')): number {
   if (!/^[0-9a-f-]{8,}$/i.test(id)) throw new Error(`Not a session id: ${id}`);
   if (isRunning(id, sessionsDir)) throw new Error('This session is running: end it (/exit) before deleting it');
-  let removed = 0;
-  for (const dir of [sessionsDir, path.join(outputDir, SESSION_DIR)]) {
-    if (!existsSync(dir)) continue;
-    for (const f of readdirSync(dir)) {
-      if (f !== id && !f.startsWith(`${id}.`)) continue;
-      rmSync(path.join(dir, f), { force: true });
-      removed++;
-    }
-  }
-  return removed;
+  mkdirSync(sessionsDir, { recursive: true });
+  writeFileSync(hiddenFile(id, sessionsDir), new Date().toISOString());
+  const open = path.join(sessionsDir, `${id}.open`);
+  if (!existsSync(open)) return 1;
+  rmSync(open, { force: true });
+  return 2;
 }
 
 /**
@@ -135,6 +134,7 @@ export function claudeSessions(outputDir: string, days = 7, sessionsDir = path.j
   }
   const out: SessionOverview[] = [];
   for (const id of ids) {
+    if (existsSync(hiddenFile(id, sessionsDir))) continue; // Deleted from the view until it is resumed.
     const transcript = transcripts.get(id) ?? '';
     const pid = Number(read(path.join(sessionsDir, `${id}.monitor`)));
     const monitor = pid > 0 && alive(pid);

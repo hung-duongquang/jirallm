@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { claudeSessions, removeSession } from './sessions.js';
@@ -74,12 +74,23 @@ describe('removeSession', () => {
     return { dir, seen, tmp };
   };
 
-  it('removes every jirallm record of that session and nothing of another', () => {
+  it('hides the session and stops its reopen, but keeps its records for a later /resume', () => {
     const { dir, seen, tmp } = setup();
-    expect(removeSession(id, dir, tmp)).toBe(11);
-    expect([...readdirSync(tmp), ...readdirSync(seen)].filter((f) => f.startsWith(id))).toEqual([]);
-    expect(readdirSync(tmp).filter((f) => f.startsWith(other))).toHaveLength(6);
-    expect(readdirSync(seen).filter((f) => f.startsWith(other))).toHaveLength(5);
+    // A transcript written just now: both sessions are live, so the view lists them.
+    for (const s of [id, other]) {
+      writeFileSync(path.join(tmp, s + '.jsonl'), '');
+      writeFileSync(path.join(tmp, s + '.start'), [path.dirname(dir), 'startup', path.join(tmp, s + '.jsonl')].join('\n'));
+    }
+    expect(claudeSessions(dir, 7, tmp).map((s) => s.id).sort()).toEqual([other, id].sort());
+    expect(removeSession(id, dir, tmp)).toBe(2);
+    expect(claudeSessions(dir, 7, tmp).map((s) => s.id)).toEqual([other]);
+    expect(existsSync(path.join(tmp, id + '.open'))).toBe(false);
+    for (const ext of ['.keys', '.follow', '.title']) expect(existsSync(path.join(tmp, id + ext))).toBe(true);
+    expect(existsSync(path.join(seen, id + '.log'))).toBe(true);
+    expect(readdirSync(tmp).filter((f) => f.startsWith(other) && !f.endsWith('.jsonl'))).toHaveLength(6);
+    // Resumed: the SessionStart hook drops the hidden mark, and the session is listed again.
+    rmSync(path.join(tmp, id + '.hidden'));
+    expect(claudeSessions(dir, 7, tmp).map((s) => s.id)).toContain(id);
   });
 
   it('refuses a running session and anything that is not a session id', () => {

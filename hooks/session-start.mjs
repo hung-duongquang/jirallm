@@ -8,7 +8,7 @@
 // been given, which the summary may have reduced to a mention, and asks Claude to save decisions
 // from the summary as ticket notes.
 // It never fails the session.
-import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -119,6 +119,8 @@ if (!versionOut) {
         process.env.CLAUDE_CODE_ENTRYPOINT ?? '',
       ];
       writeFileSync(path.join(sessionsDir, `${session}.start`), lines.join('\n'));
+      // Deleted in `jirallm ui` and now resumed (/resume, claude --resume): listed again, records intact.
+      rmSync(path.join(sessionsDir, `${session}.hidden`), { force: true });
     } catch {
       // Without the handshake the monitor stays idle; the prompt hook still delivers changes.
     }

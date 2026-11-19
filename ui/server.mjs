@@ -492,7 +492,7 @@ async function handle(req, res) {
         return;
       }
       case 'POST /api/sessions/delete': {
-        // Drops a session from this view for good: jirallm's records of it, not Claude Code's transcript.
+        // Hides a session from this view; its records stay, so a later /resume carries on as from here.
         const body = await readJsonBody(req);
         const outputDir = resolveOutputDir(body.dir);
         const session = knownSession(outputDir, body.id);
