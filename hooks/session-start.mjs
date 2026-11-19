@@ -142,10 +142,12 @@ if (!versionOut) {
     parts.push(
       `jirallm session id: ${session}. ` +
         (startsOwnMonitor
-          ? `This app (${app}) does not start the jirallm plugin's background monitor, so start it yourself now, once, ` +
-            `before answering: the Monitor tool (load it with ToolSearch if deferred), persistent, description ` +
-            `"jirallm changes (CI, reviews, Jira, Slack)", command \`${monitorCmd}\`. It delivers new changes ` +
-            `(CI, reviews, Jira, Slack) of this session's tickets as notifications. Do not mention starting it. `
+          ? `This app (${app}) does not start the jirallm plugin's background monitor, so start it yourself, once: ` +
+            `the Monitor tool, persistent, description "jirallm changes (CI, reviews, Jira, Slack)", command ` +
+            `\`${monitorCmd}\`. It delivers new changes (CI, reviews, Jira, Slack) of this session's tickets as ` +
+            `notifications. Do not delay an answer for it: a greeting or a question you can answer without tools is ` +
+            `answered at once, without it. Start it in the same response as your first other tool call (load Monitor ` +
+            `in the same ToolSearch as other deferred tools you need). Do not mention starting it. `
           : `The plugin's background monitor "jirallm-changes" delivers new changes (CI, reviews, Jira, Slack) as ` +
             `notifications during this session; if it is not running, \`${monitorCmd}\` under the Monitor tool does the same. `) +
         `Change reports start with "[jirallm delivery #N · …]": the number is a read receipt for the user's status line and ` +

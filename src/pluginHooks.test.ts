@@ -114,7 +114,7 @@ describe('Claude Desktop (runs hooks, starts no plugin monitors)', () => {
   it('asks Claude to start the monitor for its session; the CLI is told it runs already', () => {
     const { env } = workspace();
     const desktop = JSON.parse(sessionStart({ ...env, CLAUDE_CODE_ENTRYPOINT: 'claude-desktop' }).stdout);
-    expect(desktop.hookSpecificOutput.additionalContext).toMatch(/start it yourself now[\s\S]*monitor\.mjs" "[^"]+" --session d1`/);
+    expect(desktop.hookSpecificOutput.additionalContext).toMatch(/start it yourself, once[\s\S]*monitor\.mjs" "[^"]+" --session d1`[\s\S]*Do not delay an answer for it/);
     const cli = JSON.parse(sessionStart({ ...env, CLAUDE_CODE_ENTRYPOINT: 'cli' }).stdout);
     expect(cli.hookSpecificOutput.additionalContext).not.toContain('start it yourself');
   });
