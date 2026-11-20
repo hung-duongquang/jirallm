@@ -771,6 +771,17 @@ program
   });
 
 program
+  .command('sessions:news', { hidden: true })
+  .description("For the Claude Code plugin's prompt hook after a time away: closed sessions with a review, failed CI, a merge or a new comment waiting (only while `watch --closed-sessions` runs)")
+  .option('--exclude <id>', 'The session asking (not listed)')
+  .option('--output-dir <dir>', 'Export folder', './jira-export')
+  .action(async (opts: { exclude?: string; outputDir: string }) => {
+    const { sessionsNewsText } = await import('./commands/closedSessions.js');
+    const text = sessionsNewsText(opts.outputDir, opts.exclude);
+    if (text) console.log(text);
+  });
+
+program
   .command('update-notice', { hidden: true })
   .description("For the Claude Code plugin's session start: this version, then a line naming an update or a plugin/CLI mismatch when there is one")
   .option('--plugin <version>', "The plugin's version")
@@ -2014,6 +2025,7 @@ program
   .option('--no-slack', 'Skip checking exported Slack threads and searching Slack for new messages about the tickets of running Claude sessions (checked only when `slack:auth` is set up)')
   .option('--slack-every <minutes>', 'Check exported Slack threads for new replies at most every N minutes (default 5; threads quiet for 14 days are skipped). Threads a running Claude Code session follows are checked on every run')
   .option('--tags', 'Also search Slack for new messages that tag you (off by default): exported, listed in `jirallm ui`, and a toast with "Handle in Claude"')
+  .option('--closed-sessions', 'Toast when a Claude session that is not running gets a review, failed CI, a merge or a new comment ("Resume session" reopens it), and name such sessions in the first prompt after a time away (off by default)')
   .option('--notify', 'Show a Windows toast when there are changes (click opens the PR, ticket or Slack thread)')
   .option('--quiet', 'Print nothing when nothing changed (the scheduled task uses this)')
   .addHelpText('after', `

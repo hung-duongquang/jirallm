@@ -305,10 +305,21 @@ try {
   // The card is a bonus too.
 }
 
+// After a time away: other sessions that are closed but got a review, failed CI, a merge or a comment
+// (only while `watch --closed-sessions` runs; the command prints nothing otherwise).
+let closed = '';
+try {
+  if (away) closed = jirallm(['sessions:news', '--exclude', input.session_id, '--output-dir', outputDir], 10000);
+} catch {
+  // The summary is a bonus too.
+}
+const closedCount = closed ? closed.split('\n').filter((l) => l.startsWith('- ')).length : 0;
+
 const changes = greeting ? '' : unseenChanges(input.session_id, true);
-const context = [away, cards && `jirallm ticket state (local):\n\n${cards}`, changes].filter(Boolean).join('\n\n');
+const context = [away, closed, cards && `jirallm ticket state (local):\n\n${cards}`, changes].filter(Boolean).join('\n\n');
 const message = [
   away && '🌅 jirallm: welcome back, Claude was told how long you were away',
+  closedCount && `📬 jirallm: ${closedCount} closed session${closedCount === 1 ? ' has' : 's have'} news`,
   changes && changesMessage(changes),
   cards && `🗂 jirallm: state of ${cardKeys.join(', ')} added`,
 ]

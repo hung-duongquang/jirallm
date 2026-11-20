@@ -34,6 +34,8 @@ export type WatchOptions = {
   slack?: boolean;
   /** true: also search Slack for new messages that tag the user (--tags; off by default). */
   tags?: boolean;
+  /** true: toast closed Claude sessions with news, and let the prompt hook name them after a time away (--closed-sessions). */
+  closedSessions?: boolean;
   slackEvery?: string;
 };
 
@@ -758,6 +760,21 @@ export function pendingCounts(outputDir: string, session: string | undefined, ke
   return { waiting: waiting.size, others: others.size };
 }
 
+/** The change lines (without their "- " prefix) waiting for a session: about its items, not yet handed to it or read. */
+export function waitingLines(outputDir: string, session: string, keys: string[], since = ''): string[] {
+  const file = path.join(outputDir, CHANGES_FILE);
+  if (!keys.length || !existsSync(file)) return [];
+  const seen = seenStamp(outputDir, session);
+  const pushed = readStamp(pushedMarkerPath(outputDir, session));
+  const read = readBySession(outputDir, session);
+  const out: string[] = [];
+  for (const e of changeEntries(readFileSync(file, 'utf-8'))) {
+    if (e.stamp <= seen || e.stamp <= pushed || e.stamp < since) continue;
+    for (const l of e.lines) if (!read.has(`${e.stamp}\t${l}`) && concerns(l, keys)) out.push(l.slice(2));
+  }
+  return out;
+}
+
 /**
  * The compact change report (header, then one line per item with the latest state), or null when
  * there is nothing to show. With `unseen` only entries after the seen marker count, and the marker
@@ -915,6 +932,7 @@ function install(opts: WatchOptions, outputDir: string): void {
   if (opts.slackEvery) args.push('--slack-every', opts.slackEvery);
   if (opts.notify) args.push('--notify');
   if (opts.tags) args.push('--tags');
+  if (opts.closedSessions) args.push('--closed-sessions');
   args.push('--quiet');
   const quote = (s: string) => `"${s.replace(/"/g, '""')}"`;
   const script = path.resolve(outputDir, '.jirallm-watch.cmd');
@@ -1040,6 +1058,16 @@ export async function runWatch(opts: WatchOptions): Promise<void> {
     if (!opts.dryRun) {
       mkdirSync(outputDir, { recursive: true });
       writeFileSync(path.join(outputDir, WATCH_AT_MARKER), `${new Date().toISOString()}${errors.length ? ` ${errors.length} error(s)` : ''}`);
+    }
+    if (opts.closedSessions && !opts.dryRun) {
+      // Imported here: closedSessions builds on sessions.ts, which imports this module.
+      try {
+        const { notifyClosedSessions } = await import('./closedSessions.js');
+        const told = notifyClosedSessions(outputDir);
+        if (told.length) console.log(`${stamp} told about closed sessions with news: ${told.map((n) => n.id.slice(0, 8)).join(', ')}`);
+      } catch (err) {
+        console.log(`${stamp} closed sessions: check failed (${String(err instanceof Error ? err.message : err).split('\n')[0]})`);
+      }
     }
     if (every === undefined) return;
     await new Promise((resolve) => setTimeout(resolve, every * 60_000));
