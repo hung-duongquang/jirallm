@@ -231,6 +231,41 @@ describe('slackChanges', () => {
     expect(await slackChanges(dir, false, client, Date.parse('2026-11-02T10:00:00Z'))).toEqual([]);
   });
 
+  it('reads a short thread whole in the same one call and notices edits and deletions, not bot edits', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'slackwatch-'));
+    const file = path.join(dir, 'slack', 'c1-1793000000000100', 'thread.md');
+    mkdirSync(path.dirname(file), { recursive: true });
+    const withCount = (extra: string) => thread('2026-11-01T10:00:00Z', '1793000500.000100').replace('  url:', `  messages: 3\n${extra}  url:`);
+    const parent = { ts: '1793000000.000100' };
+    let messages: Record<string, unknown>[] = [parent, { ts: '1793000400.000100' }, { ts: '1793000500.000100' }];
+    const calls: Record<string, string>[] = [];
+    const client = { call: async (_m: string, p: Record<string, string>) => (calls.push(p), { ok: true, messages }) } as unknown as SlackClient;
+    const at = Date.parse('2026-11-02T10:00:00Z');
+
+    // Exported before edits were tracked: the first look only sets where edits start.
+    writeFileSync(file, withCount(''));
+    messages[1] = { ts: '1793000400.000100', edited: { ts: '1793000450.000000' } };
+    expect(await slackChanges(dir, false, client, at)).toEqual([]);
+    expect(calls).toEqual([{ channel: 'C1', ts: '1793000000.000100', limit: '200' }]);
+    expect(readFileSync(file, 'utf8')).toContain('  lastEditTs: "1793000450.000000"');
+
+    // A later edit by a person shows; one by a bot does not.
+    messages = [parent, { ts: '1793000400.000100', edited: { ts: '1793000450.000000' } }, { ts: '1793000500.000100', edited: { ts: '1793000900.000000' }, bot_id: 'B1' }];
+    expect(await slackChanges(dir, true, client, at)).toEqual([]);
+    messages = [parent, { ts: '1793000400.000100', edited: { ts: '1793000950.000000' } }, { ts: '1793000500.000100' }];
+    expect(await slackChanges(dir, true, client, at)).toEqual([
+      { line: 'slack/c1-1793000000000100: would re-export (edited or deleted messages)', url: 'https://ws.slack.com/archives/C1/p1793000000000100' },
+    ]);
+
+    // One of the three exported messages gone.
+    writeFileSync(file, withCount('  lastEditTs: "1793000950.000000"\n'));
+    messages = [parent, { ts: '1793000500.000100' }];
+    expect(await slackChanges(dir, true, client, at)).toHaveLength(1);
+    messages = [parent, { ts: '1793000400.000100', edited: { ts: '1793000950.000000' } }, { ts: '1793000500.000100' }];
+    expect(await slackChanges(dir, true, client, at)).toEqual([]);
+    expect(calls).toHaveLength(5); // one call per check, never more
+  });
+
   it('checks only the threads given (those running sessions follow) between full rounds', async () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'slackwatch-'));
     for (const t of ['c1-1793000000000100', 'c1-1793000000000200']) {

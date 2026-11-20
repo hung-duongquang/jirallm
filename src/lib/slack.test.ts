@@ -155,6 +155,27 @@ describe('SlackClient.thread', () => {
       'needs scope channels:history'
     );
   });
+
+  it("keeps away from a method for a 429's Retry-After, across clients sharing the pause folder", async () => {
+    const pauseDir = mkdtempSync(join(tmpdir(), 'slack-pause-'));
+    let t = Date.parse('2026-11-20T01:00:00Z');
+    let calls = 0;
+    let limited = true;
+    const fetchImpl = (async () => {
+      calls++;
+      return limited ? new Response('', { status: 429, headers: { 'Retry-After': '120' } }) : new Response(JSON.stringify({ ok: true, messages: [] }));
+    }) as unknown as typeof fetch;
+    const client = () => new SlackClient({ token: 'xoxp-1' }, fetchImpl, pauseDir, () => t);
+    await expect(client().call('conversations.replies', {})).rejects.toThrow(/HTTP 429 \(rate limited, waiting until/);
+    limited = false;
+    t += 60_000;
+    await expect(client().call('conversations.replies', {})).rejects.toThrow(/HTTP 429/);
+    expect(calls).toBe(1); // the second client did not ask Slack
+    await expect(client().call('search.messages', {})).resolves.toMatchObject({ ok: true }); // other methods go on
+    t += 61_000;
+    await expect(client().call('conversations.replies', {})).resolves.toMatchObject({ ok: true });
+    expect(calls).toBe(3);
+  });
 });
 
 describe('channel messages outside the thread', () => {

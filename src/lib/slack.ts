@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { extractFrames, isVideoFile } from './framewise.js';
 import { getSecret } from './credentials.js';
@@ -96,6 +97,7 @@ export type SlackMessage = {
   attachments?: SlackAttachment[];
   edited?: { ts: string };
   subtype?: string;
+  bot_id?: string;
   reply_count?: number;
   /** On a thread parent: ts of the newest reply. */
   latest_reply?: string;
@@ -114,7 +116,19 @@ export type SlackSearchMatch = {
   channel?: { id?: string; name?: string; is_im?: boolean; is_mpim?: boolean };
 };
 
-type SlackResponse = { ok: boolean; error?: string; needed?: string; response_metadata?: { next_cursor?: string } };
+type SlackResponse = { ok: boolean; error?: string; needed?: string; has_more?: boolean; response_metadata?: { next_cursor?: string } };
+
+/**
+ * Newest edit of a person's message in a thread ("0" when none): the export keeps it as lastEditTs, so
+ * the watcher sees an edit in the same call it asks for new replies with. Bots edit their own status
+ * messages all the time, so their edits do not count.
+ */
+export function lastEditOf(messages: SlackMessage[]): string {
+  return messages.reduce((n, m) => (m.edited && !m.bot_id && Number(m.edited.ts) > Number(n) ? m.edited.ts : n), '0');
+}
+
+/** Where a 429's Retry-After is kept per Slack method, shared by every jirallm process (watch, hooks, CLI). */
+export const SLACK_PAUSE_DIR = join(tmpdir(), 'jirallm-slack-ratelimit');
 
 export type SlackAuth = { token: string; cookie?: string };
 
@@ -142,8 +156,36 @@ export class SlackClient {
 
   constructor(
     private readonly auth: SlackAuth,
-    private readonly fetchImpl: typeof fetch = fetch
+    private readonly fetchImpl: typeof fetch = fetch,
+    // A pause records what the real Slack said: a client with its own fetch (tests) keeps none unless given a folder.
+    private readonly pauseDir: string | undefined = fetchImpl === fetch ? SLACK_PAUSE_DIR : undefined,
+    private readonly now: () => number = Date.now
   ) {}
+
+  /**
+   * Calling again before a 429's Retry-After is over only earns another 429 (and can stretch the wait),
+   * so until then every process skips the method without asking Slack.
+   */
+  private pausedUntil(method: string): number {
+    if (!this.pauseDir) return 0;
+    try {
+      return Number(readFileSync(join(this.pauseDir, method), 'utf8')) || 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  private pause(method: string, retryAfter: string | null): number {
+    const until = this.now() + Math.min(Math.max(Number(retryAfter) || 60, 1), 3600) * 1000;
+    if (!this.pauseDir) return until;
+    try {
+      mkdirSync(this.pauseDir, { recursive: true });
+      writeFileSync(join(this.pauseDir, method), String(until));
+    } catch {
+      // Without the file each process just finds out from Slack itself.
+    }
+    return until;
+  }
 
   private headers(): Record<string, string> {
     const headers: Record<string, string> = { Authorization: `Bearer ${this.auth.token}` };
@@ -152,11 +194,19 @@ export class SlackClient {
   }
 
   async call<T>(method: string, params: Record<string, string>): Promise<T & SlackResponse> {
+    const paused = this.pausedUntil(method);
+    const at = (ms: number) => new Date(ms).toLocaleTimeString('sv-SE');
+    // "HTTP 429" in the message: callers stop their round on it, as on a real one.
+    if (paused > this.now()) throw new Error(`Slack ${method}: HTTP 429 (rate limited, waiting until ${at(paused)})`);
     const res = await this.fetchImpl(`https://slack.com/api/${method}`, {
       method: 'POST',
       headers: { ...this.headers(), 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams(params).toString(),
     });
+    if (res.status === 429) {
+      const until = this.pause(method, res.headers?.get?.('retry-after') ?? null);
+      throw new Error(`Slack ${method}: HTTP 429 (rate limited, waiting until ${at(until)})`);
+    }
     if (!res.ok) throw new Error(`Slack ${method}: HTTP ${res.status}`);
     const body = (await res.json()) as T & SlackResponse;
     if (!body.ok) {
@@ -622,6 +672,7 @@ export async function exportSlackThread(
     ...(channelMessages.length ? [`  channelMessages: ${channelMessages.length}`] : []),
     `  lastReplyAt: ${JSON.stringify(new Date(Number(lastTs) * 1000).toISOString())}`,
     `  lastTs: ${JSON.stringify(lastTs)}`,
+    `  lastEditTs: ${JSON.stringify(lastEditOf(messages))}`,
     ...(newReplies
       ? [`  newSince: ${JSON.stringify(newSince)}`, `  newReplies: ${newReplies}`, `  newRepliesAt: ${JSON.stringify(newRepliesAt)}`]
       : []),

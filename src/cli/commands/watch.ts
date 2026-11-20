@@ -6,7 +6,7 @@ import { listOrgs, loadProfile, type ResolvedProfile } from '../../lib/config.js
 import { ConfluenceClient, exportConfluencePage } from '../../lib/confluence.js';
 import { JiraExporter } from '../../lib/exporter.js';
 import { JiraClient, jiraMillis, latestCommentUpdate, type JqlIssue } from '../../lib/jiraClient.js';
-import { exportSlackThread, hasSlackToken, loadSlackAuth, parseSlackUrl, SlackClient, threadFrontmatter, type SlackMessage } from '../../lib/slack.js';
+import { exportSlackThread, hasSlackToken, lastEditOf, loadSlackAuth, parseSlackUrl, SlackClient, threadFrontmatter, type SlackMessage } from '../../lib/slack.js';
 import { isRunning } from './resume.js';
 import { runChanges as actionRunChanges } from './runWatch.js';
 import { followedRepoPrs, followThreadLinks, REPO_PR_ITEM, repoPrChanges, splitByRepo } from './repoPrWatch.js';
@@ -392,9 +392,22 @@ export function prChanges(
   return changes;
 }
 
+/** Threads with fewer messages than this are read whole by the watcher (one page of 200), so edits show. */
+export const SLACK_WHOLE_THREAD_MAX = 190;
+
+/** Sets one field under `slack:` in a thread.md's frontmatter (added after lastTs when missing). */
+function setThreadField(file: string, key: string, value: string): void {
+  const text = readFileSync(file, 'utf8');
+  const line = `  ${key}: ${JSON.stringify(value)}`;
+  const re = new RegExp(`^ {2}${key}: .*$`, 'm');
+  const next = re.test(text) ? text.replace(re, line) : text.replace(/^( {2}lastTs: .*)$/m, `$1\n${line}`);
+  if (next !== text) writeFileSync(file, next);
+}
+
 /**
- * New replies in exported Slack threads (slack/<channel>-<ts>/thread.md) since their export: one
- * conversations.replies call per thread, asking only for messages after the export's last one.
+ * New replies, edits and deletions in exported Slack threads (slack/<channel>-<ts>/thread.md) since
+ * their export: one conversations.replies call per thread. Short threads come back whole and are
+ * compared with the export (lastTs, lastEditTs, messages); long ones only for messages after lastTs.
  * A thread with new replies is exported again (which marks them as new). Threads without a reply for
  * SLACK_IDLE_DAYS are skipped; Slack rate limiting stops the round and the rest waits for the next.
  */
@@ -415,7 +428,8 @@ export async function slackChanges(
     const fm = threadFrontmatter(readFileSync(file, 'utf8'));
     if (!fm.url || !fm.lastTs) return [];
     if (now - Date.parse(fm.lastReplyAt ?? '') > SLACK_IDLE_DAYS * 86_400_000) return [];
-    return [{ dir: d.name, threadTs: `${ts[1]}.${ts[2]}`, url: fm.url, lastTs: fm.lastTs }];
+    const count = Number(fm.messages);
+    return [{ dir: d.name, file, threadTs: `${ts[1]}.${ts[2]}`, url: fm.url, lastTs: fm.lastTs, lastEditTs: fm.lastEditTs, count: count > 0 ? count : undefined }];
   });
   if (threads.length === 0) return [];
   const slack = client ?? new SlackClient(await loadSlackAuth());
@@ -423,18 +437,39 @@ export async function slackChanges(
   for (const t of threads) {
     try {
       const { channel } = parseSlackUrl(t.url);
-      const page = await slack.call<{ messages?: SlackMessage[] }>('conversations.replies', {
-        channel, ts: t.threadTs, oldest: t.lastTs, inclusive: 'false', limit: '50',
-      });
-      const fresh = (page.messages ?? []).filter((m) => Number(m.ts) > Number(t.lastTs)).length;
-      if (fresh === 0) continue;
+      // A thread that fits one page is read whole: Slack counts calls, not messages, so seeing edits and
+      // deletions costs no extra call. A longer one only asks for what came after the export.
+      const whole = t.count !== undefined && t.count < SLACK_WHOLE_THREAD_MAX;
+      const page = await slack.call<{ messages?: SlackMessage[] }>('conversations.replies', whole
+        ? { channel, ts: t.threadTs, limit: '200' }
+        : { channel, ts: t.threadTs, oldest: t.lastTs, inclusive: 'false', limit: '50' });
+      const messages = page.messages ?? [];
+      const fresh = messages.filter((m) => Number(m.ts) > Number(t.lastTs)).length;
+      let edited = 0;
+      let deleted = 0;
+      if (whole && !page.has_more) {
+        const known = messages.filter((m) => Number(m.ts) <= Number(t.lastTs));
+        if (t.lastEditTs === undefined) {
+          // Exported before edits were tracked: what is there now is where it starts.
+          if (!dryRun) setThreadField(t.file, 'lastEditTs', lastEditOf(known));
+        } else {
+          edited = known.filter((m) => m.edited && !m.bot_id && Number(m.edited.ts) > Number(t.lastEditTs)).length;
+        }
+        deleted = Math.max(0, t.count! - known.length);
+      }
+      if (fresh === 0 && edited === 0 && deleted === 0) continue;
       if (dryRun) {
-        changes.push({ line: `slack/${t.dir}: would re-export (new replies)`, url: t.url });
+        changes.push({ line: `slack/${t.dir}: would re-export (${fresh ? 'new replies' : 'edited or deleted messages'})`, url: t.url });
         continue;
       }
       const exported = await exportSlackThread(t.url, { outputDir, client: slack });
-      const n = exported.newReplies || fresh;
-      changes.push({ line: `slack/${t.dir}: ${n} new repl${n === 1 ? 'y' : 'ies'} in "${exported.title}"`, url: t.url });
+      const n = fresh ? exported.newReplies || fresh : 0;
+      const what = [
+        n ? `${n} new repl${n === 1 ? 'y' : 'ies'}` : '',
+        edited ? `${edited} message${edited === 1 ? '' : 's'} edited` : '',
+        deleted ? `${deleted} message${deleted === 1 ? '' : 's'} deleted` : '',
+      ].filter(Boolean).join(', ');
+      changes.push({ line: `slack/${t.dir}: ${what} in "${exported.title}"`, url: t.url });
     } catch (err) {
       const msg = String(err instanceof Error ? err.message : err).split('\n')[0];
       changes.push({ line: `slack/${t.dir}: check failed (${msg})`, error: true });
