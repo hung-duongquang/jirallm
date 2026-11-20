@@ -178,13 +178,34 @@ describe('prChanges for PRs a running session reviews', () => {
     const a = fakeGh();
     // First sight of a green PR is no change, but #8 (key ZOD-2) and #9 (named) are now followed; #10 is not.
     expect(prChanges('.', dir, false, a.gh, { keys: ['ZOD-2'], prs: [9] })).toEqual([]);
-    expect(a.calls.filter((c) => c.startsWith('pr view')).map((c) => c.split(' ')[2])).toEqual(['8', '9']);
+    // The open-PR list asks for no checks (GitHub timed out on checks of every open PR); only #8 and #9 get theirs.
+    expect(a.calls.filter((c) => c.startsWith('pr list --state open'))).toEqual(['pr list --state open --json number,title,headRefName --limit 200']);
+    const views = a.calls.filter((c) => c.startsWith('pr view'));
+    expect(views.filter((c) => c.endsWith('--json headRefOid,statusCheckRollup'))).toEqual(['pr view 8 --json headRefOid,statusCheckRollup', 'pr view 9 --json headRefOid,statusCheckRollup']);
+    expect(views.filter((c) => !c.endsWith('--json headRefOid,statusCheckRollup')).map((c) => c.split(' ')[2])).toEqual(['8', '9']);
     expect(Object.keys(JSON.parse(readFileSync(path.join(dir, '.prs.json'), 'utf8')).prs)).toEqual(['8', '9']);
 
     // The session ended: PR #8 is still open, so nothing is reported; a merged PR #9 is.
     expect(prChanges('.', dir, false, fakeGh({ 9: 'MERGED' }).gh, { keys: [], prs: [] }).map((c) => c.line)).toEqual(['PR #9: merged']);
     // Kept as finished, so the sessions that followed it drop it later.
     expect(JSON.parse(readFileSync(path.join(dir, '.prs.json'), 'utf8')).finished).toEqual({ 9: 'merged' });
+  });
+
+  it("checks my PRs even when GitHub fails on others' PRs, which keep their state", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'prs-'));
+    expect(prChanges('.', dir, false, fakeGh().gh, { keys: ['ZOD-2'], prs: [] })).toEqual([]);
+    const busy = fakeGh();
+    const gh = (cwd: string, args: string[]) => {
+      if (args[1] === 'list' && !args.includes('--author')) {
+        throw Object.assign(new Error('Command failed: gh pr list --state open'), { stderr: 'HTTP 504: 504 Gateway Timeout (https://api.github.com/graphql)\n' });
+      }
+      return busy.gh(cwd, args);
+    };
+    expect(prChanges('.', dir, false, gh, { keys: ['ZOD-2'], prs: [] })).toEqual([
+      { line: 'PRs followed by sessions: gh failed (HTTP 504: 504 Gateway Timeout (https://api.github.com/graphql))', error: true },
+    ]);
+    expect(busy.calls.some((c) => c.startsWith('pr list --author @me'))).toBe(true);
+    expect(Object.keys(JSON.parse(readFileSync(path.join(dir, '.prs.json'), 'utf8')).prs)).toEqual(['8']);
   });
 
   it('makes no extra call while no session follows anything', () => {

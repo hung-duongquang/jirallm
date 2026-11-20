@@ -281,17 +281,37 @@ export function followedSlackThreads(sessionsDir = path.join(os.tmpdir(), 'jiral
 /**
  * Open PRs of others that a running session works on: a PR it named, or one whose title or branch holds
  * one of its ticket keys (reviewing Trung's PR for ZOD-1 follows its CI and reviews like my own PRs).
- * One `gh pr list` call, made only while sessions follow something.
+ * Made only while sessions follow something: one light `gh pr list` (numbers, titles, branches), then
+ * the checks of the matching PRs only. Asking for the checks of every open PR at once timed out at
+ * GitHub (HTTP 504) once the repo had many open PRs.
  */
 export function followedPrs(gh: Gh, cwd: string, follow: SessionFollows, mine: Set<number>): Array<{ number: number; sig: string }> {
   if (!follow.keys.length && !follow.prs.length) return [];
-  const open = JSON.parse(
-    gh(cwd, ['pr', 'list', '--state', 'open', '--json', 'number,title,headRefName,headRefOid,statusCheckRollup', '--limit', '100'])
-  ) as Array<{ number: number; title: string; headRefName: string; headRefOid: string; statusCheckRollup: Parameters<typeof checksSignature>[1] | null }>;
+  const open = JSON.parse(gh(cwd, ['pr', 'list', '--state', 'open', '--json', 'number,title,headRefName', '--limit', '200'])) as Array<{
+    number: number;
+    title: string;
+    headRefName: string;
+  }>;
   return open
     .filter((p) => !mine.has(p.number))
     .filter((p) => follow.prs.includes(p.number) || follow.keys.some((k) => concerns(`${p.title} ${p.headRefName}`, [k])))
-    .map((p) => ({ number: p.number, sig: checksSignature(p.headRefOid, p.statusCheckRollup ?? []) }));
+    .slice(0, MAX_FOLLOWED_PRS)
+    .map((p) => {
+      const pr = JSON.parse(gh(cwd, ['pr', 'view', String(p.number), '--json', 'headRefOid,statusCheckRollup'])) as {
+        headRefOid: string;
+        statusCheckRollup: Parameters<typeof checksSignature>[1] | null;
+      };
+      return { number: p.number, sig: checksSignature(pr.headRefOid, pr.statusCheckRollup ?? []) };
+    });
+}
+
+/** Others' PRs followed per run at most (each costs one `gh pr view`). */
+const MAX_FOLLOWED_PRS = 15;
+
+/** The useful part of a failed `gh` call: its last stderr line ("HTTP 504: …"), not "Command failed: gh …". */
+function ghError(err: unknown): string {
+  const stderr = String((err as { stderr?: unknown })?.stderr ?? '').trim().split(/\r?\n/).filter(Boolean).pop();
+  return stderr || String(err instanceof Error ? err.message : err).split('\n')[0]!;
 }
 
 /** A change line for CHANGES.md, with the page a notification should open; `error` lines are only printed. */
@@ -347,7 +367,7 @@ export function prChanges(
   const state: PrsState = stored && 'prs' in stored ? stored as PrsState : { prs: (stored ?? {}) as Record<string, PrSnapshot> };
   const prev = state.prs;
   const cwd = path.resolve(repo);
-  const firstLine = (err: unknown) => String(err instanceof Error ? err.message : err).split('\n')[0];
+  const firstLine = ghError;
   const changes: PrChange[] = [];
   const next: Record<string, PrSnapshot> = {};
   // The last 100 finished PRs: enough for the follows of the sessions that named them to be dropped.
@@ -362,7 +382,18 @@ export function prChanges(
     // A PR link into this repo (`pr/<owner>/<repo>/<n>`) is followed here; links to other repos in repoPrWatch.ts.
     const linked = splitByRepo(follow.repoPrs ?? [], slug).local;
     const all = { ...follow, prs: [...new Set([...follow.prs, ...linked])] };
-    for (const { number: n, sig } of [...mine, ...followedPrs(gh, cwd, all, new Set(mine.map((p) => p.number)))]) {
+    const mineSet = new Set(mine.map((p) => p.number));
+    // Others' PRs failing (GitHub busy) must not stop my own: they keep their last state for this run.
+    let followed: Array<{ number: number; sig: string }> = [];
+    let followedFailed = false;
+    try {
+      followed = followedPrs(gh, cwd, all, mineSet);
+    } catch (err) {
+      followedFailed = true;
+      changes.push({ line: `PRs followed by sessions: gh failed (${firstLine(err)})`, error: true });
+    }
+    for (const [n, old] of Object.entries(prev)) if (followedFailed && !mineSet.has(Number(n))) next[n] = old;
+    for (const { number: n, sig } of [...mine, ...followed]) {
       const old = prev[n];
       if (old && old.sig === sig && notified.prs && !notified.prs.includes(n)) {
         next[n] = old;
