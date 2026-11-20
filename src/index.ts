@@ -82,4 +82,5 @@ export { exportSharePointPage, parseSharePointPageUrl } from './lib/sharepoint.j
 export type { ExportedSharePointPage } from './lib/sharepoint.js';
 export { claudeSessions, removeSession } from './cli/commands/sessions.js';
 export { forget, isRunning, markOpen, openInTerminal, refreshVsCodeTasks } from './cli/commands/resume.js';
+export { markTag, openHandleTerminal, readTags, type SlackTag } from './cli/commands/slackTags.js';
 export type { SessionOverview, SessionDelivery } from './cli/commands/sessions.js';

@@ -220,15 +220,24 @@ export function refreshVsCodeTasks(workspace: string, sessionsDir = defaultSessi
 
 /** The program and arguments that open a new terminal window running `jirallm resume <id>` in `cwd`. */
 export function terminalCommand(id: string, cwd: string, title: string, platform = process.platform, hasWt = false): { cmd: string; args: string[] } {
+  return jirallmTerminal(['resume', id], cwd, title, platform, hasWt);
+}
+
+/**
+ * A new terminal window running `jirallm <args>` in `cwd`. The arguments must be plain words (a session
+ * id, an export folder name): on Windows they pass through cmd.exe unquoted.
+ */
+export function jirallmTerminal(cliArgs: string[], cwd: string, title: string, platform = process.platform, hasWt = false): { cmd: string; args: string[] } {
+  if (cliArgs.some((a) => !/^[\w:.-]+$/.test(a))) throw new Error(`Not a plain argument: ${cliArgs.join(' ')}`);
   const { node, entry } = cliCommand();
   if (platform === 'win32') {
     return hasWt
-      ? { cmd: 'wt.exe', args: ['new-tab', '--title', title, '-d', cwd, node, entry, 'resume', id] }
+      ? { cmd: 'wt.exe', args: ['new-tab', '--title', title, '-d', cwd, node, entry, ...cliArgs] }
       : // Passed verbatim (cmd's own quoting): the first quoted argument of `start` is the window title.
-        { cmd: 'cmd.exe', args: ['/c', 'start', `"${title.replace(/"/g, '')}"`, '/D', `"${cwd}"`, `"${node}"`, `"${entry}"`, 'resume', id] };
+        { cmd: 'cmd.exe', args: ['/c', 'start', `"${title.replace(/"/g, '')}"`, '/D', `"${cwd}"`, `"${node}"`, `"${entry}"`, ...cliArgs] };
   }
   const sh = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
-  const line = `cd ${sh(cwd)} && ${sh(node)} ${sh(entry)} resume ${id}`;
+  const line = `cd ${sh(cwd)} && ${sh(node)} ${sh(entry)} ${cliArgs.join(' ')}`;
   if (platform === 'darwin') return { cmd: 'osascript', args: ['-e', `tell application "Terminal" to do script ${JSON.stringify(line)}`, '-e', 'tell application "Terminal" to activate'] };
   return { cmd: 'x-terminal-emulator', args: ['-e', 'sh', '-c', line] };
 }
@@ -255,8 +264,13 @@ export function openInTerminal(id: string, title: string, sessionsDir = defaultS
 }
 
 function openInWindow(id: string, cwd: string, title: string): void {
+  openJirallmWindow(['resume', id], cwd, `claude: ${title.slice(0, 40)}`);
+}
+
+/** Opens a terminal window (Windows Terminal when installed) running `jirallm <args>` in `cwd`. */
+export function openJirallmWindow(cliArgs: string[], cwd: string, title: string): void {
   const hasWt = process.platform === 'win32' && !!process.env.LOCALAPPDATA && existsSync(path.join(process.env.LOCALAPPDATA, 'Microsoft', 'WindowsApps', 'wt.exe'));
-  const { cmd, args } = terminalCommand(id, cwd, `claude: ${title.slice(0, 40)}`, process.platform, hasWt);
+  const { cmd, args } = jirallmTerminal(cliArgs, cwd, title, process.platform, hasWt);
   const child = spawn(cmd, args, { detached: true, stdio: 'ignore', windowsVerbatimArguments: cmd === 'cmd.exe' });
   child.on('error', () => {});
   child.unref();

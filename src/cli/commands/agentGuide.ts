@@ -34,6 +34,7 @@ Output switches to JSON when stdout is piped. Prefer the compact forms below: th
 | Find SharePoint / intranet pages (company policies, how-tos, who to ask) | \`jirallm sharepoint:search '<words>'\` (KQL; \`--site <url>\`, \`--documents\`): one TSV row per hit, open one with \`jirallm sharepoint <url>\`; prints "SharePoint not set up" when there is no session |
 | Slack discussions of a ticket or PR (decisions not written in Jira) | \`jirallm slack:search "PROJ-1 OR PROJ-0 OR pull/123" --after <ticket created>\`: one TSV row per thread with its permalink; open the relevant ones with \`jirallm slack <url>\` |
 | Text for the user to paste in Slack (it has no tables) | \`jirallm slack:copy <file>\` (or the user runs \`! jirallm slack:copy\` after copying a reply): tables become one bullet per row, markdown becomes Slack formatting, and the result goes on the clipboard as rich text |
+| A session started on a Slack message that tagged the user (its first prompt: "<name> tagged me in …", with the export path) | \`watch\` found and exported it; \`jirallm slack:handle <folder>\` started the session (the toast's or \`jirallm ui\`'s "Handle in Claude"). Read the exported thread and its images, say in short what is asked and how you would handle it, then wait: replies (\`slack:copy\` for the user to paste), Jira or GitHub writes and production checks only after the user agrees |
 | Child pages of a Confluence page (find where a new page goes) | \`jirallm page:children <id or url> --format tsv\` |
 | List issues (compact) | \`jirallm search --org <org> '<JQL>' --fields key,summary,status,assignee --format tsv --all\` |
 | Active sprint, by status | JQL \`project = PROJ AND sprint in openSprints() AND status = "To Do"\` |
@@ -173,11 +174,11 @@ const SKILL_LAYOUT: Array<{ heading: string; file?: string; when?: string }> = [
  */
 const OFFLOADED_ROWS: Array<{ rows: RegExp; file: string; heading: string; pointer: string; when: string }> = [
   {
-    rows: /^\| (A Slack message link|Slack discussions of a ticket|Text for the user to paste in Slack)/,
+    rows: /^\| (A Slack message link|Slack discussions of a ticket|Text for the user to paste in Slack|A session started on a Slack message that tagged)/,
     file: 'slack.md',
     heading: 'Slack',
-    pointer: '| A Slack message or file link, Slack discussions of a ticket or PR, text to paste in Slack | read `references/slack.md` first |',
-    when: 'A Slack link, searching Slack for a ticket or PR (`slack:search`), text to paste in Slack (`slack:copy`)',
+    pointer: '| A Slack message or file link, Slack discussions of a ticket or PR, text to paste in Slack, a session started on a Slack tag | read `references/slack.md` first |',
+    when: 'A Slack link, searching Slack for a ticket or PR (`slack:search`), text to paste in Slack (`slack:copy`), a session `slack:handle` started',
   },
   {
     rows: /^\| (A SharePoint|Change text in a PowerPoint|Find SharePoint)/,

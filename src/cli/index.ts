@@ -1842,6 +1842,25 @@ Examples:
   });
 
 program
+  .command('slack:handle <folder>')
+  .description('Start a new Claude session on a Slack thread that tagged you (the folder under jira-export/slack/, as `watch` exported it)')
+  .option('--output-dir <path>', 'Export directory', './jira-export')
+  .addHelpText('after', `
+Run from the workspace root. Starts \`claude\` with the thread's link and its exported file, asking
+for what is asked and how to handle it; Claude asks before anything that writes or touches
+production. The toast of a new tag and \`jirallm ui\` (Claude sessions) start this for you.
+
+Example:
+  $ jirallm slack:handle c0asdakdk9t-1795140961145419
+`)
+  .action(async (folder: string, opts: { outputDir?: string }) => {
+    try {
+      const { runSlackHandle } = await import('./commands/slackTags.js');
+      await runSlackHandle(folder, opts);
+    } catch (err) { exitOnError(err); }
+  });
+
+program
   .command('slack:auth')
   .description('Store a Slack token in the OS keychain and check it (xoxp- user token, or xoxc- token + d cookie)')
   .option('--check', 'Only check the stored token')
@@ -1994,13 +2013,15 @@ program
   .option('--jira-every <minutes>', 'Check Jira/Confluence at most every N minutes (run every minute for PRs, every 5 for Jira)')
   .option('--no-slack', 'Skip checking exported Slack threads and searching Slack for new messages about the tickets of running Claude sessions (checked only when `slack:auth` is set up)')
   .option('--slack-every <minutes>', 'Check exported Slack threads for new replies at most every N minutes (default 5; threads quiet for 14 days are skipped). Threads a running Claude Code session follows are checked on every run')
+  .option('--no-tags', 'Skip searching Slack for new messages that tag you (exported, listed in `jirallm ui`, and a toast with "Handle in Claude")')
   .option('--notify', 'Show a Windows toast when there are changes (click opens the PR, ticket or Slack thread)')
   .option('--quiet', 'Print nothing when nothing changed (the scheduled task uses this)')
   .addHelpText('after', `
 Change detection compares each local task.md/page.md with Jira's "updated" time and the page
 version, so it needs no state. Changed tickets keep their previous copy as .task.previous.md.
-Exported Slack threads (slack/*/thread.md) with new replies are exported again, the new
-replies marked "(new)".
+Exported Slack threads (slack/*/thread.md) with new replies, edits or deletions are exported again,
+the new replies marked "(new)". New Slack messages that tag you (outside threads a running Claude
+session follows) are exported and shown as a toast: "Handle in Claude" runs \`jirallm slack:handle\`.
 
 Examples:
   $ jirallm watch --dry-run

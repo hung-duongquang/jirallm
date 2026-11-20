@@ -14,6 +14,8 @@ import { belowChanges, followedBelow } from './slackBelow.js';
 import { finishedItems, retireFollows } from './follows.js';
 import { runningSessionKeys, slackMentionChanges } from './slackMentions.js';
 import { checksSignature, defaultGh, describePrChange, fetchPrState, myOpenPrs, notifiedPrs, repoSlug, snapshotOf, toast, type Gh, type PrSnapshot } from './prStatus.js';
+import { slackTagChanges, type SlackTag } from './slackTags.js';
+import { extensionAvailable, handleUri, installExtension } from '../../lib/vscodeExtension.js';
 
 export type WatchOptions = {
   org?: string;
@@ -30,6 +32,8 @@ export type WatchOptions = {
   notify?: boolean;
   quiet?: boolean;
   slack?: boolean;
+  /** false: no search for Slack messages that tag the user (--no-tags). */
+  tags?: boolean;
   slackEvery?: string;
 };
 
@@ -390,6 +394,22 @@ export function prChanges(
     writeFileSync(file, JSON.stringify({ meta, prs: next, finished } satisfies PrsState, null, 1));
   }
   return changes;
+}
+
+/**
+ * A toast per new tag (at most 3 a round): "Handle in Claude" starts a session on it in VS Code
+ * through the jirallm extension (when VS Code is there), "Open in Slack" opens the message.
+ */
+function toastTags(outputDir: string, tags: SlackTag[]): void {
+  if (!tags.length || process.platform !== 'win32') return;
+  const workspace = path.dirname(path.resolve(outputDir));
+  const vscode = extensionAvailable() && !installExtension();
+  for (const t of tags.slice(-3)) {
+    toast(`${t.from} tagged you in ${t.where}`, [t.text], t.url, [
+      ...(vscode ? [{ label: 'Handle in Claude', url: handleUri(t.dir, workspace) }] : []),
+      { label: 'Open in Slack', url: t.url },
+    ]);
+  }
 }
 
 /** Threads with fewer messages than this are read whole by the watcher (one page of 200), so edits show. */
@@ -964,6 +984,16 @@ export async function runWatch(opts: WatchOptions): Promise<void> {
         changes.push(...(await slackMentionChanges(outputDir, new SlackClient(await loadSlackAuth()), { dryRun: opts.dryRun })));
       } catch (err) {
         changes.push({ line: `slack mentions: check failed (${String(err instanceof Error ? err.message : err).split('\n')[0]})`, error: true });
+      }
+      // After the mentions: a tag in a thread a session now follows goes to that session instead.
+      if (opts.tags !== false) {
+        try {
+          const tags = await slackTagChanges(outputDir, new SlackClient(await loadSlackAuth()), { dryRun: opts.dryRun });
+          changes.push(...tags);
+          if (!opts.dryRun) toastTags(outputDir, tags.flatMap((t) => (t.tag ? [t.tag] : [])));
+        } catch (err) {
+          changes.push({ line: `slack tags: check failed (${String(err instanceof Error ? err.message : err).split('\n')[0]})`, error: true });
+        }
       }
       if (!opts.dryRun) {
         mkdirSync(outputDir, { recursive: true });

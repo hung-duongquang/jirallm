@@ -477,6 +477,25 @@ async function handle(req, res) {
         sendJson(res, 200, lib.claudeSessions(resolveOutputDir(url.searchParams.get('dir'))));
         return;
       }
+      case 'GET /api/slack-tags': {
+        // Slack messages that tagged the user, as `jirallm watch` found them (newest first, not dismissed).
+        sendJson(res, 200, lib.readTags(resolveOutputDir(url.searchParams.get('dir'))).tags.filter((t) => !t.dismissed));
+        return;
+      }
+      case 'POST /api/slack-tags/handle': {
+        // A new Claude session on the thread (`jirallm slack:handle <dir>`), in VS Code when it is there.
+        const body = await readJsonBody(req);
+        const outputDir = resolveOutputDir(body.dir);
+        if (!lib.readTags(outputDir).tags.some((t) => t.dir === body.tag)) throw new HttpError(404, 'No such Slack tag');
+        sendJson(res, 200, { ok: true, ...lib.openHandleTerminal(body.tag, outputDir) });
+        return;
+      }
+      case 'POST /api/slack-tags/dismiss': {
+        const body = await readJsonBody(req);
+        if (!lib.markTag(resolveOutputDir(body.dir), body.tag, 'dismissed')) throw new HttpError(404, 'No such Slack tag');
+        sendJson(res, 200, { ok: true });
+        return;
+      }
       case 'POST /api/sessions/reopen': {
         // Whether `jirallm resume` (and the workspace's VS Code folder-open tasks) bring this session back after a reboot.
         const body = await readJsonBody(req);

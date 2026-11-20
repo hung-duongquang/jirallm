@@ -183,6 +183,7 @@
   .sessions li summary { cursor: pointer; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
   .sessions li pre { white-space: pre-wrap; font-size: 12px; background: var(--code-bg); padding: 8px; border-radius: 6px; margin: 6px 0 0; }
   .sessions .read { color: var(--ok); } .sessions .unread { color: var(--warn); font-weight: 600; }
+  .sessions .tag-row { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
   .sessions .keylink { color: var(--accent); cursor: pointer; text-decoration: underline; background: none; border: 0; padding: 0; font: inherit; }
   #sessionsBadge:not(:empty) { background: var(--warn); color: var(--accent-text); border-radius: 999px; padding: 0 6px; font-size: 11px; margin-left: 4px; }
   .setup { max-width: 680px; margin: 8px auto; }
@@ -1239,7 +1240,7 @@ async function connect() {
 $('openSetup').onclick = () => { current = null; sessionsOpen = false; renderSetup('', !info); };
 
 // ---- Claude sessions: what each session was handed (jirallm deliveries) and whether a Claude turn read it ----
-let sessionsOpen = false, lastSessionsJson = '';
+let sessionsOpen = false, lastSessionsJson = '', slackTags = [];
 const KEY_IN_TEXT = /\b[A-Z][A-Z0-9]+-\d+\b/g;
 const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 function linkKeys(text) {
@@ -1253,6 +1254,19 @@ function followed(s) {
     return n ? [n === 1 ? `1 ${one}` : `${n} ${many}`] : [];
   };
   return [...tickets(s), ...count('slack/', 'Slack thread', 'Slack threads'), ...count('confluence/', 'Confluence page', 'Confluence pages')].join(' · ');
+}
+/** Slack messages that tagged the user (found by `jirallm watch`): start a Claude session on one, or dismiss it. */
+function renderTags() {
+  if (!slackTags.length) return '';
+  const rows = slackTags.slice(0, 10).map((t) => `<li class="tag-row">
+      <span class="meta">${ago(new Date(Number(t.ts) * 1000).toISOString())}</span>
+      <span style="flex:1"><b>${esc(t.from)}</b> in ${esc(t.where)}: ${esc(t.text)}</span>
+      ${t.handledAt ? `<span class="read" title="A Claude session was started on it">✓ handled</span>` : ''}
+      <a href="${esc(t.url)}" target="_blank" rel="noopener">Slack</a>
+      <button class="tag-dismiss" data-tag="${esc(t.dir)}" title="Remove it from this list">Dismiss</button>
+      <button class="primary tag-handle" data-tag="${esc(t.dir)}" title="Starts a new Claude session on this thread (jirallm slack:handle): Claude reads it and tells you what is asked; it asks before writing anything">${t.handledAt ? 'Handle again' : 'Handle in Claude'}</button>
+    </li>`).join('');
+  return `<div class="sess"><div class="sess-head"><span class="sess-title">Slack messages that tag you</span><span class="meta">not followed by a running session</span></div><ul>${rows}</ul></div>`;
 }
 function renderSessions(list) {
   $('previewHead').hidden = true;
@@ -1284,7 +1298,7 @@ function renderSessions(list) {
   $('previewBody').innerHTML = `<div class="sessions">
     <div class="sess-head"><h2 class="card-title" style="margin:0;flex:1">Claude sessions</h2>${resumeAllButton(list)}</div>
     <p class="hint">Changes the scheduled <code>jirallm watch</code> logged, as handed to each Claude Code session (at a prompt, at session start, or by the background monitor). “✓ read” = Claude acted (a tool call or a reply) after it reached its context. Refreshes every few seconds.</p>
-    ${body}</div>`;
+    ${renderTags()}${body}</div>`;
   $('previewBody').querySelectorAll('.keylink').forEach((b) => b.onclick = (e) => { e.preventDefault(); sessionsOpen = false; openTask(b.dataset.key, { as: 'diff', fromLink: true }); });
   $('previewBody').querySelectorAll('.sess-reopen').forEach((b) => b.onclick = async () => {
     b.disabled = true;
@@ -1309,6 +1323,19 @@ function renderSessions(list) {
       lastSessionsJson = '';
       await refreshSessions();
     } catch (e) { toast(e.message); b.disabled = false; }
+  });
+  $('previewBody').querySelectorAll('.tag-handle').forEach((b) => b.onclick = async () => {
+    b.disabled = true;
+    try {
+      const r = await api('/api/slack-tags/handle', { dir: outDir(), tag: b.dataset.tag });
+      toast(r.where === 'vscode' ? 'Starting Claude in a VS Code terminal' : 'Started Claude in a terminal window' + (r.note ? ` (not VS Code: ${r.note})` : ''));
+    } catch (e) { toast(e.message); }
+    setTimeout(() => { b.disabled = false; lastSessionsJson = ''; refreshSessions(); }, 4000);
+  });
+  $('previewBody').querySelectorAll('.tag-dismiss').forEach((b) => b.onclick = async () => {
+    b.disabled = true;
+    try { await api('/api/slack-tags/dismiss', { dir: outDir(), tag: b.dataset.tag }); lastSessionsJson = ''; await refreshSessions(); }
+    catch (e) { toast(e.message); b.disabled = false; }
   });
   const all = $('resumeAll');
   if (all && !all.disabled) all.onclick = async () => {
@@ -1361,10 +1388,11 @@ function resumeAllButton(list) {
 async function refreshSessions() {
   try {
     const list = await api('/api/sessions?dir=' + encodeURIComponent(outDir()));
-    const unread = list.reduce((n, s) => n + s.deliveries.filter((d) => !d.read).length, 0);
+    slackTags = await api('/api/slack-tags?dir=' + encodeURIComponent(outDir())).catch(() => []);
+    const unread = list.reduce((n, s) => n + s.deliveries.filter((d) => !d.read).length, 0) + slackTags.filter((t) => !t.handledAt).length;
     $('sessionsBadge').textContent = unread ? String(unread) : '';
     // Re-render only on a change, so expanded deliveries stay open between refreshes.
-    const json = JSON.stringify(list);
+    const json = JSON.stringify([list, slackTags]);
     if (sessionsOpen && (json !== lastSessionsJson || !$('previewBody').querySelector('.sessions'))) renderSessions(list);
     lastSessionsJson = json;
   } catch {

@@ -17,7 +17,7 @@ The steps for each workflow live next to this file, so they only cost context wh
 - Where a ticket stands, and keeping per-ticket facts (`state`, `note`) → read `references/notes.md`
 - Testing a ticket and writing or publishing its test report → read `references/test.md`
 - Ticket, PR and Slack changes (`watch`, `changes`, the monitor), keeping jira-export lean (`prune`) → read `references/staying-current.md`
-- A Slack link, searching Slack for a ticket or PR (`slack:search`), text to paste in Slack (`slack:copy`) → read `references/slack.md`
+- A Slack link, searching Slack for a ticket or PR (`slack:search`), text to paste in Slack (`slack:copy`), a session `slack:handle` started → read `references/slack.md`
 - SharePoint pages and Office documents, editing a PowerPoint deck, intranet search → read `references/sharepoint.md`
 
 ## Read (safe, no side effects)
@@ -32,7 +32,7 @@ The steps for each workflow live next to this file, so they only cost context wh
 | Exact field values the markdown lacks or renders wrong (custom fields, link metadata, IDs) | `jirallm fetch PROJ-1 --raw --fields <jira field ids>` (e.g. `issuelinks,customfield_10050`); avoid bare `--raw`, it returns every field |
 | One Confluence page by URL (e.g. a test report) | `jirallm page <url>` → `jira-export/confluence/<id>-<slug>/page.md` |
 | Find Confluence pages (plain words or CQL) | `jirallm page:search "<words>" [--space KEY] --format tsv`, then `jirallm page <url>` on a hit |
-| A Slack message or file link, Slack discussions of a ticket or PR, text to paste in Slack | read `references/slack.md` first |
+| A Slack message or file link, Slack discussions of a ticket or PR, text to paste in Slack, a session started on a Slack tag | read `references/slack.md` first |
 | SharePoint pages, Office documents (read; change a deck), intranet search | read `references/sharepoint.md` first |
 | Child pages of a Confluence page (find where a new page goes) | `jirallm page:children <id or url> --format tsv` |
 | List issues (compact) | `jirallm search --org <org> '<JQL>' --fields key,summary,status,assignee --format tsv --all` |

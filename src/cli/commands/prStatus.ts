@@ -324,16 +324,25 @@ export function notifiedPrs(gh: Gh, cwd: string, repo: string, lastModified: str
 /** `owner/name` of the repo at `cwd`. */
 export const repoSlug = (gh: Gh, cwd: string) => gh(cwd, ['repo', 'view', '--json', 'nameWithOwner', '-q', '.nameWithOwner']).trim();
 
-/**
- * Shows a Windows toast (no-op elsewhere); clicking it opens `url`. Uses Windows PowerShell, which
- * still has the WinRT notification API, under PowerShell's own app id.
- */
-export function toast(title: string, lines: string[], url?: string): void {
-  if (process.platform !== 'win32') return;
+/** The toast's XML (a separate function so its escaping is testable). */
+export function toastXml(title: string, lines: string[], url?: string, actions: { label: string; url: string }[] = []): string {
   const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   const body = lines.slice(0, 3).map((l) => `<text>${esc(l.length > 120 ? `${l.slice(0, 120)}…` : l)}</text>`).join('');
   const launch = url ? ` activationType="protocol" launch="${esc(url)}"` : '';
-  const xml = `<toast${launch}><visual><binding template="ToastGeneric"><text>${esc(title)}</text>${body}</binding></visual></toast>`;
+  const buttons = actions.length
+    ? `<actions>${actions.slice(0, 5).map((a) => `<action content="${esc(a.label)}" activationType="protocol" arguments="${esc(a.url)}"/>`).join('')}</actions>`
+    : '';
+  return `<toast${launch}><visual><binding template="ToastGeneric"><text>${esc(title)}</text>${body}</binding></visual>${buttons}</toast>`;
+}
+
+/**
+ * Shows a Windows toast (no-op elsewhere); clicking it opens `url`. Uses Windows PowerShell, which
+ * still has the WinRT notification API, under PowerShell's own app id. `actions` become buttons that
+ * open their link (a vscode:// link starts a jirallm command in VS Code).
+ */
+export function toast(title: string, lines: string[], url?: string, actions: { label: string; url: string }[] = []): void {
+  if (process.platform !== 'win32') return;
+  const xml = toastXml(title, lines, url, actions);
   const script = [
     '[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null',
     '[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] > $null',

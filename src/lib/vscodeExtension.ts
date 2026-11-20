@@ -151,6 +151,12 @@ export function resumeUri(id: string, cwd: string, title: string): string {
   return `vscode://${EXTENSION_ID}/resume?${q.toString()}`;
 }
 
+/** Link that starts a new Claude session in VS Code for a Slack thread that tags the user (`jirallm slack:handle <dir>`). */
+export function handleUri(dir: string, cwd: string): string {
+  const q = new URLSearchParams({ tag: dir, cwd });
+  return `vscode://${EXTENSION_ID}/handle?${q.toString()}`;
+}
+
 /**
  * Code.exe on Windows: the program the vscode:// link handler names in the registry, else the
  * per-user install. (explorer.exe drops such links, and code.cmd cuts them at the "&".)
