@@ -2013,14 +2013,14 @@ program
   .option('--jira-every <minutes>', 'Check Jira/Confluence at most every N minutes (run every minute for PRs, every 5 for Jira)')
   .option('--no-slack', 'Skip checking exported Slack threads and searching Slack for new messages about the tickets of running Claude sessions (checked only when `slack:auth` is set up)')
   .option('--slack-every <minutes>', 'Check exported Slack threads for new replies at most every N minutes (default 5; threads quiet for 14 days are skipped). Threads a running Claude Code session follows are checked on every run')
-  .option('--no-tags', 'Skip searching Slack for new messages that tag you (exported, listed in `jirallm ui`, and a toast with "Handle in Claude")')
+  .option('--tags', 'Also search Slack for new messages that tag you (off by default): exported, listed in `jirallm ui`, and a toast with "Handle in Claude"')
   .option('--notify', 'Show a Windows toast when there are changes (click opens the PR, ticket or Slack thread)')
   .option('--quiet', 'Print nothing when nothing changed (the scheduled task uses this)')
   .addHelpText('after', `
 Change detection compares each local task.md/page.md with Jira's "updated" time and the page
 version, so it needs no state. Changed tickets keep their previous copy as .task.previous.md.
 Exported Slack threads (slack/*/thread.md) with new replies, edits or deletions are exported again,
-the new replies marked "(new)". New Slack messages that tag you (outside threads a running Claude
+the new replies marked "(new)". With --tags, new Slack messages that tag you (outside threads a running Claude
 session follows) are exported and shown as a toast: "Handle in Claude" runs \`jirallm slack:handle\`.
 
 Examples:
@@ -2028,6 +2028,7 @@ Examples:
   $ jirallm watch --jql 'project = ZOD AND sprint in openSprints()'
   $ jirallm watch --install 15
   $ jirallm watch --install 1 --jira-every 5 --prs ./repo --notify
+  $ jirallm watch --install 1 --jira-every 5 --prs ./repo --tags
 `)
   .action(async (opts: WatchOptions) => {
     try { await runWatch(opts); } catch (err) { exitOnError(err); }

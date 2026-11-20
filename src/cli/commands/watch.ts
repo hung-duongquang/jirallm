@@ -32,7 +32,7 @@ export type WatchOptions = {
   notify?: boolean;
   quiet?: boolean;
   slack?: boolean;
-  /** false: no search for Slack messages that tag the user (--no-tags). */
+  /** true: also search Slack for new messages that tag the user (--tags; off by default). */
   tags?: boolean;
   slackEvery?: string;
 };
@@ -914,6 +914,7 @@ function install(opts: WatchOptions, outputDir: string): void {
   if (opts.slack === false) args.push('--no-slack');
   if (opts.slackEvery) args.push('--slack-every', opts.slackEvery);
   if (opts.notify) args.push('--notify');
+  if (opts.tags) args.push('--tags');
   args.push('--quiet');
   const quote = (s: string) => `"${s.replace(/"/g, '""')}"`;
   const script = path.resolve(outputDir, '.jirallm-watch.cmd');
@@ -986,7 +987,7 @@ export async function runWatch(opts: WatchOptions): Promise<void> {
         changes.push({ line: `slack mentions: check failed (${String(err instanceof Error ? err.message : err).split('\n')[0]})`, error: true });
       }
       // After the mentions: a tag in a thread a session now follows goes to that session instead.
-      if (opts.tags !== false) {
+      if (opts.tags) {
         try {
           const tags = await slackTagChanges(outputDir, new SlackClient(await loadSlackAuth()), { dryRun: opts.dryRun });
           changes.push(...tags);
