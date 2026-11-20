@@ -1,0 +1,1 @@
+{"version":3,"file":"linktypes.d.ts","sourceRoot":"","sources":["../../../src/cli/commands/linktypes.ts"],"names":[],"mappings":"AAIA,MAAM,MAAM,gBAAgB,GAAG;IAC7B,GAAG,EAAE,MAAM,CAAC;IACZ,IAAI,CAAC,EAAE,OAAO,CAAC;CAChB,CAAC;AAEF,wBAAsB,YAAY,CAAC,IAAI,EAAE,gBAAgB,GAAG,OAAO,CAAC,IAAI,CAAC,CAiBxE"}

@@ -1,0 +1,7 @@
+[
+  {
+    "name": "jirallm-changes",
+    "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/monitor.mjs\" \"${CLAUDE_PROJECT_DIR}\"",
+    "description": "jirallm changes (CI, reviews, Jira, Slack)"
+  }
+]

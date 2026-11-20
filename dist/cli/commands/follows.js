@@ -1,0 +1,143 @@
+// What a session follows (`<session>.follow` in jirallm-sessions) ends when the thing is finished, or
+// when the user says so. A PR that merged or closed, an Actions run that completed and an "and below"
+// window that went quiet are dropped from every session's follows RETIRE_AFTER_MS after watch first saw
+// them finished: long enough for the running sessions to get that last change line, which is matched
+// against the follows. `jirallm unfollow` drops items at once: a link pasted only to discuss it, a
+// thread whose topic moved on.
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { prItems } from './repoPrWatch.js';
+import { runItems } from './runWatch.js';
+export const RETIRE_AFTER_MS = 3600_000;
+const RETIRED_FILE = '.retired.json';
+const defaultSessionsDir = () => path.join(os.tmpdir(), 'jirallm-sessions');
+const readJson = (file) => {
+    try {
+        return existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : undefined;
+    }
+    catch {
+        return undefined;
+    }
+};
+/** Follow items whose PR, run or "below" window is finished, from watch's state files in `outputDir`. */
+export function finishedItems(outputDir) {
+    const items = [];
+    const prs = readJson(path.join(outputDir, '.prs.json'));
+    for (const n of Object.keys(prs?.finished ?? {})) {
+        items.push(`pr/${n}`);
+        if (prs?.meta?.repo)
+            items.push(`pr/${prs.meta.repo}/${n}`);
+    }
+    const repoPrs = readJson(path.join(outputDir, '.repo-prs.json')) ?? {};
+    for (const [item, s] of Object.entries(repoPrs))
+        if (s.state && s.state !== 'OPEN')
+            items.push(item);
+    const runs = readJson(path.join(outputDir, '.runs.json')) ?? {};
+    for (const [item, s] of Object.entries(runs))
+        if (s.status === 'completed')
+            items.push(item);
+    const below = readJson(path.join(outputDir, '.slack-below.json')) ?? {};
+    for (const [dir, s] of Object.entries(below))
+        if (s.closed)
+            items.push(`below/${dir}`);
+    return items.map((i) => i.toLowerCase());
+}
+/** Removes `items` (lower case) from a session's .follow; returns the items it removed. */
+function removeFollows(file, items) {
+    const lines = readFileSync(file, 'utf8').split(/\r?\n/).filter((l) => l.trim());
+    const keep = lines.filter((l) => !items.has(l.trim().toLowerCase()));
+    if (keep.length !== lines.length)
+        writeFileSync(file, keep.join('\n'));
+    return lines.filter((l) => items.has(l.trim().toLowerCase())).map((l) => l.trim());
+}
+/**
+ * Drops finished items from all sessions' follows once they have been finished for RETIRE_AFTER_MS
+ * (first seen finished: .retired.json in the sessions folder). Returns "<session>: <item>" per removal.
+ */
+export function retireFollows(finished, sessionsDir = defaultSessionsDir(), now = Date.now()) {
+    if (!existsSync(sessionsDir))
+        return [];
+    const file = path.join(sessionsDir, RETIRED_FILE);
+    const seen = readJson(file) ?? {};
+    const next = {};
+    for (const item of finished)
+        next[item] = seen[item] ?? now;
+    const due = new Set(Object.keys(next).filter((i) => now - next[i] >= RETIRE_AFTER_MS));
+    const removed = [];
+    if (due.size) {
+        for (const f of readdirSync(sessionsDir)) {
+            if (!f.endsWith('.follow'))
+                continue;
+            for (const item of removeFollows(path.join(sessionsDir, f), due))
+                removed.push(`${f.slice(0, -'.follow'.length)}: ${item}`);
+        }
+    }
+    if (JSON.stringify(next) !== JSON.stringify(seen))
+        writeFileSync(file, JSON.stringify(next, null, 1));
+    return removed;
+}
+/**
+ * The follow items a user's words name: a Slack message link (its thread and the channel below it),
+ * a PR or Actions run link, "PR #12" / "#12", or an item as `jirallm unfollow --list` shows it.
+ */
+export function itemsNamed(target) {
+    const slack = /slack\.com\/archives\/([A-Z0-9]+)\/p(\d{16})/i.exec(target);
+    if (slack) {
+        const dir = `${slack[1].toLowerCase()}-${slack[2]}`;
+        return [`slack/${dir}`, `below/${dir}`];
+    }
+    const links = [...prItems(target), ...runItems(target)];
+    if (links.length)
+        return links;
+    const pr = /^(?:pr\s*)?#?(\d+)$/i.exec(target.trim());
+    if (pr)
+        return [`pr/${pr[1]}`, `pr/*/${pr[1]}`];
+    return [target.trim()];
+}
+/** Drops what `targets` name from the session's follows; returns what it removed and what is left. */
+export function unfollow(session, targets, sessionsDir = defaultSessionsDir()) {
+    const file = path.join(sessionsDir, `${session}.follow`);
+    if (!existsSync(file))
+        return { removed: [], left: [] };
+    const lines = readFileSync(file, 'utf8').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const named = targets.flatMap(itemsNamed).map((i) => i.toLowerCase());
+    const matches = (line) => named.some((n) => {
+        const l = line.toLowerCase();
+        // "PR #12" names that PR in any repo: pr/12 and pr/<owner>/<repo>/12.
+        if (n.startsWith('pr/*/'))
+            return new RegExp(`^pr/(?:[\\w.-]+/[\\w.-]+/)?${n.slice(5)}$`).test(l);
+        // "slack/<dir>" also ends the "and below" that came with it.
+        return l === n || (n.startsWith('slack/') && l === `below/${n.slice(6)}`);
+    });
+    const removed = lines.filter(matches);
+    const left = lines.filter((l) => !matches(l));
+    if (removed.length)
+        writeFileSync(file, left.join('\n'));
+    return { removed, left };
+}
+export function followList(session, sessionsDir = defaultSessionsDir()) {
+    const file = path.join(sessionsDir, `${session}.follow`);
+    return existsSync(file) ? readFileSync(file, 'utf8').split(/\r?\n/).map((l) => l.trim()).filter(Boolean) : [];
+}
+/** `jirallm unfollow [targets...] [--session <id>] [--list]`. */
+export function runUnfollow(targets, opts, sessionsDir = defaultSessionsDir()) {
+    const session = opts.session ?? process.env.CLAUDE_CODE_SESSION_ID;
+    if (!session) {
+        console.error('No session: pass --session <id> (inside Claude Code, $CLAUDE_CODE_SESSION_ID names it).');
+        process.exitCode = 1;
+        return;
+    }
+    if (opts.list || !targets.length) {
+        const items = followList(session, sessionsDir);
+        console.log(items.length ? `Session ${session} follows:\n${items.map((i) => `  ${i}`).join('\n')}` : `Session ${session} follows nothing.`);
+        return;
+    }
+    const { removed, left } = unfollow(session, targets, sessionsDir);
+    if (!removed.length) {
+        console.log(`Nothing of that is followed by session ${session}. It follows: ${left.join(', ') || 'nothing'}`);
+        return;
+    }
+    console.log(`No longer followed: ${removed.join(', ')}${left.length ? `\nStill followed: ${left.join(', ')}` : ''}`);
+}
+//# sourceMappingURL=follows.js.map
