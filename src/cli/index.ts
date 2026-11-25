@@ -1879,6 +1879,20 @@ Examples:
   });
 
 program
+  .command('ticket:handle <key>')
+  .description('Start a new Claude session on a Jira ticket just assigned to you: it exports and reads the ticket, says what is asked and how it would approach it, and waits (the "Start in Claude" of `watch --for-me`\'s toast)')
+  .option('--output-dir <path>', 'Export directory', './jira-export')
+  .action(async (key: string, opts: { outputDir?: string }) => {
+    try {
+      const { runTicketHandle } = await import('./commands/forMe.js');
+      await runTicketHandle(key.toUpperCase(), opts);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    }
+  });
+
+program
   .command('slack:handle <folder>')
   .description('Start a new Claude session on a Slack thread that tagged you (the folder under jira-export/slack/, as `watch` exported it)')
   .option('--output-dir <path>', 'Export directory', './jira-export')
@@ -2052,6 +2066,7 @@ program
   .option('--slack-every <minutes>', 'Check exported Slack threads for new replies at most every N minutes (default 5; threads quiet for 14 days are skipped). Threads a running Claude Code session follows are checked on every run')
   .option('--tags', 'Also search Slack for new messages that tag you (off by default): exported, listed in `jirallm ui`, and a toast with "Handle in Claude"')
   .option('--closed-sessions', 'Toast when a Claude session that is not running gets a review, failed CI, a merge or a new comment ("Resume session" reopens it), and name such sessions in the first prompt after a time away (off by default)')
+  .option('--for-me', 'Toast what is addressed to you (off by default): a ticket assigned to you ("Start in Claude" opens a session on it), a mention in a Jira comment, on Confluence or on GitHub (mentions are also logged as changes). Checked with each Jira round')
   .option('--notify', 'Show a Windows toast when there are changes (click opens the PR, ticket or Slack thread)')
   .option('--quiet', 'Print nothing when nothing changed (the scheduled task uses this)')
   .addHelpText('after', `

@@ -15,7 +15,7 @@ import { finishedItems, retireFollows } from './follows.js';
 import { runningSessionKeys, slackMentionChanges } from './slackMentions.js';
 import { checksSignature, defaultGh, describePrChange, fetchPrState, myOpenPrs, notifiedPrs, repoSlug, snapshotOf, toast, type Gh, type PrSnapshot } from './prStatus.js';
 import { slackTagChanges, type SlackTag } from './slackTags.js';
-import { extensionAvailable, handleUri, installExtension } from '../../lib/vscodeExtension.js';
+import { extensionAvailable, handleUri, installExtension, ticketHandleUri } from '../../lib/vscodeExtension.js';
 
 export type WatchOptions = {
   org?: string;
@@ -36,6 +36,8 @@ export type WatchOptions = {
   tags?: boolean;
   /** true: toast closed Claude sessions with news, and let the prompt hook name them after a time away (--closed-sessions). */
   closedSessions?: boolean;
+  /** true: toast what is addressed to the user (a ticket assigned to them, a mention in Jira, Confluence or GitHub) and log the mentions (--for-me). */
+  forMe?: boolean;
   slackEvery?: string;
 };
 
@@ -433,6 +435,40 @@ export function prChanges(
  * A toast per new tag (at most 3 a round): "Handle in Claude" starts a session on it in VS Code
  * through the jirallm extension (when VS Code is there), "Open in Slack" opens the message.
  */
+/**
+ * `--for-me`: mentions become change lines (an assignment is one already: "assignee: … → you"), and
+ * each item a toast (at most 3 a round). A ticket a running session follows was assigned by that
+ * session (`jirallm start`) or is in hand: no toast. "Start in Claude" opens a session on a new ticket.
+ */
+async function forMeChanges(outputDir: string, profile: ResolvedProfile): Promise<PrChange[]> {
+  const { forMeRound, forMeLine } = await import('./forMe.js');
+  const { items, errors } = await forMeRound(outputDir, profile);
+  const running = new Set([...runningSessionKeys(outputDir).keys()].map((k) => k.toUpperCase()));
+  const fresh = items.filter((i) => !(i.kind === 'assigned' && i.key && running.has(i.key)));
+  const changes: PrChange[] = [
+    ...fresh.filter((i) => i.kind !== 'assigned').map((i) => ({ line: forMeLine(i), url: i.url })),
+    ...errors.map((e) => ({ line: `For you (mentions, assignments): check failed (${e})`, error: true })),
+  ];
+  if (process.platform !== 'win32' || !fresh.length) return changes;
+  const workspace = path.dirname(path.resolve(outputDir));
+  const vscode = fresh.some((i) => i.kind === 'assigned') && extensionAvailable() && !installExtension();
+  const shown = fresh.slice(-3);
+  for (const i of shown) {
+    if (i.kind === 'assigned' && i.key) {
+      toast(`Assigned to you: ${i.key}`, [i.title, i.text].filter(Boolean), i.url, [
+        ...(vscode ? [{ label: 'Start in Claude', url: ticketHandleUri(i.key, workspace) }] : []),
+        { label: 'Open in Jira', url: i.url },
+      ]);
+    } else if (i.kind === 'github') {
+      toast(`${i.title} (${i.from})`, [i.text], i.url, [{ label: 'Open', url: i.url }]);
+    } else {
+      toast(`${i.from || 'Someone'} mentioned you${i.key ? ` on ${i.key}` : ''}`, [i.title, i.text].filter(Boolean), i.url, [{ label: 'Open', url: i.url }]);
+    }
+  }
+  if (fresh.length > shown.length) toast(`jirallm: ${fresh.length - shown.length} more for you`, ['jirallm catchup lists them']);
+  return changes;
+}
+
 function toastTags(outputDir: string, tags: SlackTag[]): void {
   if (!tags.length || process.platform !== 'win32') return;
   const workspace = path.dirname(path.resolve(outputDir));
@@ -964,6 +1000,7 @@ function install(opts: WatchOptions, outputDir: string): void {
   if (opts.notify) args.push('--notify');
   if (opts.tags) args.push('--tags');
   if (opts.closedSessions) args.push('--closed-sessions');
+  if (opts.forMe) args.push('--for-me');
   args.push('--quiet');
   const quote = (s: string) => `"${s.replace(/"/g, '""')}"`;
   const script = path.resolve(outputDir, '.jirallm-watch.cmd');
@@ -1025,6 +1062,7 @@ export async function runWatch(opts: WatchOptions): Promise<void> {
         mkdirSync(outputDir, { recursive: true });
         writeFileSync(jiraMarker, new Date().toISOString());
       }
+      if (opts.forMe && !opts.dryRun) changes.push(...(await forMeChanges(outputDir, profile)));
     }
     const lastSlack = existsSync(slackMarker) ? Date.parse(readFileSync(slackMarker, 'utf8').trim()) : NaN;
     if (watchSlack && !(Date.now() - lastSlack < slackEvery * 60_000 - 30_000)) {

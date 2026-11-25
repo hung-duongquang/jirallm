@@ -9,7 +9,8 @@ import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { listOrgs, loadProfile } from '../../lib/config.js';
+import { listOrgs, loadProfile, type ResolvedProfile } from '../../lib/config.js';
+import { confluenceForMe, forMeLine, githubForMe, jiraForMe, type ForMeItem } from './forMe.js';
 import { JiraClient, type JqlIssue } from '../../lib/jiraClient.js';
 import { hasSlackToken, loadSlackAuth, SlackClient, type SlackSearchMatch } from '../../lib/slack.js';
 import { closedSessionNews, IMPORTANT, stampOf } from './closedSessions.js';
@@ -123,9 +124,16 @@ function run(cmd: string, args: string[], cwd: string, timeoutMs = 60_000): Prom
 const fieldName = (v: unknown) => (v && typeof v === 'object' && 'name' in v ? String((v as { name: unknown }).name) : '');
 const displayName = (v: unknown) => (v && typeof v === 'object' && 'displayName' in v ? String((v as { displayName: unknown }).displayName) : 'unassigned');
 
-async function jiraSections(since: number): Promise<Section[]> {
+let profilePromise: Promise<ResolvedProfile> | undefined;
+/** The Jira profile (the only org when one is configured), loaded once for all sections. */
+function catchupProfile(): Promise<ResolvedProfile> {
   const orgs = listOrgs();
-  const profile = await loadProfile({ org: orgs.length === 1 ? orgs[0] : undefined });
+  profilePromise ??= loadProfile({ org: orgs.length === 1 ? orgs[0] : undefined });
+  return profilePromise;
+}
+
+async function jiraSections(since: number): Promise<Section[]> {
+  const profile = await catchupProfile();
   const client = new JiraClient(profile.config, profile.apiToken);
   const base = profile.config.baseUrl.replace(/\/+$/, '');
   const link = (key: string) => `[${key}](${base}/browse/${key})`;
@@ -311,8 +319,22 @@ $ErrorActionPreference = 'Stop'
 $since = [DateTime]::Parse($env:JIRALLM_SINCE).ToUniversalTime()
 # Only an Outlook that is open: starting one over COM (New-Object) runs a hidden classic Outlook,
 # which hangs on its first-run screen when the user reads mail in the new Outlook (no COM there).
+# Once the default profile has a mail account (it was set up), starting it is safe; it syncs first.
+$started = $false
 try { $ol = [Runtime.InteropServices.Marshal]::GetActiveObject('Outlook.Application') }
-catch { [Console]::Error.WriteLine('classic Outlook is not open (the new Outlook has no COM): mail and calendar skipped'); exit 3 }
+catch {
+  $root = 'HKCU:\Software\Microsoft\Office\16.0\Outlook'
+  $profileName = (Get-ItemProperty $root -ErrorAction SilentlyContinue).DefaultProfile
+  if (-not $profileName) { $profileName = 'Outlook' }
+  $accounts = Get-ChildItem "$root\Profiles\$profileName\9375CFF0413111d3B88A00104B2A6676" -ErrorAction SilentlyContinue
+  if (-not $accounts) { [Console]::Error.WriteLine('classic Outlook is not set up (the new Outlook has no COM): open "Outlook (classic)" once and sign in; mail and calendar skipped'); exit 3 }
+  $ol = New-Object -ComObject Outlook.Application
+  $started = $true
+}
+if ($started) {
+  try { $ol.GetNamespace('MAPI').SendAndReceive($false) } catch {}
+  Start-Sleep -Seconds 20
+}
 $ns = $ol.GetNamespace('MAPI')
 $me = $ns.CurrentUser.Name
 $filter = '@SQL="urn:schemas:httpmail:datereceived" >= ''' + $since.ToString('yyyy-MM-dd HH:mm') + ''''
@@ -476,6 +498,12 @@ export async function runCatchup(opts: CatchupOptions = {}, deps: { sessionsDir?
     }
   };
   process.stderr.write(`Catching up since ${when(since)}: Jira, GitHub, Slack${opts.mail === false ? '' : ', Outlook'}…\n`);
+  const mentionSource = async (name: string, job: () => Promise<ForMeItem[]>) => guard(name, job, [] as ForMeItem[]);
+  const mentionsJob = Promise.all([
+    opts.jira === false ? [] : mentionSource('Jira mentions', async () => jiraForMe(await catchupProfile(), since)),
+    opts.jira === false ? [] : mentionSource('Confluence mentions', async () => confluenceForMe(await catchupProfile(), since)),
+    opts.github === false ? [] : mentionSource('GitHub mentions', () => githubForMe(since)),
+  ]).then((lists) => lists.flat().filter((i) => i.kind !== 'assigned').sort((a, b) => b.at - a.at));
   const [jira, github, worktrees, slack, outlook] = await Promise.all([
     opts.jira === false ? [] : guard('Jira', () => jiraSections(since), [] as Section[]),
     opts.github === false ? [] : guard('GitHub', () => githubSections(repoDir, since), [] as Section[]),
@@ -485,9 +513,11 @@ export async function runCatchup(opts: CatchupOptions = {}, deps: { sessionsDir?
       : guard('Slack', async () => ((await hasSlackToken()) ? slackSection(since) : Promise.reject(new Error('no token (`jirallm slack:auth`)'))), undefined),
     opts.mail === false ? undefined : guard('Outlook', () => readOutlook(since), undefined),
   ]);
+  const mentions = await mentionsJob;
   const byTitle = (list: Section[], prefix: string) => list.filter((s) => s.title.startsWith(prefix));
   const sections: Section[] = [
     // What needs you
+    { title: 'Mentions of you (Jira comments, Confluence, GitHub)', lines: mentions.map((i) => `${when(i.at)} · [${forMeLine(i)}](${i.url})`) },
     ...byTitle(github, 'GitHub: your review'),
     ...byTitle(jira, 'Jira: assigned to you since'),
     ...(slack ? [slack] : []),

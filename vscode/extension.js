@@ -22,6 +22,8 @@ function log(line) {
 const SESSION_ID = /^[\w-]{1,100}$/;
 /** A Slack export folder: <channel id>-<thread ts without the dot>. */
 const SLACK_DIR = /^[a-z0-9]{1,20}-\d{16}$/;
+/** A Jira key: /handle?ticket=<KEY> runs `jirallm ticket:handle <KEY>` (the "Assigned to you" toast's "Start in Claude"). */
+const TICKET_KEY = /^[A-Z][A-Z0-9]{0,9}-\d{1,7}$/;
 
 /**
  * The icon Claude Code's own extension gives its terminals (its claude-logo.svg), so a resumed session
@@ -54,6 +56,15 @@ exports.activate = (context) => {
         log(`link ${uri.path}?${uri.query}`);
         const q = new URLSearchParams(uri.query);
         const cwd = q.get('cwd') ?? '';
+        if (uri.path === '/handle' && q.has('ticket')) {
+          const key = q.get('ticket') ?? '';
+          if (!TICKET_KEY.test(key)) {
+            vscode.window.showErrorMessage(`jirallm: not a Jira key: ${key}`);
+            return;
+          }
+          run(cwd, `jirallm ticket:handle ${key}`);
+          return;
+        }
         if (uri.path === '/handle') {
           const tag = q.get('tag') ?? '';
           if (!SLACK_DIR.test(tag)) {

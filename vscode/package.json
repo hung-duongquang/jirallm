@@ -1,7 +1,7 @@
 {
   "name": "jirallm-sessions",
   "publisher": "jirallm",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "displayName": "jirallm sessions",
   "description": "Opens the Claude Code sessions that `jirallm ui` resumes, and new ones for Slack messages that tag you, in a VS Code terminal.",
   "license": "MIT",

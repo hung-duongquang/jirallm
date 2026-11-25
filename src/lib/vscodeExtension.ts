@@ -157,6 +157,12 @@ export function handleUri(dir: string, cwd: string): string {
   return `vscode://${EXTENSION_ID}/handle?${q.toString()}`;
 }
 
+/** Link that opens a terminal running `jirallm ticket:handle <key>` (a new session on a ticket just assigned to the user). */
+export function ticketHandleUri(key: string, cwd: string): string {
+  const q = new URLSearchParams({ ticket: key, cwd });
+  return `vscode://${EXTENSION_ID}/handle?${q.toString()}`;
+}
+
 /**
  * Code.exe on Windows: the program the vscode:// link handler names in the registry, else the
  * per-user install. (explorer.exe drops such links, and code.cmd cuts them at the "&".)
