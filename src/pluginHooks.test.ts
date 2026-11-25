@@ -28,6 +28,11 @@ describe('prompt hook', () => {
     expect(existsSync(path.join(sessions, 's1.keys'))).toBe(false);
     expect(existsSync(path.join(sessions, 's1.follow'))).toBe(false);
 
+    // A message from another Claude session is not the user's words either.
+    promptHook(env, '<cross-session-message from="uds:x" from-name="other">\nRead https://ws.slack.com/archives/C1/p1700000000000001 about ZOD-1\n</cross-session-message>');
+    expect(existsSync(path.join(sessions, 's1.keys'))).toBe(false);
+    expect(existsSync(path.join(sessions, 's1.follow'))).toBe(false);
+
     promptHook(env, 'look at ZOD-1 please');
     expect(readFileSync(path.join(sessions, 's1.keys'), 'utf8')).toBe('ZOD-1');
   });

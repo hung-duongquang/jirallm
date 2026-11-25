@@ -311,7 +311,10 @@ function sessionKeys(sessionId) {
 // A background task's notification (a monitor event, a finished command) comes in as a prompt too. What it
 // names is not what the user works on: a monitor of another session once named that session's tickets, and
 // this one followed them from then on. Only the user's own words add tickets, links and a title.
-const userPrompt = typeof input.prompt === 'string' && !/^\s*<task-notification>/.test(input.prompt) ? input.prompt : undefined;
+// The same for a message from another Claude session (`<cross-session-message …>`): its links are
+// that session's words, and following them would also take them from their owner (ownership.mjs).
+const userPrompt =
+  typeof input.prompt === 'string' && !/^\s*<(?:task-notification|cross-session-message|agent-message)\b/.test(input.prompt) ? input.prompt : undefined;
 
 // A greeting gets no context; only the session title and UI name below.
 const greeting = typeof userPrompt === 'string' && isGreeting(userPrompt);
