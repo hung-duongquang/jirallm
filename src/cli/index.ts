@@ -782,6 +782,32 @@ program
   });
 
 program
+  .command('catchup')
+  .description(
+    'One brief of what happened while you were away: review requests, tickets newly assigned, Slack mentions and DMs, unread mail (Outlook), your open PRs and tickets, unpushed worktrees, closed sessions with news, today\'s meetings and what the watch logged. Read only; written to jira-export/catchup/<date>.md'
+  )
+  .option('--since <when>', 'Start: "4d", "36h", YYYY-MM-DD or "YYYY-MM-DD HH:MM" (default: your last prompt before the latest 8-hour gap, else 24 hours ago)')
+  .option('--repo <dir>', 'Repo for PRs and worktrees (default ./zorgdeclaraties when there, else the current folder)')
+  .option('--no-mail', 'Skip Outlook (mail and calendar)')
+  .option('--no-slack', 'Skip Slack')
+  .option('--no-jira', 'Skip Jira')
+  .option('--no-github', 'Skip GitHub')
+  .option('--print', 'Print only, write no file')
+  .option('--output-dir <dir>', 'Export folder', './jira-export')
+  .addHelpText(
+    'after',
+    `
+Examples:
+  $ jirallm catchup                      # since you were last active
+  $ jirallm catchup --since 2026-11-20   # since a day
+  $ jirallm catchup --since 3d --no-mail`
+  )
+  .action(async (opts: { since?: string; repo?: string; mail: boolean; slack: boolean; jira: boolean; github: boolean; print?: boolean; outputDir: string }) => {
+    const { runCatchup } = await import('./commands/catchup.js');
+    console.log(await runCatchup(opts));
+  });
+
+program
   .command('update-notice', { hidden: true })
   .description("For the Claude Code plugin's session start: this version, then a line naming an update or a plugin/CLI mismatch when there is one")
   .option('--plugin <version>', "The plugin's version")

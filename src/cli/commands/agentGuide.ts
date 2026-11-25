@@ -23,6 +23,7 @@ Output switches to JSON when stdout is piped. Prefer the compact forms below: th
 | Ticket plus its parent chain / linked issues and sub-tasks | add \`--include-parent\` / \`--include-linked\` (sub-tasks are listed under \`subtasks:\` in the frontmatter and exported with \`--include-linked\`; a story's FE part is often a sub-task, not a link) |
 | Quick look, no files | \`jirallm fetch PROJ-1\` |
 | Where a ticket stands locally (status, my PRs, worktree, notes), no network | \`jirallm state PROJ-1 [PROJ-2]\`; keep facts with \`jirallm note PROJ-1 "<text>"\` |
+| The user is back after time away (a weekend, a holiday) and wants to get back on track | \`jirallm catchup\` (since their last prompt before the latest 8-hour gap; \`--since 4d\` or a date) writes \`jira-export/catchup/<date>.md\`: review requests, tickets newly assigned, Slack mentions and DMs, mail from people (Outlook), their open PRs and tickets, unpushed worktrees, closed sessions with news, today's meetings, what the watch logged. Read it, then propose an order of work; it changes nothing |
 | Before re-reviewing a PR: what I already raised and what changed since | \`jirallm review-history <pr> --repo <repo>\` |
 | Exact field values the markdown lacks or renders wrong (custom fields, link metadata, IDs) | \`jirallm fetch PROJ-1 --raw --fields <jira field ids>\` (e.g. \`issuelinks,customfield_10050\`); avoid bare \`--raw\`, it returns every field |
 | One Confluence page by URL (e.g. a test report) | \`jirallm page <url>\` → \`jira-export/confluence/<id>-<slug>/page.md\` |

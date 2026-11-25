@@ -218,6 +218,12 @@ const AWAY_MS = 2 * 60 * 60 * 1000;
 const when = (d) =>
   d.toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 
+/** Local "YYYY-MM-DD HH:MM", as `jirallm catchup --since` takes it. */
+const localStamp = (d) => {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+
 function span(ms) {
   const h = Math.floor(ms / 3600000);
   return h >= 24 ? `${Math.floor(h / 24)} day(s) ${h % 24} h` : `${h} h ${Math.floor((ms % 3600000) / 60000)} min`;
@@ -248,7 +254,10 @@ function awayNote(sessionId, transcript, now = new Date()) {
   return (
     `The user is back after ${span(gap)} away (previous prompt ${when(last)}, now ${when(now)}). ` +
     'Treat what this conversation knew about PRs, CI, reviews, tickets and Slack as possibly outdated: ' +
-    'the changes and ticket states below are current. Where the user picks up earlier work, check its state before acting on it.'
+    'the changes and ticket states below are current. Where the user picks up earlier work, check its state before acting on it.' +
+    (gap >= 20 * 3600 * 1000
+      ? ` When they want to get back on track (what happened, what needs them), \`jirallm catchup --since "${localStamp(last)}"\` writes one brief (mail, Slack, reviews, tickets, PRs, worktrees); offer it, don't run it unasked.`
+      : '')
   );
 }
 
