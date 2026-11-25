@@ -356,8 +356,8 @@ foreach ($m in $items) {
   }
 }
 $cal = $ns.GetDefaultFolder(9).Items
-$cal.IncludeRecurrences = $true
 $cal.Sort('[Start]')
+$cal.IncludeRecurrences = $true
 $today = [DateTime]::Today
 $fmt = 'g'
 $range = "[Start] < '" + $today.AddDays(1).ToString($fmt) + "' AND [End] > '" + $today.ToString($fmt) + "'"
@@ -384,17 +384,41 @@ async function readOutlook(since: number): Promise<{ mails: Mail[]; meetings: Me
   return { mails: list(data.mails), meetings: list(data.meetings) };
 }
 
-/** Notifications from tools the other sections cover, or bulk mail: counted per sender, not listed. */
-const AUTOMATED = /jira|confluence|atlassian|github|slack|no-?reply|notification|noreply|azure devops|microsoft (teams|365|viva)|octopus|sentry|aws|newsletter|digest|cloudsmith|calendar|yammer|viva engage/i;
+/** Bulk mail by sender name: counted, not listed. */
+const AUTOMATED = /jira|confluence|atlassian|github|slack|no-?reply|notification|noreply|azure devops|microsoft (teams|365|viva)|octopus|sentry|aws|newsletter|digest|cloudsmith|calendar|yammer|viva engage|datadog|gitkraken|\[bot\]/i;
+
+/**
+ * The tool a notification comes from. GitHub and Jira send mail under the name of the person who
+ * acted ("Anne Erdtsieck-Wijnen" for her PR comment), so the subject tells them apart, not the sender.
+ */
+export function mailTool(m: Pick<Mail, 'from' | 'subject'>): string | undefined {
+  const subject = m.subject.replace(/^((re|fw|fwd|aw|antw):\s*)+/i, '');
+  if (/^\[[\w.-]+\/[\w.-]+\]/.test(subject) || /github/i.test(m.from)) return 'GitHub';
+  if (/^\[JIRA\]/i.test(subject) || /\(Jira\)|jira/i.test(m.from)) return 'Jira';
+  if (/^\[Confluence\]/i.test(subject) || /confluence/i.test(m.from)) return 'Confluence';
+  if (AUTOMATED.test(m.from)) return m.from;
+  return undefined;
+}
 
 export function mailSections(mails: Mail[]): Section[] {
-  const automated = (m: Mail) => AUTOMATED.test(m.from) || /^(\[JIRA\]|\[GitHub\]|Re: \[topicushealthcare)/i.test(m.subject);
-  const people = mails.filter((m) => !automated(m));
+  const automated = (m: Mail) => mailTool(m) !== undefined;
+  // Mail from people; the same subject again (a reminder sent weekly, a thread) once, with a count.
+  const bySubject = new Map<string, Mail & { times: number }>();
+  for (const m of [...mails].filter((x) => !automated(x)).sort((a, b) => Date.parse(b.received) - Date.parse(a.received))) {
+    const key = `${m.from}:${m.subject.replace(/^((re|fw|fwd|aw|antw):\s*)+/i, '').replace(/\d+/g, '#').toLowerCase()}`;
+    const known = bySubject.get(key);
+    if (!known) bySubject.set(key, { ...m, times: 1 });
+    else {
+      known.times++;
+      known.unread ||= m.unread;
+    }
+  }
+  const people = [...bySubject.values()];
   const bulk = mails.filter(automated);
   const preview = (m: Mail) => oneLine(m.preview.replace(/^(?:\s*(?:Hi|Hoi|Hallo|Dear|Beste)\b[^\n]*\n)?/i, ''), 120);
-  const row = (m: Mail) =>
+  const row = (m: Mail & { times: number }) =>
     [
-      `${when(Date.parse(m.received))} · ${m.from}`,
+      `${when(Date.parse(m.received))} · ${m.from}${m.times > 1 ? ` (×${m.times})` : ''}`,
       [m.unread ? 'unread' : '', m.important ? '**important**' : '', m.flagged ? 'flagged' : '', m.toMe ? '' : 'cc/list'].filter(Boolean).join(', '),
       `**${oneLine(m.subject, 90) || '(no subject)'}**`,
       preview(m),
@@ -403,18 +427,22 @@ export function mailSections(mails: Mail[]): Section[] {
       .join(' · ');
   // Unread and addressed to the user first; read ones after.
   const rank = (m: Mail) => (m.unread ? 0 : 2) + (m.toMe ? 0 : 1);
-  const counts = new Map<string, { n: number; unread: number }>();
+  const counts = new Map<string, { n: number; unread: number; senders: Map<string, number> }>();
   for (const m of bulk) {
-    const c = counts.get(m.from) ?? { n: 0, unread: 0 };
+    const tool = mailTool(m) ?? m.from;
+    const c = counts.get(tool) ?? { n: 0, unread: 0, senders: new Map<string, number>() };
     c.n++;
     if (m.unread) c.unread++;
-    counts.set(m.from, c);
+    if (m.from !== tool) c.senders.set(m.from, (c.senders.get(m.from) ?? 0) + 1);
+    counts.set(tool, c);
   }
+  const top = (senders: Map<string, number>) =>
+    senders.size ? ` — ${[...senders].sort((a, b) => b[1] - a[1]).slice(0, 4).map(([s, n]) => `${s} ${n}`).join(', ')}${senders.size > 4 ? ', …' : ''}` : '';
   return [
-    { title: 'Mail from people', lines: [...people].sort((a, b) => rank(a) - rank(b) || Date.parse(b.received) - Date.parse(a.received)).slice(0, 60).map(row) },
+    { title: 'Mail from people', lines: people.sort((a, b) => rank(a) - rank(b) || Date.parse(b.received) - Date.parse(a.received)).slice(0, 60).map(row) },
     {
-      title: 'Mail: notifications and bulk (counted)',
-      lines: [...counts].sort((a, b) => b[1].n - a[1].n).map(([from, c]) => `${from}: ${c.n}${c.unread ? ` (${c.unread} unread)` : ''}`),
+      title: 'Mail: notifications and bulk (counted; mentions and review requests are listed above)',
+      lines: [...counts].sort((a, b) => b[1].n - a[1].n).map(([tool, c]) => `${tool}: ${c.n}${c.unread ? ` (${c.unread} unread)` : ''}${top(c.senders)}`),
     },
   ];
 }

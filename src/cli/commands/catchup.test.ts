@@ -64,6 +64,21 @@ describe('catchup', () => {
     expect(bulk.lines).toEqual(['Jira: 2 (1 unread)', 'GitHub: 1']);
   });
 
+  it('tells GitHub and Jira mail sent under a person\'s name apart, and folds repeated reminders', () => {
+    const mail = (m: Partial<Mail>): Mail => ({ subject: 's', from: 'Anne', received: new Date(NOW - H).toISOString(), unread: false, important: false, flagged: false, toMe: true, preview: '', ...m });
+    const [people, bulk] = mailSections([
+      mail({ subject: '[topicushealthcare/zorgdeclaraties] ZOD-1: Fix (PR #3)' }),
+      mail({ subject: 'Re: [topicushealthcare/zorgdeclaraties-skills] ZOD-2 (PR #4)', unread: true }),
+      mail({ from: 'Phuong', subject: '[JIRA] Phuong assigned ZOD-5 to you' }),
+      mail({ from: 'AFAS', subject: 'Signaal - Je hebt week 46 nog niet afgesloten', received: new Date(NOW - 2 * H).toISOString() }),
+      mail({ from: 'AFAS', subject: 'Signaal - Je hebt week 47 nog niet afgesloten', unread: true }),
+      mail({ from: 'Koen', subject: 'Release' }),
+    ]);
+    expect(people.lines).toHaveLength(2);
+    expect(people.lines[0]).toMatch(/AFAS \(×2\) · unread · \*\*Signaal - Je hebt week 47/);
+    expect(bulk.lines).toEqual(['GitHub: 2 (1 unread) — Anne 2', 'Jira: 1 — Phuong 1']);
+  });
+
   it('lists the important watch lines since, newest per item, and counts the rest', () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'catchup-log-'));
     mkdirSync(dir, { recursive: true });
