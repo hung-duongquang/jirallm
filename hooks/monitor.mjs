@@ -20,7 +20,29 @@ const projectDir = path.resolve(process.argv[2] || process.cwd());
 // after the session started: it serves that session, no handshake guessing.
 const given = process.argv[3] === '--session' && /^[\w-]{1,100}$/.test(process.argv[4] ?? '') ? process.argv[4] : undefined;
 process.env.CLAUDE_PROJECT_DIR = projectDir;
-const { outputDir, pushChanges, hasHotThread, jirallm } = await import('./changes.mjs');
+// The delivery code comes from the newest installed plugin version and is reloaded after
+// `jirallm upgrade` (checked every 5 minutes), so a running session needs no restart (latest.mjs).
+const { latestHook } = await import('./latest.mjs');
+const { pathToFileURL } = await import('node:url');
+let changesPath = latestHook('changes.mjs');
+let lib = await import(pathToFileURL(changesPath).href);
+let libCheckedAt = Date.now();
+async function refreshLib() {
+  if (Date.now() - libCheckedAt < 5 * 60_000) return;
+  libCheckedAt = Date.now();
+  try {
+    const next = latestHook('changes.mjs');
+    if (next === changesPath) return;
+    lib = await import(pathToFileURL(next).href);
+    changesPath = next;
+  } catch {
+    // Keep the code that works.
+  }
+}
+const { outputDir } = lib;
+const pushChanges = (...a) => lib.pushChanges(...a);
+const hasHotThread = (...a) => lib.hasHotThread(...a);
+const jirallm = (...a) => lib.jirallm(...a);
 
 const sessionsDir = path.join(os.tmpdir(), 'jirallm-sessions');
 const POLL_MS = 30_000;
@@ -164,6 +186,7 @@ for (let i = 0; ; i++) {
   } else {
     session = followResume(session, claimedAt);
   }
+  await refreshLib();
   const hot = hasHotThread(session);
   if (hot && Date.now() - hotCheckedAt >= HOT_POLL_MS) {
     hotCheckedAt = Date.now();

@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.mjs\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs\" session-start",
             "timeout": 20
           }
         ]
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/prompt-submit.mjs\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs\" prompt-submit",
             "timeout": 25
           }
         ]
@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/pre-compact.mjs\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs\" pre-compact",
             "timeout": 10
           }
         ]
@@ -38,7 +38,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/stop.mjs\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs\" stop",
             "timeout": 10
           }
         ]
@@ -50,7 +50,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/pre-tool-use.mjs\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs\" pre-tool-use",
             "timeout": 10
           }
         ]
@@ -61,7 +61,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/post-tool-use.mjs\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs\" post-tool-use",
             "timeout": 5
           }
         ]
@@ -72,7 +72,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/session-end.mjs\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs\" session-end",
             "timeout": 5
           }
         ]

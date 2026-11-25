@@ -20,6 +20,23 @@ function workspace() {
 const promptHook = (env: NodeJS.ProcessEnv, prompt: string) =>
   spawnSync(process.execPath, ['hooks/prompt-submit.mjs'], { env, input: JSON.stringify({ session_id: 's1', prompt }), encoding: 'utf8', timeout: 20000 });
 
+describe('hooks of a newer installed version', () => {
+  it('runs the newest version\'s hook, so a running session follows an upgrade without a restart', () => {
+    const cache = mkdtempSync(path.join(tmpdir(), 'jl-cache-'));
+    for (const v of ['0.9.0', '0.10.0', '0.8.5']) {
+      const hooks = path.join(cache, v, 'hooks');
+      mkdirSync(hooks, { recursive: true });
+      for (const f of ['run.mjs', 'latest.mjs']) writeFileSync(path.join(hooks, f), readFileSync(path.join('hooks', f)));
+      writeFileSync(path.join(hooks, 'hello.mjs'), `import fs from 'node:fs';\nprocess.stdout.write('${v} got ' + fs.readFileSync(0, 'utf8'));\n`);
+    }
+    // 0.10.0 is newer than 0.9.0 (numeric, not text order).
+    const out = spawnSync(process.execPath, [path.join(cache, '0.9.0', 'hooks', 'run.mjs'), 'hello'], { input: 'x', encoding: 'utf8' });
+    expect(out.stdout).toBe('0.10.0 got x');
+    // Outside the versioned cache (a checkout) a hook runs from its own folder.
+    expect(spawnSync(process.execPath, ['hooks/run.mjs', 'no-such-hook'], { encoding: 'utf8' }).status).not.toBe(0);
+  });
+});
+
 describe('prompt hook', () => {
   it('takes tickets from what the user wrote, not from a background task notification', () => {
     const { sessions, env } = workspace();

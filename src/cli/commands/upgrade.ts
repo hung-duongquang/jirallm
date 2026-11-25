@@ -182,5 +182,5 @@ export async function runUpgrade(opts: UpgradeOpts = {}): Promise<void> {
     process.exit(code);
   }
   await upgradePlugin();
-  outro(`Upgrade complete. Restart Claude Code sessions to load the new plugin; \`${name} --version\` shows the CLI's version.`);
+  outro(`Upgrade complete. Running Claude Code sessions use the new hooks from their next prompt (sessions started before 0.56.0 need one restart); \`${name} --version\` shows the CLI's version.`);
 }
