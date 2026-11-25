@@ -122,6 +122,9 @@ try {
 }
 
 const SLACK_MESSAGE = /https:\/\/[\w-]+\.slack\.com\/archives\/([A-Z0-9]+)\/p(\d{16})[^\s<>)"'\]]*/gi;
+const SLACK_FILE = /https:\/\/[\w-]+\.slack\.com\/files\/[A-Z0-9]+\/F[A-Z0-9]+[^\s<>)"'\]]*/gi;
+/** The prompt hands its links to another session ("leave to another claude session", "for a new session"). */
+const ELSEWHERE = /\b(?:another|other|a new|new|separate|different)\s+(?:claude\s+)?(?:session|chat|conversation)\b|\bsession\s+(?:khác|khac)\b/i;
 
 /** A Confluence page link: …/wiki/spaces/<S>/pages/<id>/… or …/wiki/pages/viewpage.action?pageId=<id>. */
 const CONFLUENCE_PAGE = /https:\/\/[\w.-]+\/wiki\/(?:spaces\/[^/\s]+\/pages\/(\d+)|pages\/viewpage\.action\?(?:[^\s#]*&)?pageId=(\d+))[^\s<>)"'\]]*/gi;
@@ -136,10 +139,21 @@ const CONFLUENCE_PAGE = /https:\/\/[\w.-]+\/wiki\/(?:spaces\/[^/\s]+\/pages\/(\d
  */
 function followLinks(prompt, sessionId) {
   if (!sessionId || !/^[\w-]+$/.test(sessionId)) return;
+  // "<link> I will leave to another claude session": the link is not this session's work.
+  if (ELSEWHERE.test(prompt)) return;
   const file = path.join(sessionsDir, `${sessionId}.follow`);
   const followed = existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean) : [];
   const added = [];
   const links = [];
+  // A file link (an image pasted in Slack) names no thread: ask Slack which message shares the file.
+  for (const m of prompt.matchAll(SLACK_FILE)) {
+    try {
+      const resolved = jirallm(['slack', m[0], '--link'], 10000).trim().split('\n')[0];
+      if (/^https:\/\/[\w-]+\.slack\.com\/archives\//.test(resolved)) prompt += `\n${resolved}`;
+    } catch {
+      // Not resolvable (no access, no token): nothing to follow.
+    }
+  }
   for (const m of prompt.matchAll(SLACK_MESSAGE)) {
     const threadTs = /[?&]thread_ts=(\d+)\.(\d+)/.exec(m[0]);
     const item = `slack/${m[1].toLowerCase()}-${threadTs ? threadTs[1] + threadTs[2] : m[2]}`;
@@ -306,7 +320,7 @@ let cards = '';
 let cardKeys = [];
 try {
   if (userPrompt) {
-    const added = newTicketKeys(userPrompt, input.session_id);
+    const added = ELSEWHERE.test(userPrompt) ? [] : newTicketKeys(userPrompt, input.session_id);
     cardKeys = away ? [...new Set([...sessionKeys(input.session_id), ...added])] : added;
     if (cardKeys.length) cards = jirallm(['state', ...cardKeys, '--notes', '--output-dir', outputDir], 10000);
   }

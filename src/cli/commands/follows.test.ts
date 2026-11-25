@@ -51,6 +51,9 @@ describe('unfollow', () => {
     expect(removed).toEqual(['pr/o/r/12', 'run/o/aws/44']);
     expect(left).toEqual(['pr/3']);
     expect(unfollow('s', ['#99'], sessions).removed).toEqual([]);
+    // A reply link names its thread (thread_ts), not the reply.
+    writeFileSync(path.join(sessions, 's.follow'), 'slack/c1-1700000000000001');
+    expect(unfollow('s', ['https://ws.slack.com/archives/C1/p1700000000000009?thread_ts=1700000000.000001&cid=C1'], sessions).removed).toEqual(['slack/c1-1700000000000001']);
   });
 
   it('reads the items a target names', () => {

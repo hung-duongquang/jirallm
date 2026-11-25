@@ -19,6 +19,7 @@ import {
   renderThread,
   type LoadedThread,
   searchHits,
+  slackMessageUrl,
   slackSearchQueries,
   threadTitle,
 } from '../../lib/slack.js';
@@ -40,6 +41,8 @@ export type SlackOptions = {
   since?: string;
   /** Print only `<thread title> · #channel` (the plugin's prompt hook names Claude Code sessions with it). */
   title?: boolean;
+  /** Print only the message link (a file link resolved to the message sharing the file), for the prompt hook. */
+  link?: boolean;
   /** Claude Code session that reads the thread (default: $CLAUDE_CODE_SESSION_ID): it follows the PRs and tickets the thread names. */
   session?: string;
 };
@@ -78,6 +81,11 @@ export function ticketThreadTitle(title: string, outputDir: string | undefined):
  * <dir>/slack/<channel>-<ts>/thread.md and downloads the thread's files next to it.
  */
 export async function runSlack(url: string, opts: SlackOptions): Promise<void> {
+  if (opts.link) {
+    const client = new SlackClient(await loadSlackAuth());
+    console.log(slackMessageUrl(await client.resolveLink(url)));
+    return;
+  }
   if (opts.title) {
     const { channelName, messages, names } = await loadSlackThread(url, undefined, { channel: false });
     const title = ticketThreadTitle(threadTitle(messages, names), opts.outputDir ?? workspaceOutputDir());

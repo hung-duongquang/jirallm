@@ -76,7 +76,9 @@ export function retireFollows(finished: string[], sessionsDir = defaultSessionsD
 export function itemsNamed(target: string): string[] {
   const slack = /slack\.com\/archives\/([A-Z0-9]+)\/p(\d{16})/i.exec(target);
   if (slack) {
-    const dir = `${slack[1]!.toLowerCase()}-${slack[2]}`;
+    // A reply link names its thread by thread_ts, as the prompt hook followed it.
+    const thread = /[?&]thread_ts=(\d+)\.(\d+)/.exec(target);
+    const dir = `${slack[1]!.toLowerCase()}-${thread ? thread[1] + thread[2] : slack[2]}`;
     return [`slack/${dir}`, `below/${dir}`];
   }
   const links = [...prItems(target), ...runItems(target)];

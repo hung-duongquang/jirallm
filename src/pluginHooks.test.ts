@@ -62,6 +62,13 @@ describe('prompt hook', () => {
     ]);
   });
 
+  it('follows nothing the user hands to another session', () => {
+    const { sessions, env } = workspace();
+    promptHook(env, 'https://ws.slack.com/archives/C1/p1700000000000001?thread_ts=1700000000.000001 about ZOD-1, I will leave to another claude session');
+    expect(existsSync(path.join(sessions, 's1.follow'))).toBe(false);
+    expect(existsSync(path.join(sessions, 's1.keys'))).toBe(false);
+  });
+
   it('follows a GitHub Actions run linked in the prompt', () => {
     const { sessions, env } = workspace();
     promptHook(env, 'watch https://github.com/o/aws/actions/runs/44 until it is deployed');
