@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { claudeSessions, removeSession } from './sessions.js';
+import { claudeSessions, markShared, removeSession, type SessionOverview } from './sessions.js';
 import { changesReport, tagDelivery } from './watch.js';
 
 describe('claudeSessions', () => {
@@ -99,5 +99,16 @@ describe('removeSession', () => {
     expect(() => removeSession(id, dir, tmp)).toThrow(/running/);
     expect(existsSync(path.join(tmp, id + '.start'))).toBe(true);
     expect(() => removeSession('..', dir, tmp)).toThrow(/Not a session id/);
+  });
+});
+
+describe('shared items', () => {
+  it('flags what two running sessions both follow, not a closed one or the channel below a thread', () => {
+    const s = (id: string, keys: string[], running = true) => ({ id, title: `T ${id}`, keys, running }) as SessionOverview;
+    const list = [s('a', ['ZOD-1', 'below/c1-1', 'pr/o/r/2']), s('b', ['ZOD-1', 'below/c1-1']), s('c', ['pr/o/r/2'], false)];
+    markShared(list);
+    expect(list[0]!.shared).toEqual([{ item: 'ZOD-1', with: 'T b' }]);
+    expect(list[1]!.shared).toEqual([{ item: 'ZOD-1', with: 'T a' }]);
+    expect(list[2]!.shared).toBeUndefined();
   });
 });

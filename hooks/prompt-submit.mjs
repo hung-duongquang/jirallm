@@ -18,6 +18,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync,
 import os from 'node:os';
 import path from 'node:path';
 import { changesMessage, isGreeting, jirallm, jirallmDetached, outputDir, refreshResumeTasks, unseenChanges } from './changes.mjs';
+import { ownedElsewhere, takeOver } from './ownership.mjs';
 
 const sessionsDir = path.join(os.tmpdir(), 'jirallm-sessions');
 const SLACK_URL = /https:\/\/[\w-]+\.slack\.com\/(?:archives|files)\/[^\s<>)"'\]]+/;
@@ -71,7 +72,7 @@ function exportedProjects() {
  * Without a folder a key counts only for a project with exported tickets, so "UTF-8" or "SHA-256"
  * in a prompt is not taken for a ticket.
  */
-function newTicketKeys(prompt, sessionId) {
+function newTicketKeys(prompt, sessionId, direct = false) {
   if (!sessionId || !/^[\w-]+$/.test(sessionId)) return [];
   const projects = exportedProjects();
   const hasFolder = (k) => existsSync(path.join(outputDir, k.toLowerCase()));
@@ -79,6 +80,14 @@ function newTicketKeys(prompt, sessionId) {
     (k) => hasFolder(k) || projects.has(k.split('-')[0].toLowerCase())
   );
   if (!keys.length) return [];
+  // Tickets the user names here move here from other running sessions (ownership.mjs).
+  if (direct) {
+    try {
+      takeOver(sessionsDir, outputDir, sessionId, { keys });
+    } catch {
+      // Ownership is a bonus.
+    }
+  }
   mkdirSync(sessionsDir, { recursive: true });
   const marker = path.join(sessionsDir, `${sessionId}.keys`);
   const seen = existsSync(marker) ? readFileSync(marker, 'utf8').split('\n').filter(Boolean) : [];
@@ -171,13 +180,19 @@ function followLinks(prompt, sessionId) {
   // A PR named outright (a PR link, "PR #12", "pull request 12"; not a bare "#12"): `watch --prs`
   // follows its CI and reviews for this session also when it is someone else's PR (a review). A link
   // keeps its repo (`pr/<owner>/<repo>/<n>`): a PR in another repo is read there, not as #n of ours.
+  const direct = links.map((l) => l.item);
   for (const m of prompt.matchAll(/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)\b|\b(?:PR|pull request)\s*#?(\d+)\b/gi)) {
     const item = m[3] ? `pr/${m[1]}/${m[2]}/${m[3]}` : `pr/${m[4]}`;
+    direct.push(item);
     if (!followed.includes(item) && !added.includes(item)) added.push(item);
   }
   // A GitHub Actions run (a deploy waiting for approval): `watch` reports its approvals and result.
-  for (const item of runItems(prompt)) if (!followed.includes(item) && !added.includes(item)) added.push(item);
+  for (const item of runItems(prompt)) {
+    direct.push(item);
+    if (!followed.includes(item) && !added.includes(item)) added.push(item);
+  }
   const threadKeys = [];
+  const indirect = [];
   for (const { item, url, command, exported } of links) {
     if (followed.includes(item) || added.includes(item)) continue;
     added.push(item);
@@ -189,13 +204,22 @@ function followLinks(prompt, sessionId) {
     } else {
       // Already exported (watch found it): the same from the local copy, without fetching it again.
       const refs = threadRefs(path.join(outputDir, item, 'thread.md'));
-      for (const pr of refs.prs) if (!followed.includes(pr) && !added.includes(pr)) added.push(pr);
+      for (const pr of refs.prs) if (!followed.includes(pr) && !added.includes(pr) && !indirect.includes(pr)) indirect.push(pr);
       threadKeys.push(...refs.keys);
     }
   }
-  if (threadKeys.length) {
+  // What the user named moves here; what a thread only links to stays with a session that has it.
+  try {
+    takeOver(sessionsDir, outputDir, sessionId, { items: direct });
+  } catch {
+    // Ownership is a bonus.
+  }
+  const elsewhere = ownedElsewhere(sessionsDir, sessionId, [...indirect, ...threadKeys]);
+  added.push(...indirect.filter((i) => !elsewhere.has(i)));
+  const ownKeys = threadKeys.filter((k) => !elsewhere.has(k));
+  if (ownKeys.length) {
     try {
-      newTicketKeys(threadKeys.join(' '), sessionId);
+      newTicketKeys(ownKeys.join(' '), sessionId);
     } catch {
       // Keys are a bonus.
     }
@@ -320,7 +344,7 @@ let cards = '';
 let cardKeys = [];
 try {
   if (userPrompt) {
-    const added = ELSEWHERE.test(userPrompt) ? [] : newTicketKeys(userPrompt, input.session_id);
+    const added = ELSEWHERE.test(userPrompt) ? [] : newTicketKeys(userPrompt, input.session_id, true);
     cardKeys = away ? [...new Set([...sessionKeys(input.session_id), ...added])] : added;
     if (cardKeys.length) cards = jirallm(['state', ...cardKeys, '--notes', '--output-dir', outputDir], 10000);
   }

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { intro, outro, password, isCancel, cancel } from '@clack/prompts';
@@ -150,11 +150,45 @@ export function followThreadRefs(
     }
   };
   try {
-    add('follow', prs);
-    add('keys', keys, MAX_THREAD_KEYS);
+    // A thread only links to these: leave them to a running session that already follows them
+    // (one owner per item, as hooks/ownership.mjs keeps it).
+    const owned = ownedByOtherRunning(sessionsDir, session);
+    add('follow', prs.filter((p) => !owned.has(p.toLowerCase())));
+    add('keys', keys.filter((k) => !owned.has(k.toLowerCase())), MAX_THREAD_KEYS);
   } catch {
     // Following is a bonus.
   }
+}
+
+/** Follow items and ticket keys (lower case) of the running Claude sessions other than `self`. */
+export function ownedByOtherRunning(sessionsDir: string, self: string, boot = Date.now() - os.uptime() * 1000): Set<string> {
+  const owned = new Set<string>();
+  let files: string[];
+  try {
+    files = readdirSync(sessionsDir).filter((f) => f.endsWith('.monitor'));
+  } catch {
+    return owned;
+  }
+  for (const f of files) {
+    const id = f.slice(0, -'.monitor'.length);
+    if (id === self) continue;
+    try {
+      const file = path.join(sessionsDir, f);
+      const pid = Number(readFileSync(file, 'utf8').trim());
+      if (!(pid > 0) || statSync(file).mtimeMs < boot) continue;
+      process.kill(pid, 0);
+    } catch {
+      continue;
+    }
+    for (const ext of ['follow', 'keys']) {
+      try {
+        for (const l of readFileSync(path.join(sessionsDir, `${id}.${ext}`), 'utf8').split('\n')) if (l.trim()) owned.add(l.trim().toLowerCase());
+      } catch {
+        // None.
+      }
+    }
+  }
+  return owned;
 }
 
 /**

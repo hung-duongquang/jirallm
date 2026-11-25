@@ -901,7 +901,7 @@ function followedNames(keys: string[]): string {
   const pages = keys.filter(isPage).length;
   const names = keys
     // "below/<dir>" goes with its "slack/<dir>" thread, counted there.
-    .filter((k) => !isThread(k) && !isPage(k) && !/^below\//i.test(k))
+    .filter((k) => !isThread(k) && !isPage(k) && !/^(below|session)\//i.test(k))
     .map((k) => k.replace(/^pr\/(\d+)$/i, 'PR #$1').replace(/^pr\/[\w.-]+\/([\w.-]+)\/(\d+)$/i, '$1#$2').replace(/^run\/[\w.-]+\/[\w.-]+\/(\d+)$/i, 'run $1'));
   if (threads) names.push(threads === 1 ? 'its Slack thread' : `${threads} Slack threads`);
   if (pages) names.push(pages === 1 ? 'its Confluence page' : `${pages} Confluence pages`);

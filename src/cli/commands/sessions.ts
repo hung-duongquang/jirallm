@@ -27,6 +27,8 @@ export type SessionOverview = {
   reply?: string;
   readAt?: string;
   deliveries: SessionDelivery[];
+  /** Items another running session follows too (markShared). */
+  shared?: { item: string; with: string }[];
 };
 
 const SESSION_DIR = '.changes.seen.d';
@@ -167,5 +169,24 @@ export function claudeSessions(outputDir: string, days = 7, sessionsDir = path.j
         .map((d) => ({ ...d, read: !!ack && ack.n >= d.n })),
     });
   }
+  markShared(out);
   return out.sort((a, b) => Number(b.live) - Number(a.live) || b.lastActivity.localeCompare(a.lastActivity));
+}
+
+/**
+ * Items (tickets, PRs, runs, threads) that two running sessions both follow: each change to them
+ * reaches both, and both may act on it. Naming an item in a session's prompt moves it there; an
+ * overlap that is left shows in `jirallm ui` so the user can drop it from one session.
+ */
+export function markShared(sessions: SessionOverview[]): void {
+  const running = sessions.filter((s) => s.running);
+  for (const s of running) {
+    const shared: { item: string; with: string }[] = [];
+    for (const k of s.keys) {
+      if (/^below\//i.test(k)) continue;
+      const other = running.find((o) => o.id !== s.id && o.keys.some((ok) => ok.toLowerCase() === k.toLowerCase()));
+      if (other) shared.push({ item: k, with: other.title || other.id.slice(0, 8) });
+    }
+    if (shared.length) s.shared = shared;
+  }
 }

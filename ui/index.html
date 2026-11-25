@@ -1284,6 +1284,7 @@ function renderSessions(list) {
         ${s.keys.length ? `<span class="meta" title="What the monitor follows for this session">${linkKeys(followed(s))}</span>` : ''}
         ${s.live ? '<span class="pill pass" title="Monitor running, or the transcript was written in the last 2 hours">live</span>' : ''}
         <span class="pill" title="The plugin's background monitor pushes changes to this session's tickets while it runs; without it they arrive at the next prompt">${s.monitor ? '● monitor on' : '○ monitor off'}</span>
+        ${s.shared?.length ? `<span class="pill blocked" title="${esc(s.shared.map((x) => `${x.item} — also followed by “${x.with}”`).join('\n'))}&#10;Both sessions get these changes and may act on them. Name the item in the session that should own it (that moves it), or run jirallm unfollow in the other.">⚠ shared: ${esc(s.shared.map((x) => x.item.replace(/^slack\/.*/, 'Slack thread')).join(', '))}</span>` : ''}
         ${unread ? `<span class="pill blocked">${unread} unread</span>` : ''}
         ${s.waiting ? `<span class="pill blocked" title="Changes to this session's tickets that reach it at the next prompt or monitor poll">${s.waiting} waiting</span>` : ''}
         <button class="sess-reopen" data-id="${esc(s.id)}" data-reopen="${s.reopen ? '' : '1'}" title="${s.reopen

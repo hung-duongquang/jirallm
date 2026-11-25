@@ -81,7 +81,8 @@ const lines = (file) => {
 export function sessionKeys(sessionId) {
   if (!sessionId || !SESSION_ID.test(sessionId)) return [];
   const dir = path.join(os.tmpdir(), 'jirallm-sessions');
-  return [...lines(path.join(dir, `${sessionId}.keys`)), ...lines(path.join(dir, `${sessionId}.follow`))];
+  // "session/<id>": notices to this session itself (work handed to another session, ownership.mjs).
+  return [...lines(path.join(dir, `${sessionId}.keys`)), ...lines(path.join(dir, `${sessionId}.follow`)), `session/${sessionId}`];
 }
 
 /** Mirrors HOT_MINUTES of src/cli/commands/slackHot.ts. */

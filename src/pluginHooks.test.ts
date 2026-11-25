@@ -62,6 +62,30 @@ describe('prompt hook', () => {
     ]);
   });
 
+  it('moves what the user names to this session, and leaves what a thread only links to with the session that has it', () => {
+    const { project, sessions, env } = workspace();
+    // s2 runs (its monitor pid is this test process) and has the ticket, a PR and a run.
+    writeFileSync(path.join(sessions, 's2.monitor'), String(process.pid));
+    writeFileSync(path.join(sessions, 's2.keys'), 'ZOD-1\nZOD-2');
+    writeFileSync(path.join(sessions, 's2.follow'), 'pr/o/r/12\nrun/o/r/44\npr/o/r/3270');
+    promptHook(env, 'take over ZOD-1 and https://github.com/o/r/pull/12 here');
+    expect(readFileSync(path.join(sessions, 's2.keys'), 'utf8')).toBe('ZOD-2');
+    expect(readFileSync(path.join(sessions, 's2.follow'), 'utf8')).toBe('run/o/r/44\npr/o/r/3270');
+    expect(readFileSync(path.join(sessions, 's1.keys'), 'utf8')).toBe('ZOD-1');
+    expect(readFileSync(path.join(sessions, 's1.follow'), 'utf8')).toBe('pr/o/r/12');
+    const log = readFileSync(path.join(project, 'jira-export', 'CHANGES.md'), 'utf8');
+    expect(log).toMatch(/- session\/s2: (ZOD-1, r#12|r#12, ZOD-1) handed to session|- session\/s2: r#12 handed to session/);
+
+    // A thread that links s2's PR and ticket: s1 follows the thread, not them.
+    const dir = path.join(project, 'jira-export', 'slack', 'c1-1700000000000001');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, 'thread.md'), ['---', 'slack:', '  title: "x"', '---', '## Trung', '', 'ZOD-2 fails: https://github.com/o/r/pull/3270'].join('\n'));
+    promptHook(env, 'https://ws.slack.com/archives/C1/p1700000000000001');
+    expect(readFileSync(path.join(sessions, 's1.follow'), 'utf8').split('\n')).toEqual(['pr/o/r/12', 'slack/c1-1700000000000001']);
+    expect(readFileSync(path.join(sessions, 's1.keys'), 'utf8')).toBe('ZOD-1');
+    expect(readFileSync(path.join(sessions, 's2.follow'), 'utf8')).toContain('pr/o/r/3270');
+  });
+
   it('follows nothing the user hands to another session', () => {
     const { sessions, env } = workspace();
     promptHook(env, 'https://ws.slack.com/archives/C1/p1700000000000001?thread_ts=1700000000.000001 about ZOD-1, I will leave to another claude session');
