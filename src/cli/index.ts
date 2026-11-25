@@ -20,7 +20,7 @@ import { runAuthSet, runAuthRm, runAuthList, runAuthStatus } from './commands/au
 import { runOrgsList, runOrgsRemove, runProjectRemove } from './commands/orgs.js';
 import { runDoctor } from './commands/doctor.js';
 import { runFeedback } from './commands/feedback.js';
-import { runUnfollow } from './commands/follows.js';
+import { runFollow, runUnfollow } from './commands/follows.js';
 import { runSlackHot } from './commands/slackHot.js';
 import { runSetup } from './commands/setup.js';
 import {
@@ -645,6 +645,16 @@ program
     await runFeedback(text, opts);
   })
   .addHelpText('after', '\nExamples:\n  $ jirallm feedback "the monitor told me about ZOD-1 in a session about ZOD-2"\n  $ jirallm feedback --print "slack:copy loses the bullet list"\n');
+
+program
+  .command('follow <targets...>')
+  .description('Make a Claude Code session follow a Slack thread, a PR or an Actions run itself (new replies, CI and reviews are pushed to it). For the one thread below a link that is still on topic: follow it, then `unfollow below/<dir>`')
+  .option('--session <id>', 'Claude Code session (default: $CLAUDE_CODE_SESSION_ID)')
+  .option('--output-dir <dir>', 'Export folder of the workspace', 'jira-export')
+  .action(async (targets: string[], opts: { session?: string; outputDir?: string }) => {
+    await runFollow(targets, opts);
+  })
+  .addHelpText('after', '\nExamples:\n  $ jirallm follow https://ws.slack.com/archives/C1/p1700000000000001\n  $ jirallm follow "PR #3270" https://github.com/o/r/actions/runs/44\n');
 
 program
   .command('unfollow [targets...]')

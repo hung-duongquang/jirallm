@@ -157,7 +157,7 @@ export async function belowChanges(
         }
         changes.push({
           // "slack/<dir> below" is its own item: a reply line of the thread itself in the same round stays.
-          line: `slack/${dir} below: ${what || 'new activity'} in the channel below "${fm.title ?? ''}" (may be another topic; slack/${dir}/below.md; once the channel is on another topic, stop with \`jirallm unfollow below/${dir}\`)`,
+          line: `slack/${dir} below: ${what || 'new activity'} in the channel below "${fm.title ?? ''}" (may be another topic; slack/${dir}/below.md; once the channel is on another topic, stop with \`jirallm unfollow below/${dir}\`, after \`jirallm follow <link>\` of a thread there you still wait on)`,
           url: fm.url,
         });
       } else if (!prev && !dryRun) {

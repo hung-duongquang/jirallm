@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { finishedItems, itemsNamed, RETIRE_AFTER_MS, retireFollows, unfollow } from './follows.js';
+import { finishedItems, follow, itemsNamed, itemsToFollow, RETIRE_AFTER_MS, retireFollows, unfollow } from './follows.js';
 import { mergedTicketHint } from './watch.js';
 
 const dirs = () => {
@@ -73,5 +73,21 @@ describe('mergedTicketHint', () => {
     expect(mergedTicketHint(out, 'ZOD-1')).toBe('');
     expect(mergedTicketHint(out, 'ZOD-2')).toBe('');
     expect(mergedTicketHint(out, undefined)).toBe('');
+  });
+});
+
+describe('follow', () => {
+  it('adds a thread without the channel below it, a PR and a run, once each', () => {
+    const sessions = mkdtempSync(path.join(tmpdir(), 'jl-follow-'));
+    writeFileSync(path.join(sessions, 's.follow'), 'slack/c1-1700000000000001\nbelow/c1-1700000000000001');
+    expect(itemsToFollow('https://ws.slack.com/archives/C1/p1700000000000002')).toEqual(['slack/c1-1700000000000002']);
+    expect(itemsToFollow('PR #12')).toEqual(['pr/12']);
+    expect(itemsToFollow('not a thing')).toEqual([]);
+    const items = ['slack/c1-1700000000000002', 'pr/12', ...itemsToFollow('https://github.com/o/aws/actions/runs/44')];
+    expect(follow('s', items, sessions)).toEqual(['slack/c1-1700000000000002', 'pr/12', 'run/o/aws/44']);
+    expect(follow('s', ['pr/12'], sessions)).toEqual([]);
+    // The usual switch: keep the one thread below, drop the rest of the channel.
+    unfollow('s', ['below/c1-1700000000000001'], sessions);
+    expect(readFileSync(path.join(sessions, 's.follow'), 'utf8').split('\n')).toEqual(['slack/c1-1700000000000001', 'slack/c1-1700000000000002', 'pr/12', 'run/o/aws/44']);
   });
 });

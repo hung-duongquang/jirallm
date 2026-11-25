@@ -4,7 +4,7 @@
 // them finished: long enough for the running sessions to get that last change line, which is matched
 // against the follows. `jirallm unfollow` drops items at once: a link pasted only to discuss it, a
 // thread whose topic moved on.
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { prItems } from './repoPrWatch.js';
@@ -111,6 +111,63 @@ export function unfollow(session: string, targets: string[], sessionsDir = defau
 export function followList(session: string, sessionsDir = defaultSessionsDir()): string[] {
   const file = path.join(sessionsDir, `${session}.follow`);
   return existsSync(file) ? readFileSync(file, 'utf8').split(/\r?\n/).map((l) => l.trim()).filter(Boolean) : [];
+}
+
+/**
+ * The follow items `follow` adds for a target: a Slack link is its thread only (`below/<dir>` names the
+ * channel below explicitly), "PR #12" the PR in the workspace repo, a PR or run link that one.
+ */
+export function itemsToFollow(target: string): string[] {
+  const named = itemsNamed(target);
+  if (named[0]?.startsWith('slack/')) return [named[0]];
+  if (named[0]?.startsWith('pr/') && named[1]?.startsWith('pr/*/')) return [named[0]];
+  return named.filter((i) => /^(slack|below|pr|run|confluence)\/[\w./-]+$/i.test(i));
+}
+
+/** Adds items to the session's follows; returns those that were new. */
+export function follow(session: string, items: string[], sessionsDir = defaultSessionsDir()): string[] {
+  const lines = followList(session, sessionsDir);
+  const known = new Set(lines.map((l) => l.toLowerCase()));
+  const added = [...new Set(items)].filter((i) => !known.has(i.toLowerCase()));
+  if (added.length) {
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(path.join(sessionsDir, `${session}.follow`), [...lines, ...added].join('\n'));
+  }
+  return added;
+}
+
+/**
+ * `jirallm follow <targets...>`: Claude follows something itself, e.g. the one thread below a link that
+ * is still on its topic before `unfollow below/<dir>`. A Slack thread not exported yet is exported first,
+ * as watch reports replies from the export.
+ */
+export async function runFollow(targets: string[], opts: { session?: string; outputDir?: string }, sessionsDir = defaultSessionsDir()): Promise<void> {
+  const session = opts.session ?? process.env.CLAUDE_CODE_SESSION_ID;
+  if (!session) {
+    console.error('No session: pass --session <id> (inside Claude Code, $CLAUDE_CODE_SESSION_ID names it).');
+    process.exitCode = 1;
+    return;
+  }
+  const outputDir = path.resolve(opts.outputDir ?? 'jira-export');
+  const items: string[] = [];
+  for (const target of targets) {
+    const found = itemsToFollow(target);
+    if (!found.length) {
+      console.error(`Not something to follow: ${target} (a Slack, PR or Actions run link, "PR #12", or an item as \`jirallm unfollow --list\` shows it)`);
+      process.exitCode = 1;
+      continue;
+    }
+    for (const item of found) {
+      if (item.startsWith('slack/') && /slack\.com\/archives\//i.test(target) && !existsSync(path.join(outputDir, item, 'thread.md'))) {
+        // The export names the thread by its first message, also for a link to a reply.
+        const { exportSlackThread } = await import('../../lib/slack.js');
+        const exported = await exportSlackThread(target, { outputDir });
+        items.push(`slack/${exported.dirName}`);
+      } else items.push(item);
+    }
+  }
+  const added = follow(session, items, sessionsDir);
+  console.log(added.length ? `Now followed: ${added.join(', ')}` : `Already followed: ${items.join(', ') || 'nothing'}`);
 }
 
 /** `jirallm unfollow [targets...] [--session <id>] [--list]`. */

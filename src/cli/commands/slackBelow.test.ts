@@ -63,7 +63,7 @@ describe('belowChanges', () => {
     replies.push(msg(20, 'two'), msg(25, 'moved into the thread'));
     const [change] = await belowChanges(out, false, client, new Set([dir]), Number(at(26)) * 1000);
     expect(change!.line).toBe(
-      `slack/${dir} below: 1 new message, new replies in 1 thread there in the channel below "deploy" (may be another topic; slack/${dir}/below.md; once the channel is on another topic, stop with \`jirallm unfollow below/${dir}\`)`
+      `slack/${dir} below: 1 new message, new replies in 1 thread there in the channel below "deploy" (may be another topic; slack/${dir}/below.md; once the channel is on another topic, stop with \`jirallm unfollow below/${dir}\`, after \`jirallm follow <link>\` of a thread there you still wait on)`
     );
     expect(concerns(change!.line, [`slack/${dir}`])).toBe(true);
     const below = readFileSync(path.join(out, 'slack', dir, 'below.md'), 'utf8');
