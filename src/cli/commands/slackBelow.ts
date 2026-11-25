@@ -9,10 +9,12 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { formatTs, mentionedUsers, mrkdwnToMarkdown, SlackClient, threadFrontmatter, type SlackMessage } from '../../lib/slack.js';
+import { downloadSlackFiles, formatTs, mentionedUsers, messageBodyLines, SlackClient, threadFrontmatter, type SlackMessage } from '../../lib/slack.js';
 import { isRunning } from './resume.js';
 
 export const BELOW_GAP_HOURS = 3;
+/** Top-level messages below the link that still count as its conversation (replies in their threads keep coming). */
+export const BELOW_MAX_MESSAGES = 6;
 const BELOW_STATE = '.slack-below.json';
 const MAX_HISTORY = 200;
 const MAX_BRANCHES = 10;
@@ -44,14 +46,16 @@ export function belowWindow(
   history: SlackMessage[],
   startTs: string,
   threadLastTs: string | undefined,
-  gapHours = BELOW_GAP_HOURS
+  gapHours = BELOW_GAP_HOURS,
+  maxMessages = BELOW_MAX_MESSAGES
 ): { messages: SlackMessage[]; lastActivity: number } {
   const gap = gapHours * 3600;
   let last = Math.max(Number(startTs), Number(threadLastTs ?? 0));
   const messages: SlackMessage[] = [];
   for (const m of [...history].sort((a, b) => Number(a.ts) - Number(b.ts))) {
     if (Number(m.ts) <= Number(startTs) || m.thread_ts === startTs || /^(channel|group)_(join|leave)$/.test(m.subtype ?? '')) continue;
-    if (Number(m.ts) - last > gap) break;
+    // A busy team channel never goes quiet for hours: past the first few messages it is another topic.
+    if (Number(m.ts) - last > gap || messages.length >= maxMessages) break;
     messages.push(m);
     last = Math.max(last, Number(m.ts), Number(m.latest_reply ?? 0));
   }
@@ -68,7 +72,8 @@ async function renderBelow(
   title: string,
   url: string,
   messages: SlackMessage[],
-  seen: string
+  seen: string,
+  dir?: string
 ): Promise<string> {
   const branches = new Map<string, SlackMessage[]>();
   for (const m of messages.filter((x) => x.reply_count).slice(-MAX_BRANCHES)) {
@@ -82,19 +87,27 @@ async function renderBelow(
   }
   const names = new Map<string, string>();
   for (const id of ids) names.set(id, await client.userName(id));
+  // Screenshots posted below the thread land next to below.md (the thread's folder), like the thread's own.
+  const { localFiles } = dir
+    ? await downloadSlackFiles(client, [...messages, ...[...branches.values()].flat()], dir)
+    : { localFiles: new Map<string, string>() };
+  const body = (m: SlackMessage) => {
+    const lines = messageBodyLines(m, names, localFiles);
+    return lines.length ? lines : [''];
+  };
   const isNew = (m: SlackMessage) => (Number(m.ts) > Number(seen) ? ' (new)' : '');
   const author = (m: SlackMessage) => (m.user ? names.get(m.user) ?? m.user : m.username ?? 'someone');
   const lines = [
     `# In the channel below "${title}"`,
     '',
     `- Linked message: ${url}`,
-    `- Messages after it until the first quiet gap of ${BELOW_GAP_HOURS} h, with the threads branching off them. Later ones can be about another topic.`,
+    `- Messages after it until the first quiet gap of ${BELOW_GAP_HOURS} h (at most ${BELOW_MAX_MESSAGES}), with the threads branching off them. Later ones can be about another topic.`,
     '',
   ];
   for (const m of messages) {
-    lines.push(`## ${author(m)} · ${formatTs(m.ts)}${isNew(m)}`, '', mrkdwnToMarkdown(m.text ?? '', names), '');
+    lines.push(`## ${author(m)} · ${formatTs(m.ts)}${isNew(m)}`, '', ...body(m));
     for (const r of branches.get(m.ts) ?? []) {
-      lines.push(`### ↳ in its thread: ${author(r)} · ${formatTs(r.ts)}${isNew(r)}`, '', mrkdwnToMarkdown(r.text ?? '', names), '');
+      lines.push(`### ↳ in its thread: ${author(r)} · ${formatTs(r.ts)}${isNew(r)}`, '', ...body(r));
     }
   }
   return `${lines.join('\n').trimEnd()}\n`;
@@ -140,15 +153,15 @@ export async function belowChanges(
           .filter(Boolean)
           .join(', ');
         if (!dryRun) {
-          writeFileSync(path.join(outputDir, 'slack', dir, 'below.md'), await renderBelow(client, channel, fm.title ?? '', fm.url ?? '', messages, prev.newest));
+          writeFileSync(path.join(outputDir, 'slack', dir, 'below.md'), await renderBelow(client, channel, fm.title ?? '', fm.url ?? '', messages, prev.newest, path.join(outputDir, 'slack', dir)));
         }
         changes.push({
           // "slack/<dir> below" is its own item: a reply line of the thread itself in the same round stays.
-          line: `slack/${dir} below: ${what || 'new activity'} in the channel below "${fm.title ?? ''}" (may be another topic; slack/${dir}/below.md)`,
+          line: `slack/${dir} below: ${what || 'new activity'} in the channel below "${fm.title ?? ''}" (may be another topic; slack/${dir}/below.md; once the channel is on another topic, stop with \`jirallm unfollow below/${dir}\`)`,
           url: fm.url,
         });
       } else if (!prev && !dryRun) {
-        writeFileSync(path.join(outputDir, 'slack', dir, 'below.md'), await renderBelow(client, channel, fm.title ?? '', fm.url ?? '', messages, newest));
+        writeFileSync(path.join(outputDir, 'slack', dir, 'below.md'), await renderBelow(client, channel, fm.title ?? '', fm.url ?? '', messages, newest, path.join(outputDir, 'slack', dir)));
       }
       state[dir] = { newest: prev && Number(prev.newest) > Number(newest) ? prev.newest : newest, ...(closed && { closed: true }) };
     } catch (err) {

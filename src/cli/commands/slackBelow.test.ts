@@ -24,6 +24,11 @@ describe('belowWindow', () => {
     expect(lastActivity).toBe(Number(at(350)));
   });
 
+  it('stops after the first 6 messages in a busy channel that never goes quiet', () => {
+    const history = Array.from({ length: 20 }, (_, i) => msg(5 + i * 10, `m${i}`));
+    expect(belowWindow(history, START, undefined).messages.map((m) => m.text)).toEqual(['m0', 'm1', 'm2', 'm3', 'm4', 'm5']);
+  });
+
   it('starts counting from the last reply of the linked thread, and skips its replies', () => {
     const { messages } = belowWindow([msg(1, 'reply', { thread_ts: START }), msg(300, 'after')], START, at(200));
     expect(messages.map((m) => m.text)).toEqual(['after']);
@@ -58,7 +63,7 @@ describe('belowChanges', () => {
     replies.push(msg(20, 'two'), msg(25, 'moved into the thread'));
     const [change] = await belowChanges(out, false, client, new Set([dir]), Number(at(26)) * 1000);
     expect(change!.line).toBe(
-      `slack/${dir} below: 1 new message, new replies in 1 thread there in the channel below "deploy" (may be another topic; slack/${dir}/below.md)`
+      `slack/${dir} below: 1 new message, new replies in 1 thread there in the channel below "deploy" (may be another topic; slack/${dir}/below.md; once the channel is on another topic, stop with \`jirallm unfollow below/${dir}\`)`
     );
     expect(concerns(change!.line, [`slack/${dir}`])).toBe(true);
     const below = readFileSync(path.join(out, 'slack', dir, 'below.md'), 'utf8');
@@ -70,6 +75,15 @@ describe('belowChanges', () => {
     expect(await belowChanges(out, false, client, new Set([dir]), Number(at(400)) * 1000)).toEqual([]);
     history.push(msg(500, 'tomorrow'));
     expect(await belowChanges(out, false, client, new Set([dir]), Number(at(501)) * 1000)).toEqual([]);
+  });
+
+  it('shows a message that is only a screenshot: the image is saved next to below.md and linked', async () => {
+    const { out, dir, history, client } = setup();
+    history.push(msg(6, '', { files: [{ id: 'F1', name: 'image.png', mimetype: 'image/png' }] }));
+    (client as unknown as { download: () => Promise<Buffer> }).download = async () => Buffer.from('png');
+    await belowChanges(out, false, client, new Set([dir]), Number(at(10)) * 1000);
+    expect(readFileSync(path.join(out, 'slack', dir, 'below.md'), 'utf8')).toContain('![image.png](./F1-image.png)');
+    expect(readFileSync(path.join(out, 'slack', dir, 'F1-image.png'), 'utf8')).toBe('png');
   });
 
   it('waits for the thread export', async () => {

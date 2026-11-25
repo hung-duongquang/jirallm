@@ -442,6 +442,66 @@ export function parseSince(value: string): string {
 const authorOf = (msg: SlackMessage, names: Map<string, string>) =>
   msg.user ? names.get(msg.user) ?? msg.user : msg.bot_profile?.name ?? msg.username ?? 'unknown';
 
+/**
+ * A message's body as Markdown lines: its text, quoted attachments (link unfurls) and its files, linked
+ * to the local copy when downloaded (images inline), else named with their Slack permalink. A message
+ * that is only a screenshot is not left blank.
+ */
+export function messageBodyLines(
+  msg: SlackMessage,
+  names: Map<string, string>,
+  localFiles?: Map<string, string>,
+  localFrames?: Map<string, { dir: string; count: number }>
+): string[] {
+  const lines: string[] = [];
+  const body = mrkdwnToMarkdown(msg.text ?? '', names);
+  if (body) lines.push(body, '');
+  for (const att of msg.attachments ?? []) {
+    const head = att.title ? (att.title_link ? `[${att.title}](${att.title_link})` : att.title) : att.author_name;
+    const text = att.text ?? (head ? '' : att.fallback ?? '');
+    const quoted = [head ? `**${head}**` : '', mrkdwnToMarkdown(text, names)].filter(Boolean).join('\n');
+    if (quoted) lines.push(quoted.split('\n').map((l) => `> ${l}`).join('\n'), '');
+  }
+  for (const file of msg.files ?? []) {
+    const name = file.name ?? file.title ?? file.id;
+    const local = localFiles?.get(file.id);
+    const isImage = (file.mimetype ?? '').startsWith('image/');
+    if (local) lines.push(isImage ? `![${name}](${local})` : `- File: [${name}](${local})`);
+    else lines.push(`- File: ${name}${file.permalink ? ` (${file.permalink})` : ''}`);
+    const frames = localFrames?.get(file.id);
+    if (frames) lines.push(`- Video frames: [${frames.count} extracted frames](${frames.dir}) (read these to see the video)`);
+  }
+  if (msg.files?.length) lines.push('');
+  return lines;
+}
+
+/** Local file name of a Slack file in an export folder. */
+export const slackLocalFileName = (file: SlackFile) => `${file.id}-${(file.name ?? file.title ?? 'file').replace(/[^\w.-]+/g, '_').slice(0, 80)}`;
+
+/**
+ * Downloads the files of `messages` into `dir` (a file already there is kept: a Slack file id never gets
+ * new content). Returns file id → "./<name>" for the ones on disk, and the errors of the rest.
+ */
+export async function downloadSlackFiles(
+  client: SlackClient,
+  messages: SlackMessage[],
+  dir: string
+): Promise<{ localFiles: Map<string, string>; errors: string[] }> {
+  const localFiles = new Map<string, string>();
+  const errors: string[] = [];
+  for (const file of messages.flatMap((m) => m.files ?? [])) {
+    const name = slackLocalFileName(file);
+    const filePath = join(dir, name);
+    try {
+      if (!existsSync(filePath)) writeFileSync(filePath, await client.download(file));
+      localFiles.set(file.id, `./${name}`);
+    } catch (err) {
+      errors.push((err as Error).message);
+    }
+  }
+  return { localFiles, errors };
+}
+
 export function renderThread(input: RenderInput): string {
   const { names } = input;
   const all = input.messages;
@@ -466,24 +526,7 @@ export function renderThread(input: RenderInput): string {
     const isNew = input.newSince && Number(msg.ts) > Number(input.newSince) ? ' (new)' : '';
     const ownThread = inChannel && msg.reply_count ? ` (own thread, ${msg.reply_count} repl${msg.reply_count === 1 ? 'y' : 'ies'})` : '';
     lines.push(`## ${author} · ${formatTs(msg.ts)}${edited}${marker}${ownThread}${isNew}`, '');
-    const body = mrkdwnToMarkdown(msg.text ?? '', names);
-    if (body) lines.push(body, '');
-    for (const att of msg.attachments ?? []) {
-      const head = att.title ? (att.title_link ? `[${att.title}](${att.title_link})` : att.title) : att.author_name;
-      const text = att.text ?? (head ? '' : att.fallback ?? '');
-      const quoted = [head ? `**${head}**` : '', mrkdwnToMarkdown(text, names)].filter(Boolean).join('\n');
-      if (quoted) lines.push(quoted.split('\n').map((l) => `> ${l}`).join('\n'), '');
-    }
-    for (const file of msg.files ?? []) {
-      const name = file.name ?? file.title ?? file.id;
-      const local = input.localFiles?.get(file.id);
-      const isImage = (file.mimetype ?? '').startsWith('image/');
-      if (local) lines.push(isImage ? `![${name}](${local})` : `- File: [${name}](${local})`);
-      else lines.push(`- File: ${name}${file.permalink ? ` (${file.permalink})` : ''}`);
-      const frames = input.localFrames?.get(file.id);
-      if (frames) lines.push(`- Video frames: [${frames.count} extracted frames](${frames.dir}) (read these to see the video)`);
-    }
-    if (msg.files?.length) lines.push('');
+    lines.push(...messageBodyLines(msg, names, input.localFiles, input.localFrames));
   };
   for (const msg of messages) renderMessage(msg);
   const channel = (input.channelMessages ?? []).filter(after);
@@ -624,22 +667,18 @@ export async function exportSlackThread(
   const dir = join(opts.outputDir, 'slack', dirName);
   mkdirSync(dir, { recursive: true });
 
-  const localFiles = new Map<string, string>();
+  let localFiles = new Map<string, string>();
   const localFrames = new Map<string, { dir: string; count: number }>();
   const fileErrors: string[] = [];
   if (opts.files !== false) {
-    for (const file of [...messages, ...channelMessages].flatMap((m) => m.files ?? [])) {
-      const name = `${file.id}-${(file.name ?? file.title ?? 'file').replace(/[^\w.-]+/g, '_').slice(0, 80)}`;
+    const all = [...messages, ...channelMessages];
+    const downloaded = await downloadSlackFiles(client, all, dir);
+    localFiles = downloaded.localFiles;
+    fileErrors.push(...downloaded.errors);
+    for (const file of all.flatMap((m) => m.files ?? [])) {
+      const name = slackLocalFileName(file);
       const filePath = join(dir, name);
-      try {
-        // A Slack file id never gets new content, so a re-export (watch) does not fetch it again.
-        if (!existsSync(filePath)) writeFileSync(filePath, await client.download(file));
-        localFiles.set(file.id, `./${name}`);
-      } catch (err) {
-        fileErrors.push((err as Error).message);
-        continue;
-      }
-      if (opts.frames === false || !isVideoFile(name)) continue;
+      if (!localFiles.has(file.id) || opts.frames === false || !isVideoFile(name)) continue;
       try {
         const count = await videoFrames(filePath, join(dir, `${name}-frames`));
         if (count > 0) localFrames.set(file.id, { dir: `./${name}-frames/`, count });
