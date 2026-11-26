@@ -40,6 +40,15 @@ describe('retireFollows', () => {
 });
 
 describe('unfollow', () => {
+  it('drops a ticket another session works on from the session tickets, by key or browse link', () => {
+    const { sessions } = dirs();
+    writeFileSync(path.join(sessions, 's.keys'), 'ZOD-2999\nZOD-3734\nZOD-4216');
+    writeFileSync(path.join(sessions, 's.follow'), 'pr/3320');
+    expect(unfollow('s', ['zod-3734', 'https://x.atlassian.net/browse/ZOD-4216'], sessions).removed).toEqual(['ZOD-3734', 'ZOD-4216']);
+    expect(readFileSync(path.join(sessions, 's.keys'), 'utf8')).toBe('ZOD-2999');
+    expect(readFileSync(path.join(sessions, 's.follow'), 'utf8')).toBe('pr/3320');
+  });
+
   it('drops what a link or "PR #N" names: a Slack link ends the thread and its below', () => {
     const { sessions } = dirs();
     writeFileSync(path.join(sessions, 's.follow'), 'slack/c1-1700000000000001\nbelow/c1-1700000000000001\npr/o/r/12\npr/3\nrun/o/aws/44');

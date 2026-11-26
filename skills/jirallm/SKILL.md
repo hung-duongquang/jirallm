@@ -45,7 +45,7 @@ The steps for each workflow live next to this file, so they only cost context wh
 | Versions (releases) of a project, e.g. for a fix version | `jirallm versions --org <org> -P <project>` (the names `edit --fix-versions` expects) |
 | Environment check | `jirallm doctor` |
 | Report a jirallm bug or wish | `jirallm feedback "<what happened, what was expected>"` (a private issue with versions, app, doctor, the session's follows and deliveries). When the user is unhappy with jirallm itself (a missed or misplaced notification, a broken command, a wrong follow), offer it and show the text before filing |
-| Stop following a thread, PR or run | `jirallm unfollow <Slack/PR/run link or "PR #N">` (this session; `--list` shows what it follows) |
+| Stop following a ticket, thread, PR or run | `jirallm unfollow <ZOD-1, Slack/PR/run link or "PR #N">` (this session; e.g. a ticket another session works on; `--list` shows what it follows) |
 | Follow one yourself | `jirallm follow <Slack/PR/run link or "PR #N">` (e.g. the one thread below a link still on topic, then `unfollow below/<dir>`) |
 
 Search tips: `--fields` takes friendly names (`key,summary,status,assignee,sprint,parent`) or raw ids (`customfield_10050`). `--format tsv` prints a header line and one line per issue; nested values collapse to their key or name. With `--all`, a "more results" note on stderr means the `--max` cap was hit.

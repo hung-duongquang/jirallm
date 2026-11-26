@@ -88,10 +88,33 @@ export function itemsNamed(target: string): string[] {
   return [target.trim()];
 }
 
-/** Drops what `targets` name from the session's follows; returns what it removed and what is left. */
+/** A Jira key a target names: "ZOD-12" or a browse link. */
+const ticketKey = (target: string) => /^(?:\S*\/browse\/)?([A-Z][A-Z0-9]+-\d+)\b/i.exec(target.trim())?.[1]?.toUpperCase();
+
+/** The session's tickets (`<session>.keys`, its changes are delivered to the session). */
+export function ticketList(session: string, sessionsDir = defaultSessionsDir()): string[] {
+  const file = path.join(sessionsDir, `${session}.keys`);
+  return existsSync(file) ? readFileSync(file, 'utf8').split(/\r?\n/).map((l) => l.trim()).filter(Boolean) : [];
+}
+
+/**
+ * Drops what `targets` name from the session's follows, and tickets ("ZOD-12", a browse link) from its
+ * tickets: another session works on it, or it was only mentioned. Returns what it removed and what is left.
+ */
 export function unfollow(session: string, targets: string[], sessionsDir = defaultSessionsDir()): { removed: string[]; left: string[] } {
+  const keys = new Set(targets.map(ticketKey).filter((k): k is string => !!k));
+  const removedKeys: string[] = [];
+  if (keys.size) {
+    const tickets = ticketList(session, sessionsDir);
+    const keep = tickets.filter((k) => !keys.has(k.toUpperCase()));
+    if (keep.length !== tickets.length) {
+      writeFileSync(path.join(sessionsDir, `${session}.keys`), keep.join('\n'));
+      removedKeys.push(...tickets.filter((k) => keys.has(k.toUpperCase())));
+    }
+    targets = targets.filter((t) => !ticketKey(t) || /slack\.com|github\.com/i.test(t));
+  }
   const file = path.join(sessionsDir, `${session}.follow`);
-  if (!existsSync(file)) return { removed: [], left: [] };
+  if (!existsSync(file)) return { removed: removedKeys, left: [] };
   const lines = readFileSync(file, 'utf8').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const named = targets.flatMap(itemsNamed).map((i) => i.toLowerCase());
   const matches = (line: string) =>
@@ -105,7 +128,7 @@ export function unfollow(session: string, targets: string[], sessionsDir = defau
   const removed = lines.filter(matches);
   const left = lines.filter((l) => !matches(l));
   if (removed.length) writeFileSync(file, left.join('\n'));
-  return { removed, left };
+  return { removed: [...removedKeys, ...removed], left };
 }
 
 export function followList(session: string, sessionsDir = defaultSessionsDir()): string[] {
@@ -179,11 +202,12 @@ export function runUnfollow(targets: string[], opts: { session?: string; list?: 
     return;
   }
   if (opts.list || !targets.length) {
-    const items = followList(session, sessionsDir);
+    const items = [...ticketList(session, sessionsDir), ...followList(session, sessionsDir)];
     console.log(items.length ? `Session ${session} follows:\n${items.map((i) => `  ${i}`).join('\n')}` : `Session ${session} follows nothing.`);
     return;
   }
-  const { removed, left } = unfollow(session, targets, sessionsDir);
+  const { removed } = unfollow(session, targets, sessionsDir);
+  const left = [...ticketList(session, sessionsDir), ...followList(session, sessionsDir)];
   if (!removed.length) {
     console.log(`Nothing of that is followed by session ${session}. It follows: ${left.join(', ') || 'nothing'}`);
     return;
