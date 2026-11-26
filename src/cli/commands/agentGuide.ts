@@ -58,6 +58,7 @@ jirallm or the Atlassian MCP server: use jirallm for ticket context (files on di
 | Action | Command |
 |---|---|
 | Start work: export + branch/worktree + assign me + In Progress | \`jirallm start PROJ-1 --repo <repo> --worktree-root <dir> [--type bugfix] [--dry-run]\` |
+| Create a ticket / sub-task | \`jirallm create -P PROJ -t Story -s "<summary>" --description-file desc.md [--parent PROJ-1] [-a me] [--sprint active] --dry-run\` (types: \`jirallm issuetypes\`; custom fields: \`jirallm fields -P PROJ --type Story\`; \`create --help\`) |
 | Assign | \`jirallm assign PROJ-1 me\` (\`none\` unassigns) |
 | Transition | \`jirallm transition PROJ-1 --to "Code Review"\` (positional status is an error) |
 | Comment | \`jirallm comment PROJ-1 --help\` (markdown is converted) |
