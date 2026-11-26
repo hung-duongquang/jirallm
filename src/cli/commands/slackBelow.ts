@@ -9,7 +9,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { downloadSlackFiles, formatTs, mentionedUsers, messageBodyLines, SlackClient, threadFrontmatter, type SlackMessage } from '../../lib/slack.js';
+import { downloadSlackFiles, formatTs, mentionedUsers, messageBodyLines, reactionUsers, SlackClient, threadFrontmatter, type SlackMessage } from '../../lib/slack.js';
 import { isRunning } from './resume.js';
 
 export const BELOW_GAP_HOURS = 3;
@@ -84,6 +84,7 @@ async function renderBelow(
   for (const m of [...messages, ...[...branches.values()].flat()]) {
     if (m.user) ids.add(m.user);
     for (const id of mentionedUsers(m.text ?? '')) ids.add(id);
+    for (const id of reactionUsers([m])) ids.add(id);
   }
   const names = new Map<string, string>();
   for (const id of ids) names.set(id, await client.userName(id));

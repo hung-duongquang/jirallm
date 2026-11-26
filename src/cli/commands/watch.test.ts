@@ -287,6 +287,23 @@ describe('slackChanges', () => {
     expect(calls).toHaveLength(5); // one call per check, never more
   });
 
+  it('reports a new 👍 on a message of a short thread: often the only answer to a question', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'slackwatch-'));
+    const file = path.join(dir, 'slack', 'c1-1793000000000100', 'thread.md');
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, thread('2026-11-01T10:00:00Z', '1793000000.000100').replace('  url:', '  messages: 1\n  lastEditTs: "0"\n  url:'));
+    let messages: Record<string, unknown>[] = [{ ts: '1793000000.000100' }];
+    const client = { call: async () => ({ ok: true, messages }) } as unknown as SlackClient;
+    const at = Date.parse('2026-11-02T10:00:00Z');
+    // Exported before reactions were kept: the first look only records them.
+    expect(await slackChanges(dir, false, client, at)).toEqual([]);
+    expect(readFileSync(file, 'utf8')).toContain('  reactions: ""');
+    messages = [{ ts: '1793000000.000100', reactions: [{ name: '+1::skin-tone-2', users: ['U2'], count: 1 }] }];
+    expect(await slackChanges(dir, true, client, at)).toEqual([
+      { line: 'slack/c1-1793000000000100: would re-export (new reactions)', url: 'https://ws.slack.com/archives/C1/p1793000000000100' },
+    ]);
+  });
+
   it('checks only the threads given (those running sessions follow) between full rounds', async () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'slackwatch-'));
     for (const t of ['c1-1793000000000100', 'c1-1793000000000200']) {

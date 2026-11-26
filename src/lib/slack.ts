@@ -101,7 +101,31 @@ export type SlackMessage = {
   reply_count?: number;
   /** On a thread parent: ts of the newest reply. */
   latest_reply?: string;
+  /** Emoji reactions: a 👍 on a question or proposal is how people agree without a reply. */
+  reactions?: { name: string; users?: string[]; count?: number }[];
 };
+
+const REACTION_EMOJI: Record<string, string> = {
+  '+1': '👍', thumbsup: '👍', '-1': '👎', thumbsdown: '👎', white_check_mark: '✅', heavy_check_mark: '✔️',
+  eyes: '👀', pray: '🙏', raised_hands: '🙌', ok_hand: '👌', ok: '🆗', heart: '❤️', joy: '😂', tada: '🎉',
+  x: '❌', question: '❓', thinking_face: '🤔', fire: '🔥', rocket: '🚀', clap: '👏', muscle: '💪', '100': '💯',
+};
+
+/** A reaction's emoji without its skin tone ("+1::skin-tone-2" → 👍), or ":name:" when unknown. */
+export const reactionEmoji = (name: string) => {
+  const base = name.split('::')[0]!;
+  return REACTION_EMOJI[base] ?? `:${base}:`;
+};
+
+/** Who reacted to what in `messages`, as sorted "ts|emoji name|user" keys (the export keeps them to see new ones). */
+export function reactionKeys(messages: SlackMessage[]): string[] {
+  return messages
+    .flatMap((m) => (m.reactions ?? []).flatMap((r) => (r.users ?? []).map((u) => `${m.ts}|${r.name.split('::')[0]}|${u}`)))
+    .sort();
+}
+
+/** User ids of everyone who reacted, so their names can be looked up with the authors'. */
+export const reactionUsers = (messages: SlackMessage[]) => messages.flatMap((m) => (m.reactions ?? []).flatMap((r) => r.users ?? []));
 
 /** Channel messages read after a thread: until this long after its last message, at most CHANNEL_MAX. */
 export const CHANNEL_WINDOW_HOURS = 12;
@@ -472,6 +496,10 @@ export function messageBodyLines(
     if (frames) lines.push(`- Video frames: [${frames.count} extracted frames](${frames.dir}) (read these to see the video)`);
   }
   if (msg.files?.length) lines.push('');
+  const reactions = (msg.reactions ?? [])
+    .map((r) => `${reactionEmoji(r.name)} ${(r.users ?? []).map((u) => names.get(u) ?? u).join(', ') || r.count || ''}`.trim())
+    .filter(Boolean);
+  if (reactions.length) lines.push(`- Reactions: ${reactions.join('; ')}`, '');
   return lines;
 }
 
@@ -602,6 +630,7 @@ export async function loadSlackThread(
   for (const m of [...messages, ...channelMessages]) {
     if (m.user) ids.add(m.user);
     for (const id of mentionedUsers(m.text ?? '')) ids.add(id);
+    for (const id of reactionUsers([m])) ids.add(id);
   }
   const names = new Map<string, string>();
   for (const id of ids) names.set(id, await slack.userName(id));
@@ -712,6 +741,7 @@ export async function exportSlackThread(
     `  lastReplyAt: ${JSON.stringify(new Date(Number(lastTs) * 1000).toISOString())}`,
     `  lastTs: ${JSON.stringify(lastTs)}`,
     `  lastEditTs: ${JSON.stringify(lastEditOf(messages))}`,
+    `  reactions: ${JSON.stringify(reactionKeys(messages).join(' '))}`,
     ...(newReplies
       ? [`  newSince: ${JSON.stringify(newSince)}`, `  newReplies: ${newReplies}`, `  newRepliesAt: ${JSON.stringify(newRepliesAt)}`]
       : []),

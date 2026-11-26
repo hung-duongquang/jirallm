@@ -246,6 +246,16 @@ describe('renderThread', () => {
     });
     expect(md).toContain('- File: [rec.mp4](./F2-rec.mp4)\n- Video frames: [7 extracted frames](./F2-rec.mp4-frames/)');
   });
+
+  it('shows who reacted with what: a 👍 is an answer too', () => {
+    const md = renderThread({
+      url: 'https://x.slack.com/archives/C1/p1000000000000000',
+      linkedTs: '1.0',
+      names: new Map([['U2', 'Phuong'], ['U3', 'Trang']]),
+      messages: [{ ts: '1.0', text: 'two differences, ok?', reactions: [{ name: '+1::skin-tone-2', users: ['U2', 'U3'], count: 2 }, { name: 'meow_party', users: ['U2'] }] }],
+    });
+    expect(md).toContain('two differences, ok?\n\n- Reactions: 👍 Phuong, Trang; :meow_party: Phuong');
+  });
 });
 
 describe('threadTitle', () => {

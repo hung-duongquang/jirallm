@@ -6,7 +6,7 @@ import { listOrgs, loadProfile, type ResolvedProfile } from '../../lib/config.js
 import { ConfluenceClient, exportConfluencePage } from '../../lib/confluence.js';
 import { JiraExporter } from '../../lib/exporter.js';
 import { JiraClient, jiraMillis, latestCommentUpdate, type JqlIssue } from '../../lib/jiraClient.js';
-import { exportSlackThread, hasSlackToken, lastEditOf, loadSlackAuth, parseSlackUrl, SlackClient, threadFrontmatter, type SlackMessage } from '../../lib/slack.js';
+import { exportSlackThread, hasSlackToken, lastEditOf, loadSlackAuth, parseSlackUrl, reactionEmoji, reactionKeys, SlackClient, threadFrontmatter, type SlackMessage } from '../../lib/slack.js';
 import { isRunning } from './resume.js';
 import { runChanges as actionRunChanges } from './runWatch.js';
 import { followedRepoPrs, followThreadLinks, REPO_PR_ITEM, repoPrChanges, splitByRepo } from './repoPrWatch.js';
@@ -493,8 +493,25 @@ function setThreadField(file: string, key: string, value: string): void {
   if (next !== text) writeFileSync(file, next);
 }
 
+/** "new reaction 👍 by Phuong Nguyen" from "ts|name|user" keys. */
+async function reactionsLine(keys: string[], slack: SlackClient): Promise<string> {
+  const parts: string[] = [];
+  for (const k of keys.slice(0, 5)) {
+    const [, name, user] = k.split('|');
+    let who = user!;
+    try {
+      who = await slack.userName(who);
+    } catch {
+      // The id then.
+    }
+    parts.push(`${reactionEmoji(name!)} by ${who}`);
+  }
+  const more = keys.length > 5 ? ` +${keys.length - 5} more` : '';
+  return `new reaction${keys.length === 1 ? '' : 's'} ${parts.join(', ')}${more} (a 👍 on a question or proposal means agreed)`;
+}
+
 /**
- * New replies, edits and deletions in exported Slack threads (slack/<channel>-<ts>/thread.md) since
+ * New replies, edits, deletions and reactions in exported Slack threads (slack/<channel>-<ts>/thread.md) since
  * their export: one conversations.replies call per thread. Short threads come back whole and are
  * compared with the export (lastTs, lastEditTs, messages); long ones only for messages after lastTs.
  * A thread with new replies is exported again (which marks them as new). Threads without a reply for
@@ -518,7 +535,10 @@ export async function slackChanges(
     if (!fm.url || !fm.lastTs) return [];
     if (now - Date.parse(fm.lastReplyAt ?? '') > SLACK_IDLE_DAYS * 86_400_000) return [];
     const count = Number(fm.messages);
-    return [{ dir: d.name, file, threadTs: `${ts[1]}.${ts[2]}`, url: fm.url, lastTs: fm.lastTs, lastEditTs: fm.lastEditTs, count: count > 0 ? count : undefined }];
+    return [{
+      dir: d.name, file, threadTs: `${ts[1]}.${ts[2]}`, url: fm.url, lastTs: fm.lastTs, lastEditTs: fm.lastEditTs, reactions: fm.reactions,
+      count: count > 0 ? count : undefined,
+    }];
   });
   if (threads.length === 0) return [];
   const slack = client ?? new SlackClient(await loadSlackAuth());
@@ -536,6 +556,7 @@ export async function slackChanges(
       const fresh = messages.filter((m) => Number(m.ts) > Number(t.lastTs)).length;
       let edited = 0;
       let deleted = 0;
+      let reacted: string[] = [];
       if (whole && !page.has_more) {
         const known = messages.filter((m) => Number(m.ts) <= Number(t.lastTs));
         if (t.lastEditTs === undefined) {
@@ -545,10 +566,18 @@ export async function slackChanges(
           edited = known.filter((m) => m.edited && !m.bot_id && Number(m.edited.ts) > Number(t.lastEditTs)).length;
         }
         deleted = Math.max(0, t.count! - known.length);
+        // A 👍 is often the only answer to a question: new reactions count like a reply.
+        const current = reactionKeys(known);
+        if (t.reactions === undefined) {
+          if (!dryRun) setThreadField(t.file, 'reactions', current.join(' '));
+        } else {
+          const before = new Set(t.reactions.split(' ').filter(Boolean));
+          reacted = current.filter((k) => !before.has(k));
+        }
       }
-      if (fresh === 0 && edited === 0 && deleted === 0) continue;
+      if (fresh === 0 && edited === 0 && deleted === 0 && reacted.length === 0) continue;
       if (dryRun) {
-        changes.push({ line: `slack/${t.dir}: would re-export (${fresh ? 'new replies' : 'edited or deleted messages'})`, url: t.url });
+        changes.push({ line: `slack/${t.dir}: would re-export (${fresh ? 'new replies' : edited || deleted ? 'edited or deleted messages' : 'new reactions'})`, url: t.url });
         continue;
       }
       const exported = await exportSlackThread(t.url, { outputDir, client: slack });
@@ -557,6 +586,7 @@ export async function slackChanges(
         n ? `${n} new repl${n === 1 ? 'y' : 'ies'}` : '',
         edited ? `${edited} message${edited === 1 ? '' : 's'} edited` : '',
         deleted ? `${deleted} message${deleted === 1 ? '' : 's'} deleted` : '',
+        reacted.length ? await reactionsLine(reacted, slack) : '',
       ].filter(Boolean).join(', ');
       changes.push({ line: `slack/${t.dir}: ${what} in "${exported.title}"`, url: t.url });
     } catch (err) {
