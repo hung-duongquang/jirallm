@@ -62,18 +62,27 @@ export function slackTitleLine(channelName: string | undefined, title: string): 
   return `${title}${where}`;
 }
 
-const TICKET_LINK = /^(?:https?:\/\/)?[\w.-]+\/browse\/([A-Z][A-Z0-9]+-\d+)\S*$/;
+const TICKET_LINK = /^(?:https?:\/\/)?[\w.-]+\/browse\/([A-Z][A-Z0-9]+-\d+)\S*(?:\s+([\s\S]*))?$/;
 
 /**
- * A thread that opens with nothing but a ticket link is named after the ticket: "ZOD-4243 <summary>"
- * from its export when there is one, else "ZOD-4243". Otherwise two such threads both read
- * "topicushealthcare.atlassian.net/browse/…" in /resume.
+ * A thread that opens with a ticket link is named after the ticket: "ZOD-4243 <summary>" from its
+ * export when there is one, else "ZOD-4243", followed by what the message says besides the link and its
+ * @mentions ("ZOD-4101 BE - Automatically… · feature8"). Otherwise two such threads both read
+ * "topicushealthcare.atlassian.net/browse/…" in /resume. The summary is cut so those words fit in `max`.
  */
-export function ticketThreadTitle(title: string, outputDir: string | undefined): string {
-  const key = TICKET_LINK.exec(title)?.[1];
-  if (!key) return title;
+export function ticketThreadTitle(title: string, outputDir: string | undefined, names: Iterable<string> = [], max = 64): string {
+  const m = TICKET_LINK.exec(title);
+  if (!m) return title;
+  const key = m[1]!;
+  let rest = m[2] ?? '';
+  for (const n of names) if (n) rest = rest.split(`@${n}`).join(' ');
+  rest = rest.replace(/\s+/g, ' ').replace(/^[\s,:;.-]+/, '').trim();
   const summary = outputDir ? readTask(path.join(outputDir, key.toLowerCase(), 'task.md'))?.title : undefined;
-  return summary ? `${key} ${summary}` : key;
+  const tail = rest ? ` · ${rest}` : '';
+  let head = summary ? `${key} ${summary}` : key;
+  const room = max - tail.length;
+  if (head.length > room) head = room > key.length + 12 ? `${head.slice(0, room - 1).trimEnd()}…` : key;
+  return `${head}${tail}`;
 }
 
 /**
@@ -88,7 +97,7 @@ export async function runSlack(url: string, opts: SlackOptions): Promise<void> {
   }
   if (opts.title) {
     const { channelName, messages, names } = await loadSlackThread(url, undefined, { channel: false });
-    const title = ticketThreadTitle(threadTitle(messages, names), opts.outputDir ?? workspaceOutputDir());
+    const title = ticketThreadTitle(threadTitle(messages, names), opts.outputDir ?? workspaceOutputDir(), names.values());
     console.log(slackTitleLine(channelName, title));
     return;
   }

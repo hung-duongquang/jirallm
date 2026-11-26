@@ -31,6 +31,16 @@ describe('ticketThreadTitle', () => {
     expect(ticketThreadTitle('https://x.atlassian.net/browse/ZOD-9', dir)).toBe('ZOD-9');
     expect(ticketThreadTitle('Please check ZOD-4243', dir)).toBe('Please check ZOD-4243');
   });
+
+  it('keeps what the message says besides the link and its mentions, cutting the summary to fit', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'jl-title-'));
+    mkdirSync(path.join(dir, 'zod-4101'));
+    writeFileSync(path.join(dir, 'zod-4101', 'task.md'), '---\nkey: "ZOD-4101"\n---\n\n# BE - Automatically populate RHO debtor details based on connection\n');
+    const title = ticketThreadTitle('topicushealthcare.atlassian.net/browse/ZOD-4101 @Hung Duong Quang feature8', dir, ['Hung Duong Quang']);
+    expect(title).toBe('ZOD-4101 BE - Automatically populate RHO debtor deta… · feature8');
+    expect(title.length).toBeLessThanOrEqual(64);
+    expect(ticketThreadTitle('https://x.atlassian.net/browse/ZOD-9 deploy feature8', dir)).toBe('ZOD-9 · deploy feature8');
+  });
 });
 
 describe('slack:search without a token', () => {

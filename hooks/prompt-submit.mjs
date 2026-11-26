@@ -118,7 +118,8 @@ function slackSessionTitle(prompt) {
   const url = prompt.match(SLACK_URL)?.[0];
   if (!url) return '';
   const key = prompt.replace(new RegExp(SLACK_URL, 'g'), ' ').match(ISSUE_KEY)?.[0];
-  let title = jirallm(['slack', url, '--title'], 10000).split('\n')[0] || 'Slack thread';
+  let title = jirallm(['slack', url, '--title'], 15000).split('\n')[0];
+  if (!title) return '';
   if (key && !title.includes(key)) title = `${key} ${title}`;
   return title.length > MAX_TITLE ? `${title.slice(0, MAX_TITLE - 1)}…` : title;
 }
@@ -322,7 +323,21 @@ const greeting = typeof userPrompt === 'string' && isGreeting(userPrompt);
 let title = '';
 try {
   const first = typeof userPrompt === 'string' && isFirstPrompt(input.session_id);
-  if (first && SLACK_URL.test(userPrompt)) title = slackSessionTitle(userPrompt);
+  // The Slack lookup can fail (slow start, Slack busy): the session is then named "Slack thread" for now
+  // and the next prompts try again (<id>.retitle holds the first prompt) until it has its real title.
+  const retitle = /^[\w-]+$/.test(input.session_id ?? '') && path.join(sessionsDir, `${input.session_id}.retitle`);
+  if (first && SLACK_URL.test(userPrompt)) {
+    title = slackSessionTitle(userPrompt);
+    if (!title && retitle) {
+      writeFileSync(retitle, userPrompt.slice(0, 4000));
+      title = userPrompt.replace(new RegExp(SLACK_URL, 'g'), ' ').match(ISSUE_KEY)?.[0] ?? 'Slack thread';
+    }
+  } else if (!first && typeof userPrompt === 'string' && retitle && existsSync(retitle)) {
+    title = slackSessionTitle(readFileSync(retitle, 'utf8'));
+    if (title) saveUiTitle(input.session_id, title);
+    // A link that keeps failing (deleted message, no access) is not worth a slow prompt for long.
+    if (title || Date.now() - statSync(retitle).mtimeMs > 3600_000) unlinkSync(retitle);
+  }
   if (first) saveUiTitle(input.session_id, title || userPrompt);
   // Now the session has a transcript and a title: its VS Code resume task can be written.
   if (first) refreshResumeTasks();
