@@ -262,6 +262,7 @@ describe('slackChanges', () => {
     const calls: Record<string, string>[] = [];
     const client = { call: async (_m: string, p: Record<string, string>) => (calls.push(p), { ok: true, messages }) } as unknown as SlackClient;
     const at = Date.parse('2026-11-02T10:00:00Z');
+    const later = at + 3600_000; // Past the check interval of a thread from yesterday.
 
     // Exported before edits were tracked: the first look only sets where edits start.
     writeFileSync(file, withCount(''));
@@ -272,19 +273,45 @@ describe('slackChanges', () => {
 
     // A later edit by a person shows; one by a bot does not.
     messages = [parent, { ts: '1793000400.000100', edited: { ts: '1793000450.000000' } }, { ts: '1793000500.000100', edited: { ts: '1793000900.000000' }, bot_id: 'B1' }];
-    expect(await slackChanges(dir, true, client, at)).toEqual([]);
+    expect(await slackChanges(dir, true, client, later)).toEqual([]);
     messages = [parent, { ts: '1793000400.000100', edited: { ts: '1793000950.000000' } }, { ts: '1793000500.000100' }];
-    expect(await slackChanges(dir, true, client, at)).toEqual([
+    expect(await slackChanges(dir, true, client, later)).toEqual([
       { line: 'slack/c1-1793000000000100: would re-export (edited or deleted messages)', url: 'https://ws.slack.com/archives/C1/p1793000000000100' },
     ]);
 
     // One of the three exported messages gone.
     writeFileSync(file, withCount('  lastEditTs: "1793000950.000000"\n'));
     messages = [parent, { ts: '1793000500.000100' }];
-    expect(await slackChanges(dir, true, client, at)).toHaveLength(1);
+    expect(await slackChanges(dir, true, client, later)).toHaveLength(1);
     messages = [parent, { ts: '1793000400.000100', edited: { ts: '1793000950.000000' } }, { ts: '1793000500.000100' }];
-    expect(await slackChanges(dir, true, client, at)).toEqual([]);
+    expect(await slackChanges(dir, true, client, later)).toEqual([]);
     expect(calls).toHaveLength(5); // one call per check, never more
+  });
+
+  it('checks a quiet thread less often, a followed one at least every 5 minutes, and stops quietly on a 429', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'slackwatch-'));
+    const file = path.join(dir, 'slack', 'c1-1793000000000100', 'thread.md');
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, thread('2026-11-01T10:00:00Z', '1793000000.000100'));
+    let calls = 0;
+    let limited = false;
+    const client = {
+      call: async () => {
+        calls++;
+        if (limited) throw new Error('Slack conversations.replies: HTTP 429 (rate limited, waiting until 10:41:00)');
+        return { ok: true, messages: [] };
+      },
+    } as unknown as SlackClient;
+    const at = Date.parse('2026-11-03T10:00:00Z'); // two days after the last reply: every 30 minutes
+    await slackChanges(dir, false, client, at);
+    await slackChanges(dir, false, client, at + 10 * 60_000);
+    expect(calls).toBe(1);
+    // A running session follows it: due after 5 minutes.
+    await slackChanges(dir, false, client, at + 10 * 60_000, new Set(['c1-1793000000000100']));
+    expect(calls).toBe(2);
+    limited = true;
+    expect(await slackChanges(dir, false, client, at + 41 * 60_000)).toEqual([]);
+    expect(calls).toBe(3);
   });
 
   it('reports a new 👍 on a message of a short thread: often the only answer to a question', async () => {
@@ -295,11 +322,12 @@ describe('slackChanges', () => {
     let messages: Record<string, unknown>[] = [{ ts: '1793000000.000100' }];
     const client = { call: async () => ({ ok: true, messages }) } as unknown as SlackClient;
     const at = Date.parse('2026-11-02T10:00:00Z');
+    const later = at + 3600_000;
     // Exported before reactions were kept: the first look only records them.
     expect(await slackChanges(dir, false, client, at)).toEqual([]);
     expect(readFileSync(file, 'utf8')).toContain('  reactions: ""');
     messages = [{ ts: '1793000000.000100', reactions: [{ name: '+1::skin-tone-2', users: ['U2'], count: 1 }] }];
-    expect(await slackChanges(dir, true, client, at)).toEqual([
+    expect(await slackChanges(dir, true, client, later)).toEqual([
       { line: 'slack/c1-1793000000000100: would re-export (new reactions)', url: 'https://ws.slack.com/archives/C1/p1793000000000100' },
     ]);
   });

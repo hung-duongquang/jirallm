@@ -537,13 +537,35 @@ export async function slackChanges(
     const count = Number(fm.messages);
     return [{
       dir: d.name, file, threadTs: `${ts[1]}.${ts[2]}`, url: fm.url, lastTs: fm.lastTs, lastEditTs: fm.lastEditTs, reactions: fm.reactions,
-      count: count > 0 ? count : undefined,
+      count: count > 0 ? count : undefined, lastReplyAt: Date.parse(fm.lastReplyAt ?? '') || 0,
     }];
   });
   if (threads.length === 0) return [];
+  // Slack allows only so many conversations.replies calls a minute: a thread is checked as often as its
+  // conversation is going on, the longest-unchecked first, and at most SLACK_CHECKS_PER_RUN per run.
+  const checkedFile = path.join(outputDir, SLACK_CHECKED_FILE);
+  const checked = readJsonFile<Record<string, number>>(checkedFile) ?? {};
+  const due = threads
+    // A thread a running session follows (`only`) at least every 5 minutes: someone may be waiting on it.
+    .filter((t) => now - (checked[t.dir] ?? 0) >= Math.min(slackCheckInterval(now - t.lastReplyAt), only ? 5 * 60_000 : Infinity))
+    .sort((a, b) => (checked[a.dir] ?? 0) - (checked[b.dir] ?? 0))
+    .slice(0, SLACK_CHECKS_PER_RUN);
+  if (due.length === 0) return [];
   const slack = client ?? new SlackClient(await loadSlackAuth());
   const changes: PrChange[] = [];
-  for (const t of threads) {
+  const markChecked = (dir: string) => {
+    if (dryRun) return;
+    // Re-read: the monitors' hot checks write it too.
+    const latest = readJsonFile<Record<string, number>>(checkedFile) ?? {};
+    latest[dir] = now;
+    for (const [k, v] of Object.entries(latest)) if (now - v > SLACK_IDLE_DAYS * 86_400_000) delete latest[k];
+    try {
+      writeFileSync(checkedFile, JSON.stringify(latest));
+    } catch {
+      // Checked again next run.
+    }
+  };
+  for (const t of due) {
     try {
       const { channel } = parseSlackUrl(t.url);
       // A thread that fits one page is read whole: Slack counts calls, not messages, so seeing edits and
@@ -552,6 +574,7 @@ export async function slackChanges(
       const page = await slack.call<{ messages?: SlackMessage[] }>('conversations.replies', whole
         ? { channel, ts: t.threadTs, limit: '200' }
         : { channel, ts: t.threadTs, oldest: t.lastTs, inclusive: 'false', limit: '50' });
+      markChecked(t.dir);
       const messages = page.messages ?? [];
       const fresh = messages.filter((m) => Number(m.ts) > Number(t.lastTs)).length;
       let edited = 0;
@@ -591,11 +614,37 @@ export async function slackChanges(
       changes.push({ line: `slack/${t.dir}: ${what} in "${exported.title}"`, url: t.url });
     } catch (err) {
       const msg = String(err instanceof Error ? err.message : err).split('\n')[0];
+      // Rate limited: the rest waits for the next run, longest-unchecked first, so nothing is lost and
+      // a line per minute about it is only noise.
+      if (/ratelimited|HTTP 429/.test(msg)) break;
       changes.push({ line: `slack/${t.dir}: check failed (${msg})`, error: true });
-      if (/ratelimited|HTTP 429|invalid_auth|not_authed|token_revoked/.test(msg)) break;
+      if (/invalid_auth|not_authed|token_revoked/.test(msg)) break;
     }
   }
   return changes;
+}
+
+const SLACK_CHECKED_FILE = '.slack-checked.json';
+/** conversations.replies calls one watch or hot run makes at most. */
+export const SLACK_CHECKS_PER_RUN = 12;
+
+/**
+ * How long a thread goes unchecked, by how long ago its last reply was: a conversation going on now
+ * every run, one from today every 5 minutes, this week's every 30, older ones (up to SLACK_IDLE_DAYS) hourly.
+ */
+export function slackCheckInterval(sinceReplyMs: number): number {
+  if (sinceReplyMs < 2 * 3600_000) return 0;
+  if (sinceReplyMs < 86_400_000) return 5 * 60_000;
+  if (sinceReplyMs < 3 * 86_400_000) return 30 * 60_000;
+  return 60 * 60_000;
+}
+
+function readJsonFile<T>(file: string): T | undefined {
+  try {
+    return existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8')) as T) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export type ChangesOptions = {
