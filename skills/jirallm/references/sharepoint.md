@@ -1,0 +1,10 @@
+# jirallm: sharepoint
+
+## SharePoint
+
+| Need | Command |
+|---|---|
+| A SharePoint page link (`https://<tenant>.sharepoint.com/sites/<site>/SitePages/<page>.aspx`), e.g. an intranet page | `jirallm sharepoint <url>` prints Markdown; `--output-dir ./jira-export` writes `jira-export/sharepoint/<site>-<page>/page.md` with its images. No session → ask the user to run `jirallm sharepoint:auth` |
+| A SharePoint Office document link (PowerPoint/Word/Excel: `https://<tenant>.sharepoint.com/:p:/s/<site>/<token>`, `:w:`, `:x:`, or a path ending in .pptx/.docx/.xlsx), e.g. a slide deck | `jirallm sharepoint <url> --output-dir ./jira-export` writes `jira-export/sharepoint/<site>-<file>/document.md` (slide text and speaker notes, Word headings and tables, Excel sheets) and the original file. The local Office app opens it with the user's own sign-in, so no cookie is needed. Windows + Microsoft 365 only; don't download Office files with the SharePoint cookie |
+| Change text in a PowerPoint deck on SharePoint (a team slide, speaker notes, a typo) | Confirm with the user first (it saves straight to the shared deck). Read it with `jirallm sharepoint <url>` (shape names show as `<!-- TextBox 18 -->`), then `jirallm sharepoint:edit <url> --slide <n> --shape "<name>" --text @file` (one line per paragraph), `--notes @file`, or `--find <old> --replace <new>`; several at once with `--edits edits.json`. Run with `--dry-run` first. Formatting per paragraph is kept; nothing changes if a target is not found. Trust only "SharePoint has every change": a COM save alone stays in the Office cache. "not on SharePoint yet" means it did not upload (tell the user). `--find` covers slide text, not notes. Don't script PowerPoint COM by hand |
+| Find SharePoint / intranet pages (company policies, how-tos, who to ask) | `jirallm sharepoint:search '<words>'` (KQL; `--site <url>`, `--documents`): one TSV row per hit, open one with `jirallm sharepoint <url>`; prints "SharePoint not set up" when there is no session |

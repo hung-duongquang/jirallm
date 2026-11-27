@@ -1,0 +1,1 @@
+{"version":3,"file":"framewise.d.ts","sourceRoot":"","sources":["../../src/lib/framewise.ts"],"names":[],"mappings":"AAIA,OAAO,KAAK,KAAK,SAAS,MAAM,WAAW,CAAC;AAI5C,eAAO,MAAM,aAAa,EAAE,OAAO,SAAS,CAAC,aAAwE,CAAC;AACtH,eAAO,MAAM,WAAW,EAAE,OAAO,SAAS,CAAC,WAAoE,CAAC;AAChH,eAAO,MAAM,mBAAmB,EAAE,OAAO,SAAS,CAAC,mBACN,CAAC;AAK9C,wBAAgB,WAAW,CAAC,QAAQ,EAAE,MAAM,GAAG,OAAO,CAGrD"}

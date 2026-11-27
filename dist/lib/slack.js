@@ -1,0 +1,706 @@
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { extractFrames, isVideoFile } from './framewise.js';
+import { getSecret } from './credentials.js';
+export const SLACK_TOKEN_ACCOUNT = 'slack:token';
+export const SLACK_COOKIE_ACCOUNT = 'slack:cookie';
+/**
+ * Parses a Slack message link: https://<ws>.slack.com/archives/<channel>/p<16 digits>[?thread_ts=…].
+ * The `p` id is the message ts without its dot (10 digits of seconds, 6 of microseconds).
+ */
+export function parseSlackUrl(url) {
+    let parsed;
+    try {
+        parsed = new URL(url.trim());
+    }
+    catch {
+        throw new Error(`Not a URL: ${url}`);
+    }
+    const host = parsed.hostname.toLowerCase();
+    const m = /^\/archives\/([A-Z0-9]+)\/p(\d{10})(\d{6})\/?$/i.exec(parsed.pathname);
+    if (!host.endsWith('.slack.com') || !m) {
+        throw new Error(`Not a Slack message link (https://<workspace>.slack.com/archives/<channel>/p<id>): ${url}`);
+    }
+    const threadTs = parsed.searchParams.get('thread_ts') ?? undefined;
+    return {
+        workspace: host.slice(0, -'.slack.com'.length),
+        channel: m[1].toUpperCase(),
+        ts: `${m[2]}.${m[3]}`,
+        threadTs: threadTs && /^\d+\.\d+$/.test(threadTs) ? threadTs : undefined,
+    };
+}
+/**
+ * The file id of a Slack file link (what "Copy link" on an image gives):
+ * https://<ws>.slack.com/files/<user>/<F…>/<name>. Undefined for any other URL.
+ */
+export function parseSlackFileUrl(url) {
+    let parsed;
+    try {
+        parsed = new URL(url.trim());
+    }
+    catch {
+        return undefined;
+    }
+    const host = parsed.hostname.toLowerCase();
+    const m = /^\/files\/[A-Z0-9]+\/(F[A-Z0-9]+)(\/|$)/i.exec(parsed.pathname);
+    if (!host.endsWith('.slack.com') || !m)
+        return undefined;
+    return { workspace: host.slice(0, -'.slack.com'.length), fileId: m[1].toUpperCase() };
+}
+/** Message link for a channel + ts, in the shape parseSlackUrl reads. */
+export function slackMessageUrl(link) {
+    const base = `https://${link.workspace}.slack.com/archives/${link.channel}/p${link.ts.replace('.', '')}`;
+    return link.threadTs && link.threadTs !== link.ts ? `${base}?thread_ts=${link.threadTs}` : base;
+}
+const REACTION_EMOJI = {
+    '+1': '👍', thumbsup: '👍', '-1': '👎', thumbsdown: '👎', white_check_mark: '✅', heavy_check_mark: '✔️',
+    eyes: '👀', pray: '🙏', raised_hands: '🙌', ok_hand: '👌', ok: '🆗', heart: '❤️', joy: '😂', tada: '🎉',
+    x: '❌', question: '❓', thinking_face: '🤔', fire: '🔥', rocket: '🚀', clap: '👏', muscle: '💪', '100': '💯',
+};
+/** A reaction's emoji without its skin tone ("+1::skin-tone-2" → 👍), or ":name:" when unknown. */
+export const reactionEmoji = (name) => {
+    const base = name.split('::')[0];
+    return REACTION_EMOJI[base] ?? `:${base}:`;
+};
+/** Who reacted to what in `messages`, as sorted "ts|emoji name|user" keys (the export keeps them to see new ones). */
+export function reactionKeys(messages) {
+    return messages
+        .flatMap((m) => (m.reactions ?? []).flatMap((r) => (r.users ?? []).map((u) => `${m.ts}|${r.name.split('::')[0]}|${u}`)))
+        .sort();
+}
+/** User ids of everyone who reacted, so their names can be looked up with the authors'. */
+export const reactionUsers = (messages) => messages.flatMap((m) => (m.reactions ?? []).flatMap((r) => r.users ?? []));
+/** Channel messages read after a thread: until this long after its last message, at most CHANNEL_MAX. */
+export const CHANNEL_WINDOW_HOURS = 12;
+export const CHANNEL_MAX = 15;
+/**
+ * Newest edit of a person's message in a thread ("0" when none): the export keeps it as lastEditTs, so
+ * the watcher sees an edit in the same call it asks for new replies with. Bots edit their own status
+ * messages all the time, so their edits do not count.
+ */
+export function lastEditOf(messages) {
+    return messages.reduce((n, m) => (m.edited && !m.bot_id && Number(m.edited.ts) > Number(n) ? m.edited.ts : n), '0');
+}
+/** Where a 429's Retry-After is kept per Slack method, shared by every jirallm process (watch, hooks, CLI). */
+export const SLACK_PAUSE_DIR = join(tmpdir(), 'jirallm-slack-ratelimit');
+/** Printed instead of results when no Slack token is set, so agents skip their Slack steps. */
+export const SLACK_NOT_SET_UP = 'Slack not set up (no token): skipped. `jirallm slack:auth` enables it.';
+/** Whether a Slack token is stored or in the environment; no network call. */
+export async function hasSlackToken() {
+    return Boolean(await getSecret(SLACK_TOKEN_ACCOUNT, 'JIRALLM_SLACK_TOKEN'));
+}
+/** Token from the keychain (`jirallm slack:auth`) or JIRALLM_SLACK_TOKEN / JIRALLM_SLACK_COOKIE. */
+export async function loadSlackAuth() {
+    const token = await getSecret(SLACK_TOKEN_ACCOUNT, 'JIRALLM_SLACK_TOKEN');
+    if (!token)
+        throw new Error('No Slack token. Run `jirallm slack:auth` (or set JIRALLM_SLACK_TOKEN).');
+    const cookie = token.startsWith('xoxc-') ? await getSecret(SLACK_COOKIE_ACCOUNT, 'JIRALLM_SLACK_COOKIE') : undefined;
+    if (token.startsWith('xoxc-') && !cookie) {
+        throw new Error('An xoxc- token also needs the "d" cookie. Run `jirallm slack:auth` again.');
+    }
+    return { token, cookie };
+}
+export class SlackClient {
+    auth;
+    fetchImpl;
+    pauseDir;
+    now;
+    names = new Map();
+    constructor(auth, fetchImpl = fetch, 
+    // A pause records what the real Slack said: a client with its own fetch (tests) keeps none unless given a folder.
+    pauseDir = fetchImpl === fetch ? SLACK_PAUSE_DIR : undefined, now = Date.now) {
+        this.auth = auth;
+        this.fetchImpl = fetchImpl;
+        this.pauseDir = pauseDir;
+        this.now = now;
+    }
+    /**
+     * Calling again before a 429's Retry-After is over only earns another 429 (and can stretch the wait),
+     * so until then every process skips the method without asking Slack.
+     */
+    pausedUntil(method) {
+        if (!this.pauseDir)
+            return 0;
+        try {
+            return Number(readFileSync(join(this.pauseDir, method), 'utf8')) || 0;
+        }
+        catch {
+            return 0;
+        }
+    }
+    pause(method, retryAfter) {
+        const until = this.now() + Math.min(Math.max(Number(retryAfter) || 60, 1), 3600) * 1000;
+        if (!this.pauseDir)
+            return until;
+        try {
+            mkdirSync(this.pauseDir, { recursive: true });
+            writeFileSync(join(this.pauseDir, method), String(until));
+        }
+        catch {
+            // Without the file each process just finds out from Slack itself.
+        }
+        return until;
+    }
+    headers() {
+        const headers = { Authorization: `Bearer ${this.auth.token}` };
+        if (this.auth.cookie)
+            headers.Cookie = `d=${encodeURIComponent(decodeURIComponent(this.auth.cookie))}`;
+        return headers;
+    }
+    async call(method, params) {
+        const paused = this.pausedUntil(method);
+        const at = (ms) => new Date(ms).toLocaleTimeString('sv-SE');
+        // "HTTP 429" in the message: callers stop their round on it, as on a real one.
+        if (paused > this.now())
+            throw new Error(`Slack ${method}: HTTP 429 (rate limited, waiting until ${at(paused)})`);
+        const res = await this.fetchImpl(`https://slack.com/api/${method}`, {
+            method: 'POST',
+            headers: { ...this.headers(), 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams(params).toString(),
+        });
+        if (res.status === 429) {
+            const until = this.pause(method, res.headers?.get?.('retry-after') ?? null);
+            throw new Error(`Slack ${method}: HTTP 429 (rate limited, waiting until ${at(until)})`);
+        }
+        if (!res.ok)
+            throw new Error(`Slack ${method}: HTTP ${res.status}`);
+        const body = (await res.json());
+        if (!body.ok) {
+            const hint = body.error === 'missing_scope' && body.needed ? ` (token needs scope ${body.needed})` : '';
+            throw new Error(`Slack ${method}: ${body.error ?? 'unknown error'}${hint}`);
+        }
+        return body;
+    }
+    /** The whole thread around `link` (parent first), or just the message when it has no thread. */
+    async thread(link) {
+        let threadTs = link.threadTs ?? link.ts;
+        let messages = await this.replies(link.channel, threadTs);
+        // A link to a reply without ?thread_ts= returns only the reply; follow it to the parent.
+        const parent = messages[0]?.thread_ts;
+        if (!link.threadTs && parent && parent !== threadTs) {
+            threadTs = parent;
+            messages = await this.replies(link.channel, threadTs);
+        }
+        return messages;
+    }
+    /** Reply count and newest reply ts of the thread whose parent is `ts` (one cheap call). */
+    async threadInfo(channel, ts) {
+        const page = await this.call('conversations.replies', { channel, ts, limit: '1' });
+        const parent = page.messages?.[0];
+        return { replies: parent?.reply_count ?? 0, latestReply: parent?.latest_reply };
+    }
+    async replies(channel, ts) {
+        const out = [];
+        let cursor;
+        do {
+            const page = await this.call('conversations.replies', {
+                channel,
+                ts,
+                limit: '200',
+                ...(cursor ? { cursor } : {}),
+            });
+            out.push(...(page.messages ?? []));
+            cursor = page.response_metadata?.next_cursor || undefined;
+        } while (cursor);
+        return out;
+    }
+    /**
+     * Top-level channel messages posted after the thread parent `threadTs` up to `latest`, oldest
+     * first, at most `max`: people often answer in the channel instead of in the thread. Join/leave
+     * notices and "also send to channel" copies of this thread's replies are left out.
+     */
+    async channelAfter(channel, threadTs, latest, max) {
+        const out = [];
+        let cursor;
+        do {
+            const page = await this.call('conversations.history', {
+                channel,
+                oldest: threadTs,
+                latest,
+                inclusive: 'false',
+                limit: '200',
+                ...(cursor ? { cursor } : {}),
+            });
+            out.push(...(page.messages ?? []));
+            cursor = page.response_metadata?.next_cursor || undefined;
+        } while (cursor);
+        return out
+            .filter((m) => m.ts !== threadTs && m.thread_ts !== threadTs && !/^(channel|group)_(join|leave)$/.test(m.subtype ?? ''))
+            .sort((a, b) => Number(a.ts) - Number(b.ts))
+            .slice(0, max);
+    }
+    /** Messages matching a Slack search query, newest first, up to `max` (search.messages, 100 per page). */
+    async search(query, max) {
+        const matches = [];
+        let total = 0;
+        for (let page = 1; matches.length < max; page++) {
+            const res = await this.call('search.messages', { query, sort: 'timestamp', sort_dir: 'desc', count: String(Math.min(100, max)), page: String(page) });
+            total = res.messages?.total ?? 0;
+            matches.push(...(res.messages?.matches ?? []));
+            if (page >= (res.messages?.paging?.pages ?? 1))
+                break;
+        }
+        return { total, matches: matches.slice(0, max) };
+    }
+    /** Messages matching any of `queries`, each message once, newest first, up to `max`. */
+    async searchAny(queries, max) {
+        const seen = new Map();
+        let total = 0;
+        for (const q of queries) {
+            const res = await this.search(q, max);
+            total += res.total;
+            for (const m of res.matches)
+                seen.set(`${m.channel?.id ?? ''}:${m.ts}`, m);
+        }
+        const matches = [...seen.values()].sort((a, b) => Number(b.ts) - Number(a.ts));
+        return { total, matches: matches.slice(0, max) };
+    }
+    /**
+     * Message link for a Slack message or file link. A file link is resolved with files.info to the
+     * first message that shares the file (the thread parent stays in thread_ts), so an image can be
+     * read before anyone replies to it.
+     */
+    async resolveLink(url) {
+        const file = parseSlackFileUrl(url);
+        if (!file)
+            return parseSlackUrl(url);
+        const res = await this.call('files.info', { file: file.fileId });
+        const shares = { ...res.file?.shares?.public, ...res.file?.shares?.private };
+        const found = Object.entries(shares)
+            .flatMap(([channel, list]) => list.map((s) => ({ channel, ...s })))
+            .sort((a, b) => Number(a.ts) - Number(b.ts))[0];
+        if (!found)
+            throw new Error(`Slack file ${file.fileId} is not shared in any conversation you can read.`);
+        return { workspace: file.workspace, channel: found.channel, ts: found.ts, threadTs: found.thread_ts };
+    }
+    async channelName(channel) {
+        try {
+            const res = await this.call('conversations.info', { channel });
+            return res.channel?.is_im ? 'direct message' : res.channel?.name;
+        }
+        catch {
+            return undefined;
+        }
+    }
+    async userName(id) {
+        const cached = this.names.get(id);
+        if (cached)
+            return cached;
+        let name = id;
+        try {
+            const res = await this.call('users.info', { user: id });
+            const u = res.user;
+            name = u?.profile?.real_name || u?.real_name || u?.profile?.display_name || u?.name || id;
+        }
+        catch {
+            // Unknown or deleted user: keep the id
+        }
+        this.names.set(id, name);
+        return name;
+    }
+    async download(file) {
+        const url = file.url_private_download ?? file.url_private;
+        if (!url)
+            throw new Error(`File ${file.name ?? file.id} has no download URL`);
+        const res = await this.fetchImpl(url, { headers: this.headers() });
+        if (!res.ok)
+            throw new Error(`Download ${file.name ?? file.id}: HTTP ${res.status}`);
+        // Without a valid session Slack answers 200 with its login page.
+        if ((res.headers.get('content-type') ?? '').startsWith('text/html') && !(file.mimetype ?? '').startsWith('text/html')) {
+            throw new Error(`Download ${file.name ?? file.id}: got an HTML page (not authorized)`);
+        }
+        return Buffer.from(await res.arrayBuffer());
+    }
+}
+const ENTITIES = { '&lt;': '<', '&gt;': '>', '&amp;': '&' };
+/**
+ * Converts Slack mrkdwn to Markdown. Mentions are resolved with `names` (user id → name);
+ * code spans and blocks are left alone.
+ */
+export function mrkdwnToMarkdown(text, names) {
+    const parts = text.split(/(```[\s\S]*?```|`[^`\n]+`)/);
+    return parts
+        .map((part, i) => {
+        if (i % 2 === 1) {
+            const decoded = part.replace(/&(lt|gt|amp);/g, (e) => ENTITIES[e]);
+            // Slack sends ```code``` on one line; Markdown needs the fences on their own lines.
+            return decoded.startsWith('```') ? decoded.replace(/^```\n?/, '\n```\n').replace(/\n?```$/, '\n```\n') : decoded;
+        }
+        return part
+            .replace(/<([^<>]+)>/g, (_, inner) => {
+            const [target, label] = inner.split('|', 2);
+            if (target.startsWith('@'))
+                return `@${label ?? names.get(target.slice(1)) ?? target.slice(1)}`;
+            if (target.startsWith('#'))
+                return `#${label ?? target.slice(1)}`;
+            if (target.startsWith('!subteam^'))
+                return label ?? '@group';
+            if (target.startsWith('!date^'))
+                return label ?? target;
+            if (target.startsWith('!'))
+                return `@${target.slice(1)}`;
+            return label ? `[${label}](${target})` : target;
+        })
+            .replace(/(^|[\s(])\*([^*\n]+)\*(?=$|[\s).,!?:;])/gm, '$1**$2**')
+            .replace(/(^|[\s(])~([^~\n]+)~(?=$|[\s).,!?:;])/gm, '$1~~$2~~')
+            .replace(/^&gt; ?/gm, '> ')
+            .replace(/&(lt|gt|amp);/g, (e) => ENTITIES[e]);
+    })
+        .join('')
+        .trim();
+}
+/** User ids mentioned as <@U…> in a message, so their names can be looked up first. */
+export function mentionedUsers(text) {
+    return [...text.matchAll(/<@([A-Z0-9]+)(?:\|[^>]*)?>/g)].map((m) => m[1]);
+}
+export function formatTs(ts) {
+    const d = new Date(Number(ts) * 1000);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+/**
+ * A `--since` value as a Slack ts: a ts itself, a day (YYYY-MM-DD, from its local midnight) or a
+ * local time (YYYY-MM-DD HH:MM or YYYY-MM-DDTHH:MM).
+ */
+export function parseSince(value) {
+    if (/^\d{9,}(\.\d+)?$/.test(value))
+        return value;
+    const m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?$/.exec(value.trim());
+    if (!m)
+        throw new Error(`--since needs YYYY-MM-DD, "YYYY-MM-DD HH:MM" or a Slack ts, got: ${value}`);
+    const [, y, mo, d, h = '0', mi = '0'] = m;
+    return String(new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi)).getTime() / 1000);
+}
+const authorOf = (msg, names) => msg.user ? names.get(msg.user) ?? msg.user : msg.bot_profile?.name ?? msg.username ?? 'unknown';
+/**
+ * A message's body as Markdown lines: its text, quoted attachments (link unfurls) and its files, linked
+ * to the local copy when downloaded (images inline), else named with their Slack permalink. A message
+ * that is only a screenshot is not left blank.
+ */
+export function messageBodyLines(msg, names, localFiles, localFrames) {
+    const lines = [];
+    const body = mrkdwnToMarkdown(msg.text ?? '', names);
+    if (body)
+        lines.push(body, '');
+    for (const att of msg.attachments ?? []) {
+        const head = att.title ? (att.title_link ? `[${att.title}](${att.title_link})` : att.title) : att.author_name;
+        const text = att.text ?? (head ? '' : att.fallback ?? '');
+        const quoted = [head ? `**${head}**` : '', mrkdwnToMarkdown(text, names)].filter(Boolean).join('\n');
+        if (quoted)
+            lines.push(quoted.split('\n').map((l) => `> ${l}`).join('\n'), '');
+    }
+    for (const file of msg.files ?? []) {
+        const name = file.name ?? file.title ?? file.id;
+        const local = localFiles?.get(file.id);
+        const isImage = (file.mimetype ?? '').startsWith('image/');
+        if (local)
+            lines.push(isImage ? `![${name}](${local})` : `- File: [${name}](${local})`);
+        else
+            lines.push(`- File: ${name}${file.permalink ? ` (${file.permalink})` : ''}`);
+        const frames = localFrames?.get(file.id);
+        if (frames)
+            lines.push(`- Video frames: [${frames.count} extracted frames](${frames.dir}) (read these to see the video)`);
+    }
+    if (msg.files?.length)
+        lines.push('');
+    const reactions = (msg.reactions ?? [])
+        .map((r) => `${reactionEmoji(r.name)} ${(r.users ?? []).map((u) => names.get(u) ?? u).join(', ') || r.count || ''}`.trim())
+        .filter(Boolean);
+    if (reactions.length)
+        lines.push(`- Reactions: ${reactions.join('; ')}`, '');
+    return lines;
+}
+/** Local file name of a Slack file in an export folder. */
+export const slackLocalFileName = (file) => `${file.id}-${(file.name ?? file.title ?? 'file').replace(/[^\w.-]+/g, '_').slice(0, 80)}`;
+/**
+ * Downloads the files of `messages` into `dir` (a file already there is kept: a Slack file id never gets
+ * new content). Returns file id → "./<name>" for the ones on disk, and the errors of the rest.
+ */
+export async function downloadSlackFiles(client, messages, dir) {
+    const localFiles = new Map();
+    const errors = [];
+    for (const file of messages.flatMap((m) => m.files ?? [])) {
+        const name = slackLocalFileName(file);
+        const filePath = join(dir, name);
+        try {
+            if (!existsSync(filePath))
+                writeFileSync(filePath, await client.download(file));
+            localFiles.set(file.id, `./${name}`);
+        }
+        catch (err) {
+            errors.push(err.message);
+        }
+    }
+    return { localFiles, errors };
+}
+export function renderThread(input) {
+    const { names } = input;
+    const all = input.messages;
+    const after = (m) => !input.since || Number(m.ts) > Number(input.since);
+    const messages = all.filter((m, i) => i === 0 || after(m));
+    const where = input.channelName ? (input.channelName === 'direct message' ? 'direct message' : `#${input.channelName}`) : 'Slack';
+    const last = all.at(-1);
+    // The newest reply up front: when the output gets cut, it is still clear the thread goes on.
+    const lastReply = all.length > 1 ? ` · last reply ${formatTs(last.ts)} by ${authorOf(last, names)}` : '';
+    const lines = [
+        `# Slack thread in ${where}`,
+        '',
+        `- Source: ${input.url}`,
+        `- Messages: ${all.length}${all.length > 1 ? ` (1 + ${all.length - 1} replies)` : ''}${lastReply}`,
+    ];
+    if (input.since)
+        lines.push(`- Showing replies after ${formatTs(input.since)}: ${messages.length - 1} of ${all.length - 1} (earlier ones left out; run without --since for all)`);
+    lines.push('');
+    const renderMessage = (msg, inChannel = false) => {
+        const author = authorOf(msg, names);
+        const marker = msg.ts === input.linkedTs && messages.length > 1 ? ' (linked message)' : '';
+        const edited = msg.edited ? ' (edited)' : '';
+        const isNew = input.newSince && Number(msg.ts) > Number(input.newSince) ? ' (new)' : '';
+        const ownThread = inChannel && msg.reply_count ? ` (own thread, ${msg.reply_count} repl${msg.reply_count === 1 ? 'y' : 'ies'})` : '';
+        lines.push(`## ${author} · ${formatTs(msg.ts)}${edited}${marker}${ownThread}${isNew}`, '');
+        lines.push(...messageBodyLines(msg, names, input.localFiles, input.localFrames));
+    };
+    for (const msg of messages)
+        renderMessage(msg);
+    const channel = (input.channelMessages ?? []).filter(after);
+    if (channel.length) {
+        lines.push('# In the channel, outside the thread', '', `Top-level messages posted after the thread started (up to ${CHANNEL_WINDOW_HOURS} h after its last message, at most ${CHANNEL_MAX}): replies people posted in the channel instead of the thread. They can also be unrelated.`, '');
+        for (const msg of channel)
+            renderMessage(msg, true);
+    }
+    return `${lines.join('\n').trimEnd()}\n`;
+}
+/**
+ * A short title for the list: the first line of the thread's first message that is more than a
+ * bare link (a thread often opens with the ticket URL), else that link; for a message that is only
+ * a file (a screenshot or recording), the file's title.
+ */
+export function threadTitle(messages, names) {
+    const lines = mrkdwnToMarkdown(messages[0]?.text ?? '', names)
+        .split('\n')
+        .map((l) => l.replace(/\*\*|`|~~/g, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/^[>\s•*-]+/, '').trim())
+        .filter(Boolean);
+    const isLink = (l) => /^(https?:\/\/)?[\w.-]+\.[a-z]{2,}\/\S*$/i.test(l);
+    const plain = lines.find((l) => !isLink(l)) ?? lines[0] ?? '';
+    const file = messages[0]?.files?.[0];
+    const title = plain || (file ? `[file] ${file.title ?? file.name ?? file.id}` : '');
+    return title.length > 100 ? `${title.slice(0, 99)}…` : title || '(no text)';
+}
+/** Fetches the thread around `url` (message or file link), with the names of its authors and mentioned users. */
+export async function loadSlackThread(url, client, opts = {}) {
+    // Refuse a non-Slack URL before asking for a token.
+    if (!parseSlackFileUrl(url))
+        parseSlackUrl(url);
+    const slack = client ?? new SlackClient(await loadSlackAuth());
+    const link = await slack.resolveLink(url);
+    const [messages, channelName] = await Promise.all([slack.thread(link), slack.channelName(link.channel)]);
+    if (messages.length === 0)
+        throw new Error('Slack returned no messages for this link.');
+    const threadTs = messages[0].thread_ts ?? messages[0].ts;
+    const latest = String(Number(messages.at(-1).ts) + CHANNEL_WINDOW_HOURS * 3600);
+    const channelMessages = opts.channel === false ? [] : await slack.channelAfter(link.channel, threadTs, latest, CHANNEL_MAX);
+    const ids = new Set();
+    for (const m of [...messages, ...channelMessages]) {
+        if (m.user)
+            ids.add(m.user);
+        for (const id of mentionedUsers(m.text ?? ''))
+            ids.add(id);
+        for (const id of reactionUsers([m]))
+            ids.add(id);
+    }
+    const names = new Map();
+    for (const id of ids)
+        names.set(id, await slack.userName(id));
+    const messageUrl = parseSlackFileUrl(url) ? slackMessageUrl(link) : url;
+    return { link, url: messageUrl, channelName, messages, channelMessages, names, client: slack };
+}
+/** Same frame settings as Jira video attachments (exporter DEFAULT_VIDEO_OPTS). */
+const SLACK_VIDEO_FRAMES = { fps: 5, quality: 85, maxFrames: 10 };
+/** Frames of a video as JPEGs in `framesDir` (kept from an earlier export when present); returns their count. */
+async function videoFrames(videoPath, framesDir) {
+    const existing = () => (existsSync(framesDir) ? readdirSync(framesDir).filter((f) => f.startsWith('frame-') && f.endsWith('.jpg')).length : 0);
+    if (existing() > 0)
+        return existing();
+    await extractFrames(videoPath, framesDir, { ...SLACK_VIDEO_FRAMES, format: 'jpeg' });
+    return existing();
+}
+/** Folder of a thread below `<outputDir>/slack/`: "<channel>-<thread ts without the dot>". */
+export function slackThreadDirName(link, messages) {
+    return `${link.channel.toLowerCase()}-${(messages[0].thread_ts ?? messages[0].ts).replace('.', '')}`;
+}
+/**
+ * Brings an existing export of a thread just read up to date, so `watch` does not report the
+ * replies the reader has already seen as new. A thread that was never exported is left alone; one
+ * read without its channel messages is not written (the export would lose them). Returns the
+ * export's path when it was refreshed.
+ */
+export async function refreshSlackExport(loaded, outputDir, channel) {
+    if (channel === false)
+        return undefined;
+    const file = join(outputDir, 'slack', slackThreadDirName(loaded.link, loaded.messages), 'thread.md');
+    if (!existsSync(file))
+        return undefined;
+    const prev = threadFrontmatter(readFileSync(file, 'utf8'));
+    if (prev.lastTs && Number(loaded.messages.at(-1).ts) <= Number(prev.lastTs))
+        return undefined;
+    return exportSlackThread(loaded.url, { outputDir, loaded });
+}
+/**
+ * Writes `<outputDir>/slack/<channel>-<thread ts>/thread.md` and downloads the thread's files
+ * next to it (unless `files` is false). Exporting the same thread again overwrites it.
+ */
+export async function exportSlackThread(fileOrMessageUrl, opts) {
+    // Frontmatter and Source keep the message link, so watch can re-read the thread.
+    const { link, url, channelName, messages, channelMessages, names, client } = opts.loaded ?? (await loadSlackThread(fileOrMessageUrl, opts.client, { channel: opts.channel }));
+    const dirName = slackThreadDirName(link, messages);
+    const dir = join(opts.outputDir, 'slack', dirName);
+    mkdirSync(dir, { recursive: true });
+    let localFiles = new Map();
+    const localFrames = new Map();
+    const fileErrors = [];
+    if (opts.files !== false) {
+        const all = [...messages, ...channelMessages];
+        const downloaded = await downloadSlackFiles(client, all, dir);
+        localFiles = downloaded.localFiles;
+        fileErrors.push(...downloaded.errors);
+        for (const file of all.flatMap((m) => m.files ?? [])) {
+            const name = slackLocalFileName(file);
+            const filePath = join(dir, name);
+            if (!localFiles.has(file.id) || opts.frames === false || !isVideoFile(name))
+                continue;
+            try {
+                const count = await videoFrames(filePath, join(dir, `${name}-frames`));
+                if (count > 0)
+                    localFrames.set(file.id, { dir: `./${name}-frames/`, count });
+            }
+            catch (err) {
+                fileErrors.push(`${name}: no video frames (${err.message})`);
+            }
+        }
+    }
+    // Replies newer than the last message of the previous export are new. When nothing new came in,
+    // the marks of the update that brought replies stay, so a quick second update does not drop them.
+    const path = join(dir, 'thread.md');
+    const prev = existsSync(path) ? threadFrontmatter(readFileSync(path, 'utf8')) : undefined;
+    const lastTs = messages.at(-1).ts;
+    let newSince = prev?.newSince;
+    let newRepliesAt = prev?.newRepliesAt;
+    if (prev?.lastTs && Number(lastTs) > Number(prev.lastTs)) {
+        newSince = prev.lastTs;
+        newRepliesAt = new Date().toISOString();
+    }
+    const newReplies = newSince ? messages.filter((m) => Number(m.ts) > Number(newSince)).length : 0;
+    const title = threadTitle(messages, names);
+    const frontmatter = [
+        '---',
+        'slack:',
+        `  title: ${JSON.stringify(title)}`,
+        `  channel: ${JSON.stringify(channelName ?? link.channel)}`,
+        `  messages: ${messages.length}`,
+        ...(channelMessages.length ? [`  channelMessages: ${channelMessages.length}`] : []),
+        `  lastReplyAt: ${JSON.stringify(new Date(Number(lastTs) * 1000).toISOString())}`,
+        `  lastTs: ${JSON.stringify(lastTs)}`,
+        `  lastEditTs: ${JSON.stringify(lastEditOf(messages))}`,
+        `  reactions: ${JSON.stringify(reactionKeys(messages).join(' '))}`,
+        ...(newReplies
+            ? [`  newSince: ${JSON.stringify(newSince)}`, `  newReplies: ${newReplies}`, `  newRepliesAt: ${JSON.stringify(newRepliesAt)}`]
+            : []),
+        `  url: ${JSON.stringify(url)}`,
+        '---',
+        '',
+    ].join('\n');
+    const body = renderThread({
+        url, channelName, messages, channelMessages, linkedTs: link.ts, names, localFiles, localFrames,
+        newSince: newReplies ? newSince : undefined,
+    });
+    writeFileSync(path, frontmatter + body);
+    return { dirName, path, title, messageCount: messages.length, fileCount: localFiles.size, fileErrors, newReplies };
+}
+/**
+ * Builds search.messages queries. Slack's API has no OR (all terms must match), so the query is
+ * split on OR (outside quotes) into one query per alternative. Slack splits ZOD-3988 on the hyphen
+ * and would match any "ZOD", so bare Jira keys are quoted; `after` (YYYY-MM-DD) includes that day:
+ * Slack's after: modifier excludes its day, so the day before is passed (a re-review run with the
+ * date of the last review must still see replies from later that day).
+ */
+export function slackSearchQueries(query, after) {
+    if (after && !/^\d{4}-\d{2}-\d{2}$/.test(after))
+        throw new Error(`--after needs a date as YYYY-MM-DD, got: ${after}`);
+    const slackAfter = after ? new Date(Date.parse(`${after}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10) : undefined;
+    const alternatives = [''];
+    for (const [i, part] of query.split(/("[^"]*")/).entries()) {
+        if (i % 2 === 1) {
+            alternatives[alternatives.length - 1] += part;
+            continue;
+        }
+        const [first, ...rest] = part.replace(/\b[A-Z][A-Z0-9]+-\d+\b/g, '"$&"').split(/\s+OR\s+/);
+        alternatives[alternatives.length - 1] += first;
+        alternatives.push(...rest);
+    }
+    return alternatives
+        .map((q) => q.trim())
+        .filter(Boolean)
+        .map((q) => (slackAfter ? `${q} after:${slackAfter}` : q));
+}
+/** The thread a match belongs to: its permalink's thread_ts, else the message itself. */
+function threadKey(m) {
+    let threadTs = null;
+    try {
+        threadTs = new URL(m.permalink).searchParams.get('thread_ts');
+    }
+    catch {
+        // keep the message ts
+    }
+    return `${m.channel?.id ?? ''}:${threadTs ?? m.ts}`;
+}
+/**
+ * One hit per thread (the newest match; its permalink opens the thread with `jirallm slack <url>`),
+ * text flattened to one line of at most `width` characters.
+ */
+export function searchHits(matches, names, width = 150) {
+    const byThread = new Map();
+    for (const m of matches) {
+        const key = threadKey(m);
+        const seen = byThread.get(key);
+        if (seen) {
+            seen.more++;
+            continue;
+        }
+        const ch = m.channel;
+        const channel = ch?.is_im ? 'DM' : ch?.is_mpim ? 'group DM' : ch?.name ? `#${ch.name}` : ch?.id ?? '?';
+        const text = mrkdwnToMarkdown(m.text ?? '', names)
+            .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+            .replace(/\s+/g, ' ')
+            .trim();
+        byThread.set(key, {
+            date: formatTs(m.ts),
+            channel,
+            author: (m.user && names.get(m.user)) || m.username || m.user || '?',
+            text: text.length > width ? `${text.slice(0, width - 1)}…` : text,
+            url: m.permalink,
+            more: 0,
+            channelId: ch?.id,
+            threadTs: key.slice(key.indexOf(':') + 1),
+        });
+    }
+    return [...byThread.values()];
+}
+/** The fields under `slack:` in a thread.md written by exportSlackThread. */
+export function threadFrontmatter(text) {
+    const block = text.replace(/\r/g, '').match(/^---\n([\s\S]*?)\n---\n/)?.[1] ?? '';
+    const fields = {};
+    for (const m of block.matchAll(/^\s+(\w+):\s*(.*)$/gm)) {
+        try {
+            fields[m[1]] = String(JSON.parse(m[2]));
+        }
+        catch {
+            fields[m[1]] = m[2];
+        }
+    }
+    // Exports from before lastTs was written: lastReplyAt is cut to the millisecond, so round up.
+    if (!fields.lastTs && fields.lastReplyAt)
+        fields.lastTs = String(Date.parse(fields.lastReplyAt) / 1000 + 0.000999);
+    return fields;
+}
+//# sourceMappingURL=slack.js.map

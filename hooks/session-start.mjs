@@ -1,0 +1,182 @@
+// SessionStart hook of the jirallm Claude Code plugin. What it returns lands in Claude's context:
+// the Jira/Confluence/Slack/PR changes `jirallm watch` logged since the last session (the user sees
+// a one-line "📥 jirallm: …" message when there are any), this session's id, or a setup hint when
+// the CLI is missing. It also pins this session's seen marker, so changes other sessions pick up
+// later still reach this one, and leaves the handshake the plugin's background monitor
+// (monitor.mjs) uses to learn this session's id.
+// After a compaction (source "compact") it re-adds the state cards of the tickets this session had
+// been given, which the summary may have reduced to a mention, and asks Claude to save decisions
+// from the summary as ticket notes.
+// It never fails the session.
+import { existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { changesMessage, jirallm, markOpen, outputDir, refreshResumeTasks, unseenChanges } from './changes.mjs';
+
+const sessionsDir = path.join(os.tmpdir(), 'jirallm-sessions');
+const SESSION_ID = /^[\w-]{1,100}$/;
+
+let input = {};
+try {
+  input = JSON.parse(readFileSync(0, 'utf8') || '{}');
+} catch {
+  // No or bad stdin: no session id.
+}
+const session = typeof input.session_id === 'string' && SESSION_ID.test(input.session_id) ? input.session_id : '';
+
+// Deleted in `jirallm ui` and now resumed (/resume, claude --resume): listed again, records intact. In
+// any folder, also one without jira-export (where nothing else here runs): the resume says it is wanted.
+try {
+  if (session) rmSync(path.join(sessionsDir, `${session}.hidden`), { force: true });
+} catch {
+  // It just stays out of the list.
+}
+
+/** Keys whose state card this session was given (written by the prompt hook). */
+function sessionKeys() {
+  const file = path.join(sessionsDir, `${session}.keys`);
+  return session && existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean) : [];
+}
+
+const MAX_RECOVERED_KEYS = 10;
+
+/**
+ * A resumed or forked session keeps working on the tickets it was on. A plain resume keeps its id,
+ * so its keys file is still there (its timestamp is refreshed, so the 30-day cleanup spares it). A
+ * fork has a new id, and a session resumed after the cleanup lost the file: then the keys are taken
+ * again from the user prompts in its transcript (only keys with a ticket folder, newest last).
+ */
+function restoreSessionKeys() {
+  if (!session || !['resume', 'fork'].includes(input.source)) return;
+  const file = path.join(sessionsDir, `${session}.keys`);
+  try {
+    mkdirSync(sessionsDir, { recursive: true });
+    if (existsSync(file)) {
+      utimesSync(file, new Date(), new Date());
+      return;
+    }
+    if (typeof input.transcript_path !== 'string' || !existsSync(input.transcript_path)) return;
+    const keys = [];
+    for (const line of readFileSync(input.transcript_path, 'utf8').split('\n')) {
+      if (!line.includes('"type":"user"')) continue;
+      let entry;
+      try {
+        entry = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const content = entry.message?.content;
+      const text = typeof content === 'string' ? content : Array.isArray(content) && !content.some((c) => c.type === 'tool_result') ? content.filter((c) => c.type === 'text').map((c) => c.text).join('\n') : '';
+      // Hook output injected into prompts names other tickets too, and so does a background task's
+      // notification (another session's monitor once did); only the user's own words count.
+      if (/^\s*<task-notification>/.test(text)) continue;
+      for (const k of text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').match(/\b[A-Z][A-Z0-9]+-\d+\b/g) ?? []) {
+        if (!existsSync(path.join(outputDir, k.toLowerCase()))) continue;
+        const i = keys.indexOf(k);
+        if (i >= 0) keys.splice(i, 1);
+        keys.push(k);
+      }
+    }
+    if (keys.length) writeFileSync(file, keys.slice(-MAX_RECOVERED_KEYS).join('\n'));
+  } catch {
+    // Without keys the session just gets other tickets' changes as one line.
+  }
+}
+
+/** This plugin's version (its .claude-plugin/plugin.json next to hooks/). */
+const pluginRoot = () => process.env.CLAUDE_PLUGIN_ROOT || path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+function pluginVersion() {
+  try {
+    return JSON.parse(readFileSync(path.join(pluginRoot(), '.claude-plugin', 'plugin.json'), 'utf8')).version ?? '';
+  } catch {
+    return '';
+  }
+}
+
+// One CLI start answers both "is it installed" and "is there an update" (a CLI older than
+// `update-notice` fails it and is asked for its version only).
+const plugin = pluginVersion();
+const versionOut = jirallm(['update-notice', ...(plugin ? ['--plugin', plugin] : [])], 15000) || jirallm(['--version'], 15000);
+const updateLine = versionOut.split('\n').slice(1).join(' ').trim();
+
+if (!versionOut) {
+  console.log(
+    'jirallm plugin: the jirallm CLI is not installed. Ask the user to run ' +
+      '`npm install -g github:hung-duongquang/jirallm#release` and then `jirallm init` (their own Jira API token).'
+  );
+} else if (existsSync(outputDir)) {
+  restoreSessionKeys();
+  const changes = unseenChanges(session, false, undefined, 'start');
+  const parts = [];
+  if (changes) parts.push(changes);
+  if (session) {
+    try {
+      mkdirSync(sessionsDir, { recursive: true });
+      // Lines: project dir, source (startup/resume/clear/compact), transcript path, Claude Code's pid. The
+      // monitor runs in the same Claude Code process (same CLAUDE_PID), so it finds its own session even when
+      // several start at once (`jirallm resume` after a reboot) and when `claude --resume` switches ids.
+      const transcript = typeof input.transcript_path === 'string' ? input.transcript_path : '';
+      // 5th line: the app it runs in (cli, claude-desktop, …), which `jirallm doctor` reports.
+      const lines = [
+        process.env.CLAUDE_PROJECT_DIR || process.cwd(),
+        input.source ?? '',
+        transcript,
+        process.env.CLAUDE_PID ?? '',
+        process.env.CLAUDE_CODE_ENTRYPOINT ?? '',
+      ];
+      writeFileSync(path.join(sessionsDir, `${session}.start`), lines.join('\n'));
+    } catch {
+      // Without the handshake the monitor stays idle; the prompt hook still delivers changes.
+    }
+    // Open until the user ends it (session-end.mjs), so a reboot brings it back. A new session has no
+    // transcript yet, so its resume task is written on its first prompt; a resumed one has one now.
+    markOpen(session, true);
+    if (input.source === 'resume') refreshResumeTasks();
+    // Claude Desktop runs the plugin's hooks but not its monitors (checked 2026-11-18): Claude starts the
+    // same monitor script itself. It runs in the session's Claude process, so it finds its own handshake.
+    const app = process.env.CLAUDE_CODE_ENTRYPOINT;
+    const startsOwnMonitor = app && app !== 'cli' && input.source !== 'compact' && input.source !== 'clear';
+    const monitorCmd = `node "${path.join(pluginRoot(), 'hooks', 'monitor.mjs')}" "${process.env.CLAUDE_PROJECT_DIR || process.cwd()}" --session ${session}`;
+    parts.push(
+      `jirallm session id: ${session}. ` +
+        (startsOwnMonitor
+          ? `This app (${app}) does not start the jirallm plugin's background monitor, so start it yourself, once: ` +
+            `the Monitor tool, persistent, description "jirallm changes (CI, reviews, Jira, Slack)", command ` +
+            `\`${monitorCmd}\`. It delivers new changes (CI, reviews, Jira, Slack) of this session's tickets as ` +
+            `notifications. Do not delay an answer for it: a greeting or a question you can answer without tools is ` +
+            `answered at once, without it. Start it in the same response as your first other tool call (load Monitor ` +
+            `in the same ToolSearch as other deferred tools you need). Do not mention starting it. `
+          : `The plugin's background monitor "jirallm-changes" delivers new changes (CI, reviews, Jira, Slack) as ` +
+            `notifications during this session; if it is not running, \`${monitorCmd}\` under the Monitor tool does the same. `) +
+        `Change reports start with "[jirallm delivery #N · …]": the number is a read receipt for the user's status line and ` +
+        `\`jirallm ui\`, recorded automatically; no need to mention it or acknowledge it.`
+    );
+  }
+  const keys = input.source === 'compact' ? sessionKeys() : [];
+  if (keys.length) {
+    const cards = jirallm(['state', ...keys, '--notes', '--output-dir', outputDir], 10000);
+    if (cards) {
+      parts.push(
+        `Tickets this session worked on (state re-added after compaction):\n\n${cards}\n\n` +
+          'If the summary above holds decisions about these tickets that their notes lack (settled review points, ' +
+          'agreements, deploy env, who it waits on), save each as one line with `jirallm note <KEY> "<text>"` from the workspace root.'
+      );
+    }
+  }
+  const message = [updateLine, changes && changesMessage(changes), keys.length && `🗂 jirallm: state of ${keys.join(', ')} re-added after compaction`]
+    .filter(Boolean)
+    .join(' · ');
+  if (parts.length || message) {
+    process.stdout.write(
+      JSON.stringify({
+        ...(message && { systemMessage: message }),
+        ...(parts.length && { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: parts.join('\n\n') } }),
+      })
+    );
+  }
+} else if (updateLine) {
+  // jirallm is not used in this workspace, but its user still hears of an update.
+  process.stdout.write(JSON.stringify({ systemMessage: updateLine }));
+}
