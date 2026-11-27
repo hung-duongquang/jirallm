@@ -25,7 +25,11 @@ export const TASK_DETAIL = 'jirallm resume';
 export const COMPOUND_LABEL = 'Resume Claude sessions';
 const MAX_LABEL_TITLE = 40;
 
-export type OpenSession = { id: string; cwd: string; title: string; lastActivity: number };
+/** Heartbeats that stopped within this of the last one stopped together (VS Code closed, a shutdown). */
+export const LAST_OPEN_WINDOW_MS = 10 * 60_000;
+
+/** `aliveAt`: the session's monitor last ran (`<id>.alive`, written every minute), 0 when unknown. */
+export type OpenSession = { id: string; cwd: string; title: string; lastActivity: number; aliveAt?: number };
 
 const read = (file: string) => {
   try {
@@ -71,9 +75,24 @@ export function openSessions(sessionsDir = defaultSessionsDir(), maxDays = MAX_A
     }
     if (now - wrote > maxDays * 24 * 3600 * 1000) continue;
     const title = read(path.join(sessionsDir, `${id}.title`)) || firstPrompt(transcript) || id.slice(0, 8);
-    out.push({ id, cwd, title, lastActivity: wrote });
+    const alive = Number(read(path.join(sessionsDir, `${id}.alive`))) || 0;
+    out.push({ id, cwd, title, lastActivity: wrote, ...(alive && { aliveAt: alive }) });
   }
   return out.sort((a, b) => a.lastActivity - b.lastActivity);
+}
+
+/**
+ * The sessions that were open when VS Code closed or the machine went down: of those marked open and
+ * not running, the ones whose monitor heartbeat stopped within LAST_OPEN_WINDOW_MS of the newest one.
+ * A session closed earlier by just closing its terminal (no /exit, so still marked open) stopped
+ * beating earlier and is left out. Undefined when no such session has a heartbeat (plugin before
+ * 0.60): then every session marked open counts, as before.
+ */
+export function lastOpenIds(sessions: OpenSession[], running: (id: string) => boolean): Set<string> | undefined {
+  const down = sessions.filter((s) => s.aliveAt && !running(s.id));
+  if (!down.length) return undefined;
+  const newest = Math.max(...down.map((s) => s.aliveAt!));
+  return new Set(down.filter((s) => s.aliveAt! >= newest - LAST_OPEN_WINDOW_MS).map((s) => s.id));
 }
 
 /** Drops a session from the ones brought back. */
@@ -91,15 +110,18 @@ export function forget(id: string, sessionsDir = defaultSessionsDir()): boolean 
  * from before a reboot may belong to another process now).
  */
 export function isRunning(id: string, sessionsDir = defaultSessionsDir(), bootMs = Date.now() - os.uptime() * 1000): boolean {
-  const file = path.join(sessionsDir, `${id}.monitor`);
-  const pid = Number(read(file));
-  if (!(pid > 0) || mtime(file) < bootMs) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
+  // `.resuming`: a `jirallm resume <id>` waiting on its claude, also before that session's monitor is up.
+  return [`${id}.monitor`, `${id}.resuming`].some((name) => {
+    const file = path.join(sessionsDir, name);
+    const pid = Number(read(file));
+    if (!(pid > 0) || mtime(file) < bootMs) return false;
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  });
 }
 
 type Task = Record<string, unknown> & { label?: string; detail?: string };
@@ -114,7 +136,8 @@ export function resumeTasks(sessions: OpenSession[], cli: { node: string; entry:
       detail: TASK_DETAIL,
       type: 'process',
       command: cli.node,
-      args: [cli.entry, 'resume', s.id],
+      // Only the sessions open at the last shutdown come back; the others' terminals close at once.
+      args: [cli.entry, 'resume', s.id, '--if-last'],
       options: { cwd: s.cwd },
       problemMatcher: [],
       presentation: { reveal: 'always', panel: 'dedicated', focus: false, echo: false, close: true, showReuseMessage: false },
@@ -276,7 +299,12 @@ export function openJirallmWindow(cliArgs: string[], cwd: string, title: string)
   child.unref();
 }
 
-export type ResumeOptions = { vscode?: string; forget?: boolean; sessionsDir?: string };
+export type ResumeOptions = { vscode?: string; forget?: boolean; last?: boolean; ifLast?: boolean; sessionsDir?: string };
+
+const localTime = (ms: number) => {
+  const at = new Date(ms);
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`;
+};
 
 export async function runResume(id: string | undefined, opts: ResumeOptions): Promise<void> {
   const sessionsDir = opts.sessionsDir ?? defaultSessionsDir();
@@ -295,13 +323,27 @@ export async function runResume(id: string | undefined, opts: ResumeOptions): Pr
   if (!id) {
     const list = openSessions(sessionsDir);
     if (!list.length) return console.log('No Claude sessions left open.');
+    const last = lastOpenIds(list, (s) => isRunning(s, sessionsDir));
+    if (opts.last) {
+      const due = list.filter((s) => !isRunning(s.id, sessionsDir) && (!last || last.has(s.id)));
+      if (!due.length) return console.log('No session from the last shutdown is waiting to be resumed.');
+      if (!last) console.log('No heartbeats yet (they start with plugin 0.60): resuming every session marked open.');
+      for (const s of due) openInTerminal(s.id, s.title);
+      return console.log(`Resuming ${due.length} session(s): ${due.map((s) => s.title.slice(0, 40)).join('; ')}`);
+    }
     for (const s of list) {
-      const state = isRunning(s.id, sessionsDir) ? 'running' : 'not running';
-      const at = new Date(s.lastActivity);
-      const local = `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`;
-      console.log(`${s.id}  ${local}  ${state}  ${s.title}`);
+      const state = isRunning(s.id, sessionsDir) ? 'running' : last?.has(s.id) ? 'open at last shutdown' : 'not running';
+      const alive = s.aliveAt ? `  last alive ${localTime(s.aliveAt)}` : '';
+      console.log(`${s.id}  ${localTime(s.lastActivity)}  ${state}  ${s.title}${alive}`);
     }
     return;
+  }
+  if (opts.ifLast) {
+    const last = lastOpenIds(openSessions(sessionsDir), (s) => isRunning(s, sessionsDir));
+    if (last && !last.has(id)) {
+      console.log(`Session ${id} was not open at the last shutdown, so it is not resumed (without --if-last it is).`);
+      return;
+    }
   }
   if (isRunning(id, sessionsDir)) {
     console.log(`Claude session ${id} is already running in another terminal.`);
@@ -310,15 +352,31 @@ export async function runResume(id: string | undefined, opts: ResumeOptions): Pr
   // The folder it ran in (Claude Code finds the transcript by it), if that still exists.
   const saved = read(path.join(sessionsDir, `${id}.open`));
   const cwd = saved && existsSync(saved) ? saved : process.cwd();
+  // Running from now on, for Resume all and the folder-open tasks, before claude's monitor is up.
+  const resuming = path.join(sessionsDir, `${id}.resuming`);
+  try {
+    writeFileSync(resuming, String(process.pid));
+  } catch {
+    // The sessions folder may be gone; the monitor mark follows.
+  }
+  const dropResuming = () => {
+    try {
+      unlinkSync(resuming);
+    } catch {
+      // Already gone.
+    }
+  };
   // Ctrl+C belongs to Claude (cancel, twice to quit); this process only waits for it.
   process.on('SIGINT', () => {});
   const child = spawn(`claude --resume ${id}`, { cwd, stdio: 'inherit', shell: true });
   await new Promise<void>((resolve) => {
     child.on('exit', (code) => {
+      dropResuming();
       process.exitCode = code ?? 0;
       resolve();
     });
     child.on('error', (err) => {
+      dropResuming();
       console.error(`Could not start claude: ${err.message}`);
       process.exitCode = 1;
       resolve();

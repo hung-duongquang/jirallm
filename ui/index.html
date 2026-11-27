@@ -1371,20 +1371,22 @@ function renderSessions(list) {
   });
 }
 /**
- * "Resume all (3)": the sessions marked to reopen that are not running. Those active since this boot may still be open in a terminal, so with any of them a second click confirms.
+ * "Resume last open (3)": the sessions open when VS Code closed or the machine went down (their heartbeats stopped together), not
+ * the older ones closed with their terminal. Those active since this boot may still be open in a terminal, so with any of them a second click confirms.
  * With none due it stays visible but disabled, saying why (all marked ones run, the rest are ↻ off), instead of vanishing when a toggle is switched off.
  */
 function resumeAllButton(list) {
   if (!list.length) return '';
-  const due = list.filter((s) => s.reopen && !s.running);
+  const due = list.filter((s) => s.lastOpen && !s.running);
+  const older = list.filter((s) => s.reopen && !s.running && !s.lastOpen).length;
   const maybe = due.filter((s) => s.maybeRunning).length;
   if (!due.length) {
     const runningMarked = list.filter((s) => s.reopen && s.running).length;
     const off = list.filter((s) => !s.reopen && !s.running).length;
-    const why = [runningMarked && `${runningMarked} marked to reopen ${runningMarked === 1 ? 'is' : 'are'} already running`, off && `${off} ${off === 1 ? 'is' : 'are'} ↻ off (switch one on, or use its own Resume)`].filter(Boolean).join('; ');
-    return `<button class="primary" id="resumeAll" disabled title="Nothing to resume: ${esc(why || 'no session is marked to reopen')}">Resume all (0)</button>`;
+    const why = [runningMarked && `${runningMarked} marked to reopen ${runningMarked === 1 ? 'is' : 'are'} already running`, older && `${older} closed before the last shutdown (use its own Resume)`, off &&`${off} ${off === 1 ? 'is' : 'are'} ↻ off (switch one on, or use its own Resume)`].filter(Boolean).join('; ');
+    return `<button class="primary" id="resumeAll" disabled title="Nothing to resume: ${esc(why || 'no session is marked to reopen')}">Resume last open (0)</button>`;
   }
-  return `<button class="primary" id="resumeAll" data-maybe="${maybe ? '1' : ''}" title="Opens a VS Code terminal (else a terminal window) for each session marked to reopen that is not running${maybe ? `. ${maybe} of them were active since this boot and may still be open in a terminal: check first` : ''}">Resume all (${due.length})</button>`;
+  return `<button class="primary" id="resumeAll" data-maybe="${maybe ? '1' : ''}" title="Opens a VS Code terminal (else a terminal window) for each session that was open when VS Code closed or the machine went down${older ? `. ${older} closed earlier (terminal closed without /exit) stay out: use their own Resume` : ''}${maybe ? `. ${maybe} of them were active since this boot and may still be open in a terminal: check first` : ''}">Resume last open (${due.length})</button>`;
 }
 async function refreshSessions() {
   try {

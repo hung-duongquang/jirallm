@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, w
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { COMPOUND_LABEL, isRunning, openSessions, parseJsonc, TASK_DETAIL, terminalCommand, writeVsCodeTasks, type OpenSession } from './resume.js';
+import { COMPOUND_LABEL, isRunning, LAST_OPEN_WINDOW_MS, lastOpenIds, openSessions, parseJsonc, TASK_DETAIL, terminalCommand, writeVsCodeTasks, type OpenSession } from './resume.js';
 
 let dir: string;
 let sessions: string;
@@ -53,7 +53,33 @@ describe('openSessions', () => {
   });
 });
 
+describe('lastOpenIds', () => {
+  it('keeps the sessions whose heartbeats stopped together at the last shutdown, not one closed earlier', () => {
+    const t = 1_800_000_000_000;
+    session('earlier');
+    session('a');
+    session('b');
+    session('runs');
+    session('old-plugin');
+    writeFileSync(path.join(sessions, 'earlier.alive'), String(t - LAST_OPEN_WINDOW_MS - 60_000));
+    writeFileSync(path.join(sessions, 'a.alive'), String(t - 120_000));
+    writeFileSync(path.join(sessions, 'b.alive'), String(t));
+    writeFileSync(path.join(sessions, 'runs.alive'), String(t + 3600_000));
+    const list = openSessions(sessions);
+    expect(list.find((s) => s.id === 'b')?.aliveAt).toBe(t);
+    expect([...lastOpenIds(list, (id) => id === 'runs')!].sort()).toEqual(['a', 'b']);
+    // Before any heartbeat (an older plugin): unknown, every marked session counts.
+    expect(lastOpenIds(list.filter((s) => s.id === 'old-plugin'), () => false)).toBeUndefined();
+  });
+});
+
 describe('isRunning', () => {
+  it('counts a jirallm resume still waiting on its claude', () => {
+    writeFileSync(path.join(sessions, 'r.resuming'), String(process.pid));
+    expect(isRunning('r', sessions, Date.now() - 60_000)).toBe(true);
+    expect(isRunning('other', sessions, Date.now() - 60_000)).toBe(false);
+  });
+
   it('needs a live monitor started after this boot', () => {
     writeFileSync(path.join(sessions, 'a.monitor'), String(process.pid));
     expect(isRunning('a', sessions, Date.now() - 60_000)).toBe(true);
@@ -78,7 +104,7 @@ describe('writeVsCodeTasks', () => {
       label: 'claude: ZOD-4155 a very long title that goes on… (70ab4bf2)',
       detail: TASK_DETAIL,
       command: cli.node,
-      args: [cli.entry, 'resume', '70ab4bf2-f36a'],
+      args: [cli.entry, 'resume', '70ab4bf2-f36a', '--if-last'],
       options: { cwd: project },
     });
     expect(b!.label).toBe('claude: review (50e8e96b)');

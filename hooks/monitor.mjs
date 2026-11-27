@@ -172,6 +172,21 @@ if (!session) {
 }
 if (CLAUDE_PID || given) claimOwn(session);
 
+/**
+ * `<id>.alive` holds when this monitor last ran (every minute): the sessions whose heartbeats stopped
+ * together are the ones that were open when VS Code closed or the machine went down (`jirallm resume --last`).
+ */
+let beatAt = 0;
+function heartbeat(id) {
+  if (Date.now() - beatAt < 60_000) return;
+  beatAt = Date.now();
+  try {
+    writeFileSync(path.join(sessionsDir, `${id}.alive`), String(beatAt));
+  } catch {
+    // Only the reopen after a shutdown uses it.
+  }
+}
+
 const claimedAt = Date.now();
 for (let i = 0; ; i++) {
   // Check for a resume often at first (it follows the throwaway session within seconds), then each poll.
@@ -186,6 +201,11 @@ for (let i = 0; ; i++) {
   } else {
     session = followResume(session, claimedAt);
   }
+  if (session !== heartbeat.session) {
+    heartbeat.session = session;
+    beatAt = 0;
+  }
+  heartbeat(session);
   await refreshLib();
   const hot = hasHotThread(session);
   if (hot && Date.now() - hotCheckedAt >= HOT_POLL_MS) {

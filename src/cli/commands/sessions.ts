@@ -1,7 +1,7 @@
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { isMarkedOpen, isRunning } from './resume.js';
+import { isMarkedOpen, isRunning, lastOpenIds } from './resume.js';
 import { sessionKeys } from './statusLine.js';
 import { deliveryAckPath, deliveryLogPath, pendingCounts, readAck, readDeliveries, type Delivery } from './watch.js';
 
@@ -19,6 +19,10 @@ export type SessionOverview = {
   running: boolean;
   /** Brought back after a reboot (`jirallm resume`): the plugin marked it open and the user has not ended it. */
   reopen: boolean;
+  /** Marked to reopen, not running, and open when VS Code closed or the machine went down (its heartbeat stopped with the others'). */
+  lastOpen: boolean;
+  /** When its monitor last ran (ms), if known. */
+  aliveAt?: number;
   /** Not known to run (no monitor), but its transcript was written since this boot: it may still be open in a terminal. */
   maybeRunning: boolean;
   lastActivity: string;
@@ -147,6 +151,7 @@ export function claudeSessions(outputDir: string, days = 7, sessionsDir = path.j
     const live = (monitor || now - wrote < LIVE_MS) && (wrote > 0 || log.length > 0);
     const reopen = wrote > 0 && isMarkedOpen(id, sessionsDir);
     const running = isRunning(id, sessionsDir);
+    const aliveAt = Number(read(path.join(sessionsDir, `${id}.alive`))) || 0;
     if (!live && !reopen && (!log.length || last < cutoff)) continue;
     const keys = sessionKeys(id, sessionsDir);
     const ack = readAck(outputDir, id);
@@ -158,7 +163,9 @@ export function claudeSessions(outputDir: string, days = 7, sessionsDir = path.j
       live,
       running,
       reopen,
-      maybeRunning: !running && wrote >= now - os.uptime() * 1000,
+      lastOpen: false,
+      ...(aliveAt && { aliveAt }),
+      maybeRunning:!running && wrote >= now - os.uptime() * 1000,
       lastActivity: new Date(last).toISOString(),
       waiting: pendingCounts(outputDir, id, keys).waiting,
       ...(ack?.reply && { reply: ack.reply }),
@@ -170,6 +177,13 @@ export function claudeSessions(outputDir: string, days = 7, sessionsDir = path.j
     });
   }
   markShared(out);
+  // Marked to reopen, not running, and open at the last shutdown (its heartbeat stopped with the others').
+  const marked = out.filter((s) => s.reopen);
+  const last = lastOpenIds(
+    marked.map((s) => ({ id: s.id, cwd: '', title: '', lastActivity: 0, aliveAt: s.aliveAt })),
+    (id) => !!out.find((s) => s.id === id)?.running
+  );
+  for (const s of marked) s.lastOpen = !s.running && (last ? last.has(s.id) : true);
   return out.sort((a, b) => Number(b.live) - Number(a.live) || b.lastActivity.localeCompare(a.lastActivity));
 }
 

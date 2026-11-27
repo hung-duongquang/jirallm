@@ -709,14 +709,19 @@ program
   .description('Bring back the Claude Code sessions left open (e.g. by a reboot): list them, resume one, or write VS Code tasks that reopen them all')
   .option('--vscode <workspace>', 'Write <workspace>/.vscode/tasks.json tasks: one terminal per open session, run when the folder opens')
   .option('--forget', 'Do not bring this session back')
+  .option('--last', 'Resume only the sessions that were open when VS Code closed or the machine went down, each in a VS Code terminal (else a terminal window)')
+  .option('--if-last', 'With a session id: resume it only if it was open at the last shutdown (the VS Code folder-open tasks use this)')
   .addHelpText('after', `
 The jirallm plugin marks a session open when it starts and unmarks it when you end it (/exit,
 /clear, logout); a reboot or a closed window leaves it marked. The plugin keeps the VS Code tasks
 of the workspace up to date, so after a reboot opening the folder starts one terminal per session
 (VS Code asks once to allow automatic tasks). A session that is still running is not started twice.
+Each session's monitor leaves a heartbeat every minute, so the sessions whose heartbeats stopped
+together are the ones open at the last shutdown; a terminal closed earlier without /exit is left out.
 
 Examples:
   $ jirallm resume                                   # the sessions left open
+  $ jirallm resume --last                            # reopen what was open at the last shutdown
   $ jirallm resume 70ab4bf2-f36a-44e8-aa11-497a0c125fc3
   $ jirallm resume --vscode .
   $ jirallm resume 70ab4bf2-f36a-44e8-aa11-497a0c125fc3 --forget --vscode .
