@@ -13,8 +13,24 @@ import { logChanges, slackChanges } from './watch.js';
 
 export const HOT_MINUTES = 30;
 export const HOT_POLL_SECONDS = 10;
+/**
+ * A followed thread quiet for longer than HOT_MINUTES but active in the last WARM_MINUTES is checked
+ * every WARM_POLL_SECONDS: a reply an hour into a conversation (Trung's answer at 10:38 to a 09:31
+ * message) otherwise waited for watch, up to two minutes. Checks are shared by all sessions through
+ * .slack-checked.json, so each warm thread costs Slack two calls a minute at most.
+ */
+export const WARM_MINUTES = 180;
+export const WARM_POLL_SECONDS = 30;
 
-/** The session's followed threads and "below" windows with activity in the last HOT_MINUTES. */
+const readChecked = (outputDir: string): Record<string, number> => {
+  try {
+    return JSON.parse(readFileSync(path.join(outputDir, '.slack-checked.json'), 'utf8')) as Record<string, number>;
+  } catch {
+    return {};
+  }
+};
+
+/** The session's followed threads with activity in the last HOT_MINUTES (or WARM_MINUTES and due), and "below" windows with activity in the last HOT_MINUTES. */
 export function hotFollows(
   outputDir: string,
   session: string,
@@ -26,6 +42,9 @@ export function hotFollows(
   const file = path.join(sessionsDir, `${session}.follow`);
   if (!existsSync(file)) return { threads, below };
   const recent = (ms: number) => now - ms < HOT_MINUTES * 60_000;
+  let checked: Record<string, number> | undefined;
+  const warmDue = (ms: number, dir: string) =>
+    now - ms < WARM_MINUTES * 60_000 && now - ((checked ??= readChecked(outputDir))[dir] ?? 0) >= WARM_POLL_SECONDS * 1000;
   const belowState = (() => {
     try {
       return JSON.parse(readFileSync(path.join(outputDir, '.slack-below.json'), 'utf8')) as Record<string, { newest: string; closed?: boolean }>;
@@ -45,7 +64,8 @@ export function hotFollows(
     const thread = path.join(outputDir, 'slack', d, 'thread.md');
     if (!existsSync(thread)) continue;
     const fm = threadFrontmatter(readFileSync(thread, 'utf8'));
-    if (recent(Date.parse(fm.lastReplyAt ?? '') || Number(fm.lastTs ?? 0) * 1000)) threads.add(d);
+    const last = Date.parse(fm.lastReplyAt ?? '') || Number(fm.lastTs ?? 0) * 1000;
+    if (recent(last) || warmDue(last, d)) threads.add(d);
   }
   return { threads, below };
 }
@@ -57,7 +77,8 @@ export async function runSlackHot(opts: { session: string; outputDir?: string })
   if (!threads.size && !below.size) return;
   const client = new SlackClient(await loadSlackAuth());
   const changes = [
-    ...(threads.size ? await slackChanges(outputDir, false, client, Date.now(), threads) : []),
+    // hotFollows already chose what is due: no further interval here.
+    ...(threads.size ? await slackChanges(outputDir, false, client, Date.now(), threads, true) : []),
     ...(below.size ? await belowChanges(outputDir, false, client, below) : []),
   ];
   // Errors (a rate limit) stay quiet: the scheduled watch reports them, and the next round retries.

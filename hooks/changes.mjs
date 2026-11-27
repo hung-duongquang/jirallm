@@ -85,8 +85,10 @@ export function sessionKeys(sessionId) {
   return [...lines(path.join(dir, `${sessionId}.keys`)), ...lines(path.join(dir, `${sessionId}.follow`)), `session/${sessionId}`];
 }
 
-/** Mirrors HOT_MINUTES of src/cli/commands/slackHot.ts. */
+/** Mirror HOT_MINUTES, WARM_MINUTES and WARM_POLL_SECONDS of src/cli/commands/slackHot.ts. */
 const HOT_MS = 30 * 60_000;
+const WARM_MS = 180 * 60_000;
+const WARM_POLL_MS = 30_000;
 
 /**
  * True when a Slack thread the session follows (or the channel below one) had activity in the last
@@ -97,6 +99,7 @@ export function hasHotThread(sessionId, now = Date.now()) {
   if (!sessionId || !SESSION_ID.test(sessionId)) return false;
   const follows = lines(path.join(os.tmpdir(), 'jirallm-sessions', `${sessionId}.follow`));
   let below;
+  let checked;
   for (const item of follows) {
     const [, kind, dir] = /^(slack|below)\/([\w-]+)$/i.exec(item) ?? [];
     if (!kind) continue;
@@ -110,6 +113,17 @@ export function hasHotThread(sessionId, now = Date.now()) {
       const md = readFileSync(path.join(outputDir, 'slack', dir.toLowerCase(), 'thread.md'), 'utf8');
       const at = /^\s*lastReplyAt:\s*"([^"]+)"/m.exec(md)?.[1];
       if (at && now - Date.parse(at) < HOT_MS) return true;
+      // Active in the last 3 hours: every 30 s (any session's check counts), so `slack:hot` starts only then.
+      if (at && now - Date.parse(at) < WARM_MS) {
+        checked ??= (() => {
+          try {
+            return JSON.parse(readFileSync(path.join(outputDir, '.slack-checked.json'), 'utf8'));
+          } catch {
+            return {};
+          }
+        })();
+        if (now - (checked[dir.toLowerCase()] ?? 0) >= WARM_POLL_MS) return true;
+      }
     } catch {
       // Not exported yet, or no below state yet.
     }

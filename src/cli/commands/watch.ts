@@ -522,7 +522,9 @@ export async function slackChanges(
   dryRun: boolean | undefined,
   client?: SlackClient,
   now = Date.now(),
-  only?: Set<string>
+  only?: Set<string>,
+  /** Check every thread of `only` now (the monitor's hot checks, which pick what is due themselves). */
+  checkAll = false
 ): Promise<PrChange[]> {
   const root = path.join(outputDir, 'slack');
   if (!existsSync(root)) return [];
@@ -547,7 +549,7 @@ export async function slackChanges(
   const checked = readJsonFile<Record<string, number>>(checkedFile) ?? {};
   const due = threads
     // A thread a running session follows (`only`) at least every 5 minutes: someone may be waiting on it.
-    .filter((t) => now - (checked[t.dir] ?? 0) >= Math.min(slackCheckInterval(now - t.lastReplyAt), only ? 5 * 60_000 : Infinity))
+    .filter((t) => checkAll || now - (checked[t.dir] ?? 0) >= Math.min(slackCheckInterval(now - t.lastReplyAt), only ? 5 * 60_000 : Infinity))
     .sort((a, b) => (checked[a.dir] ?? 0) - (checked[b.dir] ?? 0))
     .slice(0, SLACK_CHECKS_PER_RUN);
   if (due.length === 0) return [];

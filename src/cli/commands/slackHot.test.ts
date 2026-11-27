@@ -36,11 +36,21 @@ function setup() {
 describe('hotFollows', () => {
   it('names the followed threads and open below windows with activity in the last 30 minutes', () => {
     const { out, sessions } = setup();
+    // The 2-hours-quiet thread was checked 10 s ago (by any session): not due for 30 s.
+    writeFileSync(path.join(out, '.slack-checked.json'), JSON.stringify({ 'c2-1700000000000002': NOW - 10_000 }));
     const hot = hotFollows(out, 's', sessions, NOW);
     expect([...hot.threads]).toEqual(['c1-1700000000000001']);
     expect([...hot.below]).toEqual(['c1-1700000000000001']);
-    expect(hotFollows(out, 's', sessions, NOW + 31 * 60_000).threads.size).toBe(0);
     expect(hotFollows(out, 'other', sessions, NOW).threads.size).toBe(0);
+  });
+
+  it('checks a thread active in the last 3 hours every 30 seconds, then leaves it to watch', () => {
+    const { out, sessions } = setup();
+    writeFileSync(path.join(out, '.slack-checked.json'), JSON.stringify({ 'c1-1700000000000001': NOW + 31 * 60_000 - 5_000 }));
+    // 36 and 151 minutes after their last replies: c1 was checked 5 s ago, c2 is due.
+    expect([...hotFollows(out, 's', sessions, NOW + 31 * 60_000).threads]).toEqual(['c2-1700000000000002']);
+    expect([...hotFollows(out, 's', sessions, NOW + 31 * 60_000 + 30_000).threads]).toEqual(['c1-1700000000000001', 'c2-1700000000000002']);
+    expect(hotFollows(out, 's', sessions, NOW + 181 * 60_000).threads.size).toBe(0);
   });
 
   it('agrees with the monitor hook check (hasHotThread)', async () => {
@@ -61,7 +71,14 @@ describe('hotFollows', () => {
     };
     try {
       expect(hook.hasHotThread(id, NOW)).toBe(true);
+      // Quiet for more than 30 minutes but active in the last 3 hours: hot while not checked in the last 30 s.
+      expect(hook.hasHotThread(id, NOW + 31 * 60_000)).toBe(true);
+      writeFileSync(
+        path.join(exportDir, '.slack-checked.json'),
+        JSON.stringify({ 'c1-1700000000000001': NOW + 31 * 60_000 - 5_000, 'c2-1700000000000002': NOW + 31 * 60_000 - 5_000 })
+      );
       expect(hook.hasHotThread(id, NOW + 31 * 60_000)).toBe(false);
+      expect(hook.hasHotThread(id, NOW + 181 * 60_000)).toBe(false);
     } finally {
       const { rmSync } = await import('node:fs');
       rmSync(path.join(sessionsDir, `${id}.follow`), { force: true });
